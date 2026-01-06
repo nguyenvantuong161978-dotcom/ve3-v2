@@ -11,7 +11,11 @@ import shutil
 import zipfile
 import tempfile
 import urllib.request
+import ssl
 from pathlib import Path
+
+# Bypass SSL certificate verification (for corporate firewalls)
+ssl._create_default_https_context = ssl._create_unverified_context
 
 # Doc branch tu file config (de de dang chuyen session)
 def get_current_branch():

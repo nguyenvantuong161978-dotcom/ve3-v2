@@ -38,6 +38,14 @@ if %errorlevel% neq 0 (
 
 :run
 echo.
+
+:: Check & install dependencies
+python -c "import yaml" 2>nul
+if %errorlevel% neq 0 (
+    echo [*] Installing dependencies...
+    pip install pyyaml pillow requests -q
+)
+
 echo [*] Starting VE3 Tool...
 echo.
 
