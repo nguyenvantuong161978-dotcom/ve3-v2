@@ -266,9 +266,38 @@ window._customVideoPayload=null; // Payload đầy đủ từ Python cho VIDEO (
             }
 
             // ============================================
-            // CUSTOM VIDEO PAYLOAD MODE: Thay thế body (inject media_id)
+            // MODIFY VIDEO MODE: Giữ payload Chrome, chỉ thêm referenceImages
+            // (GIỐNG NHƯ TẠO ẢNH - dùng model/settings của Chrome)
             // ============================================
-            if (window._customVideoPayload && freshVideoRecaptcha) {
+            if (window._modifyVideoConfig && chromeVideoBody && !window._customVideoPayload) {
+                try {
+                    var videoConfig = window._modifyVideoConfig;
+                    console.log('[VIDEO-MODIFY] Modifying Chrome payload...');
+
+                    // THÊM referenceImages (media_id) vào payload Chrome
+                    if (videoConfig.referenceImages && videoConfig.referenceImages.length > 0) {
+                        if (chromeVideoBody.requests) {
+                            for (var i = 0; i < chromeVideoBody.requests.length; i++) {
+                                chromeVideoBody.requests[i].referenceImages = videoConfig.referenceImages;
+                            }
+                            console.log('[VIDEO-MODIFY] Added referenceImages:', videoConfig.referenceImages[0].mediaId.substring(0, 50) + '...');
+                        }
+                    }
+
+                    // Cập nhật body với payload đã modify
+                    opts.body = JSON.stringify(chromeVideoBody);
+                    console.log('[VIDEO-MODIFY] Payload modified, keeping Chrome model/settings');
+
+                    // Clear để không dùng lại
+                    window._modifyVideoConfig = null;
+                } catch(e) {
+                    console.log('[VIDEO-MODIFY] Failed:', e);
+                }
+            }
+            // ============================================
+            // CUSTOM VIDEO PAYLOAD MODE: Thay thế hoàn toàn body (backup)
+            // ============================================
+            else if (window._customVideoPayload && freshVideoRecaptcha) {
                 try {
                     var customVideoBody = window._customVideoPayload;
 
@@ -2539,6 +2568,170 @@ class DrissionFlowAPI:
         except Exception as e:
             self.log(f"[Mode] Error: {e}", "ERROR")
             return False
+
+    def generate_video_modify_mode(
+        self,
+        media_id: str,
+        prompt: str,
+        save_path: Optional[Path] = None,
+        max_wait: int = 300,
+        timeout: int = 60
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
+        """
+        Tạo video bằng MODIFY MODE - GIỐNG HỆT TẠO ẢNH.
+
+        Flow:
+        1. Chuyển Chrome sang "Tạo video từ các thành phần"
+        2. Set _modifyVideoConfig với referenceImages (media_id)
+        3. Type prompt vào textarea
+        4. Chrome tạo payload với model mới nhất + settings
+        5. Interceptor chỉ THÊM referenceImages vào payload
+        6. Forward request, poll kết quả, download video
+
+        Args:
+            media_id: Media ID của ảnh (từ generate_image)
+            prompt: Video prompt (mô tả chuyển động)
+            save_path: Đường dẫn lưu video
+            max_wait: Thời gian poll tối đa (giây)
+            timeout: Timeout đợi response đầu tiên
+
+        Returns:
+            Tuple[success, video_path_or_url, error]
+        """
+        if not self._ready:
+            return False, None, "API chưa setup! Gọi setup() trước."
+
+        if not media_id:
+            return False, None, "Media ID không được để trống"
+
+        self.log(f"[I2V] Tạo video từ media: {media_id[:50]}...")
+        self.log(f"[I2V] Prompt: {prompt[:60]}...")
+
+        # 1. Chuyển sang video mode
+        self.log("[I2V] Chuyển sang mode 'Tạo video từ các thành phần'...")
+        result = self.driver.run_js(JS_SELECT_VIDEO_MODE)
+        if result != 'CLICKED':
+            self.log(f"[I2V] Không thể chuyển sang video mode: {result}", "WARN")
+            # Thử tiếp dù không click được
+        else:
+            self.log("[I2V] ✓ Đã chuyển sang video mode")
+            time.sleep(1)
+
+        # 2. Reset video state
+        self.driver.run_js("""
+            window._videoResponse = null;
+            window._videoError = null;
+            window._videoPending = false;
+            window._modifyVideoConfig = null;
+            window._customVideoPayload = null;
+        """)
+
+        # 3. Set MODIFY CONFIG - chỉ thêm referenceImages
+        # Interceptor sẽ thêm vào payload Chrome, giữ nguyên model/settings
+        modify_config = {
+            "referenceImages": [{
+                "imageUsageType": "IMAGE_USAGE_TYPE_ASSET",
+                "mediaId": media_id
+            }]
+        }
+        self.driver.run_js(f"window._modifyVideoConfig = {json.dumps(modify_config)};")
+        self.log(f"[I2V] ✓ MODIFY MODE: referenceImages ready")
+
+        # 4. Tìm textarea và nhập prompt
+        textarea = self._find_textarea()
+        if not textarea:
+            return False, None, "Không tìm thấy textarea"
+
+        try:
+            textarea.click()
+            time.sleep(0.3)
+        except:
+            pass
+
+        textarea.clear()
+        time.sleep(0.2)
+        textarea.input(prompt)
+
+        # Đợi reCAPTCHA chuẩn bị token
+        time.sleep(2)
+
+        # Nhấn Enter để gửi
+        textarea.input('\n')
+        self.log("[I2V] → Pressed Enter, Chrome đang gửi request...")
+
+        # 5. Đợi video response từ browser
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            result = self.driver.run_js("""
+                return {
+                    pending: window._videoPending,
+                    response: window._videoResponse,
+                    error: window._videoError
+                };
+            """)
+
+            if result.get('error'):
+                error_msg = result['error']
+                self.log(f"[I2V] ✗ Request error: {error_msg}", "ERROR")
+                return False, None, error_msg
+
+            if result.get('response'):
+                response_data = result['response']
+
+                # Check for API errors
+                if isinstance(response_data, dict):
+                    if response_data.get('error'):
+                        error_info = response_data['error']
+                        error_msg = f"{error_info.get('code', 'unknown')}: {error_info.get('message', str(error_info))}"
+                        self.log(f"[I2V] ✗ API Error: {error_msg}", "ERROR")
+                        return False, None, error_msg
+
+                    # Check nếu có video ngay trong response
+                    if "media" in response_data or "generatedVideos" in response_data:
+                        videos = response_data.get("generatedVideos", response_data.get("media", []))
+                        if videos:
+                            video_url = videos[0].get("video", {}).get("fifeUrl") or videos[0].get("fifeUrl")
+                            if video_url:
+                                self.log(f"[I2V] ✓ Video ready (no poll): {video_url[:60]}...")
+                                return self._download_video_if_needed(video_url, save_path)
+
+                    # Có operations - cần poll
+                    operations = response_data.get("operations", [])
+                    if operations:
+                        self.log(f"[I2V] Got {len(operations)} operations, polling...")
+                        op = operations[0]
+
+                        # Build headers cho polling
+                        headers = {
+                            "Authorization": self.bearer_token,
+                            "Content-Type": "application/json",
+                            "Origin": "https://labs.google",
+                            "Referer": "https://labs.google/",
+                        }
+                        if self.x_browser_validation:
+                            headers["x-browser-validation"] = self.x_browser_validation
+
+                        proxies = None
+                        if self._use_webshare and hasattr(self, '_bridge_port') and self._bridge_port:
+                            bridge_url = f"http://127.0.0.1:{self._bridge_port}"
+                            proxies = {"http": bridge_url, "https": bridge_url}
+
+                        # Poll cho video hoàn thành
+                        video_url = self._poll_video_operation(op, headers, proxies, max_wait)
+
+                        if video_url:
+                            self.log(f"[I2V] ✓ Video ready: {video_url[:60]}...")
+                            return self._download_video_if_needed(video_url, save_path)
+                        else:
+                            return False, None, "Timeout hoặc lỗi khi poll video"
+
+                    return False, None, "Không có operations/videos trong response"
+
+            time.sleep(0.5)
+
+        self.log("[I2V] ✗ Timeout đợi response từ browser", "ERROR")
+        return False, None, "Timeout waiting for video response"
 
     def _poll_video_operation(
         self,

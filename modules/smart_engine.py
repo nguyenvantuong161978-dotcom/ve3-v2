@@ -4351,25 +4351,13 @@ class SmartEngine:
                         self.log(f"[VIDEO] Retry {retry}/{MAX_VIDEO_RETRIES}: {image_id}")
                         time.sleep(5 * retry)  # Exponential backoff
 
-                    # Map model name sang API model key
-                    model_setting = self._video_settings.get('model', 'fast')
-                    VIDEO_MODEL_MAP = {
-                        'fast': 'veo_3_0_r2v_fast_ultra',
-                        'quality': 'veo_3_0_r2v',
-                        # Cho phép dùng trực tiếp model key nếu đã đúng format
-                        'veo_3_0_r2v_fast_ultra': 'veo_3_0_r2v_fast_ultra',
-                        'veo_3_0_r2v': 'veo_3_0_r2v',
-                    }
-                    video_model = VIDEO_MODEL_MAP.get(model_setting, 'veo_3_0_r2v_fast_ultra')
-
-                    # Gọi DrissionFlowAPI.generate_video_chrome() - Chrome UI mode
-                    # Tự động switch Chrome sang video mode, inject media_id
+                    # Gọi generate_video_modify_mode() - GIỐNG HỆT TẠO ẢNH
+                    # Chrome tự chọn model mới nhất, chỉ inject media_id
                     video_path = img_dir / f"{image_id}.mp4"
-                    ok, result_path, error = drission_api.generate_video_chrome(
+                    ok, result_path, error = drission_api.generate_video_modify_mode(
                         media_id=media_name,
                         prompt=video_prompt,
-                        video_model=video_model,
-                        save_path=video_path  # Tự download luôn
+                        save_path=video_path
                     )
 
                     if ok:
