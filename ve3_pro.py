@@ -50,32 +50,44 @@ PROJECTS_DIR = Path(os.environ.get('VE3_PROJECTS_DIR', ROOT_DIR / "PROJECTS"))
 def get_git_info():
     """Get git commit info: hash, date, message."""
     import subprocess
+
+    # 1. Thử đọc từ git
     git_dir = ROOT_DIR / ".git"
-    if not git_dir.exists():
-        return None
+    if git_dir.exists():
+        try:
+            result = subprocess.run(
+                ["git", "log", "-1", "--format=%h|%ct|%s"],
+                cwd=ROOT_DIR, capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                parts = result.stdout.strip().split("|")
+                if len(parts) >= 3:
+                    timestamp = int(parts[1])
+                    local_time = datetime.fromtimestamp(timestamp)
+                    date_str = local_time.strftime("%Y-%m-%d %H:%M")
+                    return {
+                        "hash": parts[0],
+                        "date": date_str,
+                        "message": parts[2][:50]
+                    }
+        except:
+            pass
 
-    try:
-        # Get commit info: hash, unix timestamp, message
-        # %ct = unix timestamp (seconds since epoch)
-        result = subprocess.run(
-            ["git", "log", "-1", "--format=%h|%ct|%s"],
-            cwd=ROOT_DIR, capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0:
-            parts = result.stdout.strip().split("|")
+    # 2. Fallback: Đọc từ file VERSION
+    version_file = ROOT_DIR / "VERSION"
+    if version_file.exists():
+        try:
+            content = version_file.read_text(encoding='utf-8').strip()
+            parts = content.split("|")
             if len(parts) >= 3:
-                # Convert unix timestamp to local time
-                timestamp = int(parts[1])
-                local_time = datetime.fromtimestamp(timestamp)
-                date_str = local_time.strftime("%Y-%m-%d %H:%M")
-
                 return {
                     "hash": parts[0],
-                    "date": date_str,  # Gio theo may tinh
+                    "date": parts[1],
                     "message": parts[2][:50]
                 }
-    except:
-        pass
+        except:
+            pass
+
     return None
 
 
