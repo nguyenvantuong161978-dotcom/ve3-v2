@@ -149,8 +149,19 @@ window._customVideoPayload=null; // Payload đầy đủ từ Python cho VIDEO (
                             }
                         }
 
-                        // ĐỔI URL: batchGenerateImages -> video:batchAsyncGenerateVideoText
-                        var newUrl = urlStr.replace('flowMedia:batchGenerateImages', 'video:batchAsyncGenerateVideoText');
+                        // ĐỔI URL: /projects/xxx/flowMedia:batchGenerateImages -> /video:batchAsyncGenerateVideoText
+                        // Video endpoint KHÔNG có /projects/xxx/ prefix
+                        var projectsIdx = urlStr.indexOf('/projects/');
+                        var newUrl;
+                        if (projectsIdx !== -1) {
+                            // Lấy base URL trước /projects/
+                            var baseUrl = urlStr.substring(0, projectsIdx);
+                            newUrl = baseUrl + '/video:batchAsyncGenerateVideoText';
+                        } else {
+                            // Fallback: simple replace
+                            newUrl = urlStr.replace('flowMedia:batchGenerateImages', 'video:batchAsyncGenerateVideoText');
+                        }
+                        console.log('[FORCE-VIDEO] Original URL:', urlStr);
                         console.log('[FORCE-VIDEO] New URL:', newUrl);
                         console.log('[FORCE-VIDEO] mediaId:', videoPayload.requests[0].referenceImages[0].mediaId.substring(0, 50) + '...');
 
