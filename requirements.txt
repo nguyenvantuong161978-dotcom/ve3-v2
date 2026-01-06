@@ -9,16 +9,16 @@ requests>=2.31.0
 # Image preview
 pillow>=10.0.0
 
-# Chrome automation (for auto token)
-websocket-client>=1.6.0
+# Chrome automation
 selenium>=4.15.0
 webdriver-manager>=4.0.0
+undetected-chromedriver>=3.5.0
+DrissionPage>=4.0.0
+
+# Voice to SRT
+openai-whisper>=20231117
+
+# Utils
+websocket-client>=1.6.0
 pyautogui>=0.9.54
 pyperclip>=1.8.2
-
-# Undetected Chrome (recommended - bypass bot detection)
-undetected-chromedriver>=3.5.0
-
-# Voice to SRT (optional - chi can neu dung voice)
-# pip install openai-whisper
-# hoac: pip install whisper-timestamped

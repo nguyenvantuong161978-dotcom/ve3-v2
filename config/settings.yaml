@@ -41,7 +41,7 @@ flow_delay: 3.0
 #
 # Lấy API key: https://proxy.webshare.io/dashboard → API Keys
 webshare_proxy:
-  enabled: true               # BẬT Webshare proxy
+  enabled: false              # TẮT proxy - dùng mạng máy trực tiếp
 
   # === PROXY MODE ===
   # "direct" = Sử dụng Direct Proxy List (100 IP cố định)
