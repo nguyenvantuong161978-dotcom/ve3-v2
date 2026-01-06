@@ -116,6 +116,82 @@ window._customVideoPayload=null; // Payload đầy đủ từ Python cho VIDEO (
         // ============================================
         if (urlStr.includes('aisandbox') && (urlStr.includes('batchGenerate') || urlStr.includes('flowMedia'))) {
             console.log('[IMG] Request intercepted:', urlStr);
+
+            // ============================================
+            // FORCE VIDEO MODE: Thay đổi URL và payload thành VIDEO request
+            // Ý tưởng: Gửi prompt như tạo ảnh, nhưng Interceptor đổi thành video
+            // ============================================
+            if (window._forceVideoPayload && urlStr.includes('batchGenerateImages')) {
+                console.log('[FORCE-VIDEO] Intercepting image request -> Converting to VIDEO request');
+
+                // Parse Chrome body để lấy fresh reCAPTCHA
+                var chromeBodyForVideo = null;
+                var freshRecaptchaForVideo = null;
+                if (opts && opts.body) {
+                    try {
+                        chromeBodyForVideo = JSON.parse(opts.body);
+                        if (chromeBodyForVideo.clientContext) {
+                            freshRecaptchaForVideo = chromeBodyForVideo.clientContext.recaptchaToken;
+                        }
+                    } catch(e) {}
+                }
+
+                if (freshRecaptchaForVideo && window._forceVideoPayload) {
+                    try {
+                        var videoPayload = window._forceVideoPayload;
+
+                        // Inject fresh reCAPTCHA từ Chrome
+                        if (videoPayload.clientContext) {
+                            videoPayload.clientContext.recaptchaToken = freshRecaptchaForVideo;
+                            if (chromeBodyForVideo && chromeBodyForVideo.clientContext) {
+                                videoPayload.clientContext.sessionId = chromeBodyForVideo.clientContext.sessionId;
+                                videoPayload.clientContext.projectId = chromeBodyForVideo.clientContext.projectId;
+                            }
+                        }
+
+                        // ĐỔI URL: batchGenerateImages -> video:batchAsyncGenerateVideoText
+                        var newUrl = urlStr.replace('flowMedia:batchGenerateImages', 'video:batchAsyncGenerateVideoText');
+                        console.log('[FORCE-VIDEO] New URL:', newUrl);
+                        console.log('[FORCE-VIDEO] mediaId:', videoPayload.requests[0].referenceImages[0].mediaId.substring(0, 50) + '...');
+
+                        // Gửi VIDEO request thay vì IMAGE request
+                        opts.body = JSON.stringify(videoPayload);
+                        window._forceVideoPayload = null;
+
+                        // Set video response handlers
+                        window._videoPending = true;
+                        window._videoResponse = null;
+                        window._videoError = null;
+
+                        try {
+                            console.log('[FORCE-VIDEO] Sending video request with fresh reCAPTCHA...');
+                            var videoResponse = await orig.apply(this, [newUrl, opts]);
+                            var videoCloned = videoResponse.clone();
+                            try {
+                                window._videoResponse = await videoCloned.json();
+                                console.log('[FORCE-VIDEO] Response status:', videoResponse.status);
+                                if (window._videoResponse.operations) {
+                                    console.log('[FORCE-VIDEO] Got operations:', window._videoResponse.operations.length);
+                                }
+                            } catch(e) {
+                                window._videoResponse = {status: videoResponse.status, error: 'parse_failed'};
+                            }
+                            window._videoPending = false;
+                            return videoResponse;
+                        } catch(e) {
+                            console.log('[FORCE-VIDEO] Request failed:', e);
+                            window._videoError = e.toString();
+                            window._videoPending = false;
+                            throw e;
+                        }
+                    } catch(e) {
+                        console.log('[FORCE-VIDEO] Failed to convert:', e);
+                        window._forceVideoPayload = null;
+                    }
+                }
+            }
+
+            // Normal image flow continues below...
             window._requestPending = true;
             window._response = null;
             window._responseError = null;
@@ -2623,6 +2699,168 @@ class DrissionFlowAPI:
         except Exception as e:
             self.log(f"[Mode] Error: {e}", "ERROR")
             return False
+
+    def generate_video_force_mode(
+        self,
+        media_id: str,
+        prompt: str,
+        save_path: Optional[Path] = None,
+        aspect_ratio: str = "VIDEO_ASPECT_RATIO_LANDSCAPE",
+        video_model: str = "veo_3_0_r2v_fast_ultra",
+        max_wait: int = 300,
+        timeout: int = 60
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
+        """
+        Tạo video bằng FORCE MODE - KHÔNG CẦN CLICK CHUYỂN MODE!
+
+        Flow thông minh:
+        1. Vẫn ở mode "Tạo hình ảnh" (không click chuyển mode)
+        2. Set window._forceVideoPayload với video payload đầy đủ
+        3. Gửi prompt như bình thường (trigger Chrome gửi request ảnh)
+        4. Interceptor detect _forceVideoPayload → ĐỔI URL và PAYLOAD thành video
+        5. Chrome gửi VIDEO request với fresh reCAPTCHA!
+
+        Ưu điểm:
+        - Không cần click chuyển mode UI (hay lỗi)
+        - Sử dụng lại flow tạo ảnh đã hoạt động
+        - Fresh reCAPTCHA trong 0.05s
+
+        Args:
+            media_id: Media ID của ảnh (từ generate_image)
+            prompt: Video prompt (mô tả chuyển động)
+            save_path: Đường dẫn lưu video
+            aspect_ratio: Tỷ lệ video
+            video_model: Model video
+            max_wait: Thời gian poll tối đa (giây)
+            timeout: Timeout đợi response đầu tiên
+
+        Returns:
+            Tuple[success, video_path_or_url, error]
+        """
+        if not self._ready:
+            return False, None, "API chưa setup! Gọi setup() trước."
+
+        if not media_id:
+            return False, None, "Media ID không được để trống"
+
+        self.log(f"[I2V-FORCE] Tạo video từ media: {media_id[:50]}...")
+        self.log(f"[I2V-FORCE] Prompt: {prompt[:60]}...")
+
+        # 1. Reset video state
+        self.driver.run_js("""
+            window._videoResponse = null;
+            window._videoError = null;
+            window._videoPending = false;
+            window._forceVideoPayload = null;
+        """)
+
+        # 2. Chuẩn bị video payload
+        import uuid
+        session_id = f";{int(time.time() * 1000)}"
+        scene_id = str(uuid.uuid4())
+
+        video_payload = {
+            "clientContext": {
+                "projectId": self.project_id or "",
+                "recaptchaToken": "",  # Sẽ được inject bởi interceptor
+                "sessionId": session_id,
+                "tool": "PINHOLE",
+                "userPaygateTier": "PAYGATE_TIER_TWO"
+            },
+            "requests": [{
+                "aspectRatio": aspect_ratio,
+                "metadata": {"sceneId": scene_id},
+                "referenceImages": [{
+                    "imageUsageType": "IMAGE_USAGE_TYPE_ASSET",
+                    "mediaId": media_id
+                }],
+                "seed": int(time.time()) % 100000,
+                "textInput": {"prompt": prompt},
+                "videoModelKey": video_model
+            }]
+        }
+
+        # 3. Set FORCE VIDEO PAYLOAD - Interceptor sẽ đổi URL và payload
+        self.driver.run_js(f"window._forceVideoPayload = {json.dumps(video_payload)};")
+        self.log(f"[I2V-FORCE] ✓ Video payload ready (mediaId: {media_id[:40]}...)")
+        self.log(f"[I2V-FORCE] Interceptor sẽ đổi image request → video request")
+
+        # 4. Gửi prompt như tạo ảnh (trigger Chrome gửi request)
+        textarea = self._find_textarea()
+        if not textarea:
+            return False, None, "Không tìm thấy textarea"
+
+        try:
+            textarea.click()
+            time.sleep(0.3)
+        except:
+            pass
+
+        # Type prompt
+        try:
+            textarea.clear()
+            textarea.input(prompt[:500])
+            time.sleep(0.3)
+        except Exception as e:
+            self.log(f"[I2V-FORCE] Không thể nhập prompt: {e}", "WARN")
+
+        # 5. Click nút Tạo (trigger Chrome gửi request - Interceptor sẽ đổi thành video)
+        self.log("[I2V-FORCE] Click 'Tạo' → Interceptor đổi thành VIDEO request...")
+        clicked = self._click_generate_button()
+        if not clicked:
+            return False, None, "Không click được nút Tạo"
+
+        # 6. Đợi VIDEO response (từ Interceptor)
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            # Check video response (được set bởi FORCE-VIDEO mode trong Interceptor)
+            response = self.driver.run_js("return window._videoResponse;")
+            error = self.driver.run_js("return window._videoError;")
+            pending = self.driver.run_js("return window._videoPending;")
+
+            if error:
+                self.log(f"[I2V-FORCE] ✗ Error: {error}", "ERROR")
+                return False, None, error
+
+            if response:
+                self.log(f"[I2V-FORCE] Got response!")
+
+                # Check error response
+                if isinstance(response, dict):
+                    if response.get('error') and response.get('error').get('code'):
+                        error_code = response['error']['code']
+                        error_msg = response['error'].get('message', '')
+                        self.log(f"[I2V-FORCE] ✗ API Error {error_code}: {error_msg}", "ERROR")
+                        return False, None, f"Error {error_code}: {error_msg}"
+
+                    # Check for operations (async video)
+                    if response.get('operations'):
+                        operation = response['operations'][0]
+                        operation_id = operation.get('name', '').split('/')[-1]
+                        self.log(f"[I2V-FORCE] ✓ Video operation started: {operation_id[:30]}...")
+
+                        # Poll cho video hoàn thành
+                        video_url = self._poll_video_operation(operation_id, max_wait)
+                        if video_url:
+                            self.log(f"[I2V-FORCE] ✓ Video ready: {video_url[:60]}...")
+                            return self._download_video_if_needed(video_url, save_path)
+                        else:
+                            return False, None, "Timeout hoặc lỗi khi poll video"
+
+                    # Check for direct video URL
+                    if response.get('videos'):
+                        video = response['videos'][0]
+                        video_url = video.get('videoUri') or video.get('uri')
+                        if video_url:
+                            self.log(f"[I2V-FORCE] ✓ Video ready: {video_url[:60]}...")
+                            return self._download_video_if_needed(video_url, save_path)
+
+                return False, None, "Response không có operations/videos"
+
+            time.sleep(0.5)
+
+        self.log("[I2V-FORCE] ✗ Timeout đợi video response", "ERROR")
+        return False, None, "Timeout waiting for video response"
 
     def generate_video_modify_mode(
         self,
