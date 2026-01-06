@@ -69,12 +69,12 @@ webshare_proxy:
 # VIDEO GENERATION (VEO 3) Settings
 # ============================================================================
 # Tạo video bằng Veo 3 qua Google Flow API
-# Endpoint: aisandbox-pa.googleapis.com/v1/video:batchAsyncGenerateVideoText
+# Sau khi tạo ảnh xong, tự động tạo video từ ảnh đó
 
 # Số ảnh chuyển thành video (0 = tắt, "full" = tất cả)
 # VD: 10 = chỉ 10 ảnh đầu tiên sẽ được chuyển thành video
 # Nếu đã có đủ số video trong img/, sẽ tự động skip
-video_count: 10
+video_count: "full"
 
 # Video aspect ratio: "landscape" (16:9), "portrait" (9:16), "square" (1:1)
 video_aspect_ratio: "landscape"
