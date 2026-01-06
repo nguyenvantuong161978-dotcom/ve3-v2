@@ -4373,10 +4373,10 @@ class SmartEngine:
                         self.log(f"[VIDEO] Retry {retry}/{MAX_VIDEO_RETRIES}: {image_id}")
                         time.sleep(5 * retry)  # Exponential backoff
 
-                    # Gọi generate_video_modify_mode() - GIỐNG HỆT TẠO ẢNH
-                    # Chrome tự chọn model mới nhất, chỉ inject media_id
+                    # Gọi generate_video_force_mode() - FORCE MODE
+                    # Không chuyển mode, ở nguyên "Tạo hình ảnh", Interceptor convert sang video
                     video_path = img_dir / f"{image_id}.mp4"
-                    ok, result_path, error = drission_api.generate_video_modify_mode(
+                    ok, result_path, error = drission_api.generate_video_force_mode(
                         media_id=media_name,
                         prompt=video_prompt,
                         save_path=video_path
