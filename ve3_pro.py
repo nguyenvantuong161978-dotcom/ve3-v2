@@ -187,6 +187,7 @@ class UnixVoiceToVideo:
         self.gemini_keys: List[str] = []
         self.deepseek_keys: List[str] = []
         self.chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        self.chrome_portable = ""  # Chrome portable đã đăng nhập sẵn
         
         # State
         self._running = False
@@ -799,13 +800,32 @@ class UnixVoiceToVideo:
     
     def load_config(self):
         """Load config from chrome_profiles/ and accounts.json."""
-        # Luôn scan thư mục chrome_profiles/ trước (tạo từ GUI)
-        self.profiles = []
-        profiles_dir = ROOT_DIR / "chrome_profiles"
-        if profiles_dir.exists():
-            for item in profiles_dir.iterdir():
-                if item.is_dir() and not item.name.startswith('.'):
-                    self.profiles.append(str(item))
+        # === AUTO DETECT CHROME PORTABLE ===
+        # Tự động tìm: C:\Users\{username}\Documents\KP\KP.exe
+        self.chrome_portable = ""
+        import platform
+        if platform.system() == 'Windows':
+            home = Path.home()
+            kp_chrome = home / "Documents" / "KP" / "KP.exe"
+            if kp_chrome.exists():
+                self.chrome_portable = str(kp_chrome)
+                # Tìm User Data
+                kp_dir = kp_chrome.parent
+                for data_path in [kp_dir / "Data" / "profile", kp_dir / "User Data"]:
+                    if data_path.exists():
+                        self.profiles = [str(data_path)]
+                        print(f"[AUTO] Chrome portable: {self.chrome_portable}")
+                        print(f"[AUTO] Profile: {data_path}")
+                        break
+
+        # Nếu không có Chrome portable, scan chrome_profiles/ như cũ
+        if not self.chrome_portable:
+            self.profiles = []
+            profiles_dir = ROOT_DIR / "chrome_profiles"
+            if profiles_dir.exists():
+                for item in profiles_dir.iterdir():
+                    if item.is_dir() and not item.name.startswith('.'):
+                        self.profiles.append(str(item))
 
         accounts_file = CONFIG_DIR / "accounts.json"
 
