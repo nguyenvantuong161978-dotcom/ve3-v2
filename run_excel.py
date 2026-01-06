@@ -7,36 +7,61 @@ Usage:
     python run_excel.py D:\AUTO\voice\AR41-T1\AR41-0029.mp3
     python run_excel.py D:\AUTO\voice\AR41-T1\  (scan folder)
 
-Output sẽ được tạo cùng thư mục với voice file:
-    - AR41-0029.srt
-    - AR41-0029_prompts.xlsx
+Output sẽ được tạo trong PROJECTS\{voice_name}\:
+    PROJECTS\AR41-0029\
+    ├── AR41-0029.mp3         (copy từ input)
+    ├── AR41-0029.srt
+    └── AR41-0029_prompts.xlsx
 """
 
 import sys
 import os
+import shutil
 from pathlib import Path
 
 # Add current directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+TOOL_DIR = Path(__file__).parent
+sys.path.insert(0, str(TOOL_DIR))
+
+# Output folder
+PROJECTS_DIR = TOOL_DIR / "PROJECTS"
 
 
 def process_voice_to_excel(voice_path: Path):
     """Process single voice file to Excel."""
+    name = voice_path.stem
+
     print(f"\n{'='*60}")
     print(f"Processing: {voice_path.name}")
     print(f"{'='*60}")
 
-    # Output directory = same as voice file
-    output_dir = voice_path.parent
-    name = voice_path.stem
+    # Output directory = PROJECTS/{name}/
+    output_dir = PROJECTS_DIR / name
+    output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Paths
+    voice_copy = output_dir / voice_path.name
     srt_path = output_dir / f"{name}.srt"
     excel_path = output_dir / f"{name}_prompts.xlsx"
 
-    print(f"  Voice: {voice_path}")
-    print(f"  SRT:   {srt_path}")
-    print(f"  Excel: {excel_path}")
+    print(f"  Input:  {voice_path}")
+    print(f"  Output: {output_dir}")
     print()
+
+    # === STEP 0: Copy voice file and txt to project folder ===
+    if not voice_copy.exists():
+        print(f"[STEP 0] Copying voice to project folder...")
+        shutil.copy2(voice_path, voice_copy)
+        print(f"  ✅ Copied: {voice_copy.name}")
+    else:
+        print(f"[SKIP] Voice already in project: {voice_copy.name}")
+
+    # Copy .txt file if exists (same name as voice)
+    txt_src = voice_path.parent / f"{name}.txt"
+    txt_dst = output_dir / f"{name}.txt"
+    if txt_src.exists() and not txt_dst.exists():
+        shutil.copy2(txt_src, txt_dst)
+        print(f"  ✅ Copied: {txt_dst.name}")
 
     # === STEP 1: Voice to SRT ===
     if srt_path.exists():
@@ -46,7 +71,7 @@ def process_voice_to_excel(voice_path: Path):
         try:
             from modules.voice_to_srt import VoiceToSrt
             conv = VoiceToSrt(model_name="base", language="vi")
-            conv.transcribe(str(voice_path), str(srt_path))
+            conv.transcribe(str(voice_copy), str(srt_path))
             print(f"  ✅ SRT created: {srt_path.name}")
         except Exception as e:
             print(f"  ❌ Whisper error: {e}")
@@ -65,7 +90,7 @@ def process_voice_to_excel(voice_path: Path):
             if total_scenes > 0 and scenes_with_prompts >= total_scenes:
                 print(f"[SKIP] Excel already has prompts: {excel_path.name}")
                 print(f"       ({scenes_with_prompts}/{total_scenes} scenes)")
-                print(f"  ✅ Done! Excel ready for worker.")
+                print(f"  ✅ Done! Project ready for worker.")
                 return True
             else:
                 print(f"  Excel exists but missing prompts ({scenes_with_prompts}/{total_scenes})")
@@ -77,7 +102,7 @@ def process_voice_to_excel(voice_path: Path):
         # Load config
         import yaml
         cfg = {}
-        cfg_file = Path(__file__).parent / "config" / "settings.yaml"
+        cfg_file = TOOL_DIR / "config" / "settings.yaml"
         if cfg_file.exists():
             with open(cfg_file, "r", encoding="utf-8") as f:
                 cfg = yaml.safe_load(f) or {}
@@ -103,10 +128,6 @@ def process_voice_to_excel(voice_path: Path):
         from modules.prompts_generator import PromptGenerator
         gen = PromptGenerator(cfg)
 
-        def log_cb(msg, level="INFO"):
-            prefix = {"INFO": "ℹ️", "WARN": "⚠️", "ERROR": "❌", "OK": "✅"}.get(level, "")
-            print(f"    {prefix} {msg}")
-
         # Generate for project (uses SRT in output_dir)
         if gen.generate_for_project(output_dir, name):
             print(f"  ✅ Excel created: {excel_path.name}")
@@ -121,7 +142,7 @@ def process_voice_to_excel(voice_path: Path):
         return False
 
     print()
-    print(f"✅ Done! Excel ready for worker: {excel_path}")
+    print(f"✅ Done! Project ready for worker: {output_dir}")
     return True
 
 
@@ -138,7 +159,7 @@ def scan_and_process(folder_path: Path):
         print(f"No voice files found in: {folder_path}")
         return
 
-    print(f"Found {len(voice_files)} voice file(s)")
+    print(f"Found {len(voice_files)} voice file(s) in {folder_path}")
 
     success = 0
     failed = 0
@@ -152,6 +173,7 @@ def scan_and_process(folder_path: Path):
     print()
     print("="*60)
     print(f"SUMMARY: {success} success, {failed} failed")
+    print(f"Output: {PROJECTS_DIR}")
     print("="*60)
 
 
@@ -160,6 +182,7 @@ def main():
     print("="*60)
     print("  VE3 TOOL - VOICE TO EXCEL (MASTER MODE)")
     print("="*60)
+    print(f"  Output: {PROJECTS_DIR}")
     print()
 
     if len(sys.argv) < 2:
