@@ -1,1 +1,1 @@
-e164799|2026-01-06 07:24|Allow prompts=[] if video_count>0 to run I2V only
+15ab00d|2026-01-06 07:25|Fix I2V: Read media_id from cache first (same as image gen)

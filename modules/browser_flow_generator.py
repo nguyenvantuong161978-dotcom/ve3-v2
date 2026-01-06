@@ -4039,8 +4039,13 @@ class BrowserFlowGenerator:
                         if not scene_id or not scene_id.isdigit():
                             continue
 
-                        # Kiểm tra có media_id và chưa có video
-                        media_id = getattr(scene, 'media_id', '') or ''
+                        # Lấy media_id từ CACHE trước (giống tạo ảnh), fallback Excel
+                        media_id = cached_media_names.get(scene_id, {})
+                        if isinstance(media_id, dict):
+                            media_id = media_id.get('mediaName', '')
+                        if not media_id:
+                            media_id = getattr(scene, 'media_id', '') or ''
+
                         video_path = getattr(scene, 'video_path', '') or ''
                         status_vid = getattr(scene, 'status_vid', '') or ''
 
