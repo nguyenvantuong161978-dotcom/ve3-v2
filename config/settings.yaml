@@ -179,9 +179,10 @@ ken_burns_intensity: "normal"
 # Whisper Settings (Voice to SRT)
 # Models: tiny, base, small, medium, large, large-v2, large-v3
 # Lớn hơn = chính xác hơn nhưng chậm hơn và cần nhiều RAM/VRAM
-# Khuyến nghị cho tiếng Việt: "medium" hoặc "large-v3"
+# Tiếng Anh: "small" hoặc "medium" là đủ tốt
+# Tiếng Việt: "medium" hoặc "large-v3" (khó hơn)
 whisper_model: "medium"
-whisper_language: "vi"
+whisper_language: "en"
 
 # Logging
 log_level: "INFO"
