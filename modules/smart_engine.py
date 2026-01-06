@@ -2169,11 +2169,27 @@ class SmartEngine:
             proj_dir = Path("PROJECTS") / name
 
         proj_dir.mkdir(parents=True, exist_ok=True)
-        for d in ["srt", "prompts", "nv", "img"]:
-            (proj_dir / d).mkdir(exist_ok=True)
 
-        excel_path = proj_dir / "prompts" / f"{name}_prompts.xlsx"
-        srt_path = proj_dir / "srt" / f"{name}.srt"
+        # Check flat vs nested structure
+        # Flat: PROJECTS/{name}/{name}.srt, {name}_prompts.xlsx (from master server)
+        # Nested: PROJECTS/{name}/srt/{name}.srt, prompts/{name}_prompts.xlsx (old)
+        srt_path_flat = proj_dir / f"{name}.srt"
+        excel_path_flat = proj_dir / f"{name}_prompts.xlsx"
+
+        if srt_path_flat.exists() or excel_path_flat.exists():
+            # Use flat structure (from master server)
+            self.use_flat_structure = True
+            srt_path = srt_path_flat
+            excel_path = excel_path_flat
+            # Still create img folder for outputs
+            (proj_dir / "img").mkdir(exist_ok=True)
+        else:
+            # Use nested structure (default)
+            self.use_flat_structure = False
+            for d in ["srt", "prompts", "nv", "img"]:
+                (proj_dir / d).mkdir(exist_ok=True)
+            excel_path = proj_dir / "prompts" / f"{name}_prompts.xlsx"
+            srt_path = proj_dir / "srt" / f"{name}.srt"
 
         # Read generation mode from settings
         generation_mode = 'api'  # Default

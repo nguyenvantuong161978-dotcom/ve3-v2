@@ -928,14 +928,21 @@ class PromptGenerator:
             True nếu thành công
         """
         project_dir = Path(project_dir)
-        
-        # Paths
-        srt_path = project_dir / "srt" / f"{code}.srt"
-        excel_path = project_dir / "prompts" / f"{code}_prompts.xlsx"
-        
-        # Kiểm tra SRT file
-        if not srt_path.exists():
-            self.logger.error(f"SRT file không tồn tại: {srt_path}")
+
+        # Paths - support both flat (PROJECTS) and nested structure
+        # Flat: PROJECTS/{code}/{code}.srt
+        # Nested: {project}/srt/{code}.srt
+        srt_path_flat = project_dir / f"{code}.srt"
+        srt_path_nested = project_dir / "srt" / f"{code}.srt"
+
+        if srt_path_flat.exists():
+            srt_path = srt_path_flat
+            excel_path = project_dir / f"{code}_prompts.xlsx"
+        elif srt_path_nested.exists():
+            srt_path = srt_path_nested
+            excel_path = project_dir / "prompts" / f"{code}_prompts.xlsx"
+        else:
+            self.logger.error(f"SRT file không tồn tại: {srt_path_flat} hoặc {srt_path_nested}")
             return False
         
         # Load hoặc tạo Excel
