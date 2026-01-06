@@ -213,7 +213,7 @@ generation_mode: "api"
 # - "always": Luôn force GEM_PIX_2 (khuyên dùng)
 # - "GEM_PIX_2": Force model cụ thể (Nano Banana Pro - chất lượng cao nhất)
 # - "IMAGEN_4": Force Imagen 4
-force_model: "auto"
+force_model: "always"
 
 # Parallel mode: So luong browser chay song song (1-5)
 # Nhieu browser = nhanh hon, nhung can nhieu RAM va profile
