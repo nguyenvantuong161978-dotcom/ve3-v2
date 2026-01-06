@@ -3957,60 +3957,35 @@ class SmartEngine:
 
     def _create_videos_like_images(self, proj_dir: Path, excel_path: Path = None):
         """
-        Tạo video giống hệt flow tạo ảnh - dùng browser_flow_generator.
-        Mở Chrome → Chuyển mode video → Tạo video → Đóng Chrome.
+        Tạo video Y NGUYÊN như tạo ảnh - gọi generate_from_prompts_auto.
+        Chrome mở → Vào project URL → Chạy I2V (trong cùng flow với ảnh).
         """
         try:
-            # Check video_count setting
             import yaml
             settings_path = self.config_dir / "settings.yaml"
-            video_count = 0
-            if settings_path.exists():
-                with open(settings_path, 'r', encoding='utf-8') as f:
-                    settings = yaml.safe_load(f) or {}
-                    video_count_setting = settings.get('video_count', 0)
-                    if video_count_setting == 'full':
-                        video_count = 999999
-                    else:
-                        try:
-                            video_count = int(video_count_setting)
-                        except:
-                            video_count = 0
-
-            if video_count <= 0:
-                self.log("[VIDEO] video_count = 0, skip tạo video")
-                return
 
             # Import và tạo BrowserFlowGenerator (giống tạo ảnh)
             from modules.browser_flow_generator import BrowserFlowGenerator
 
-            self.log("[VIDEO] Khởi tạo BrowserFlowGenerator (giống tạo ảnh)...")
+            self.log("[VIDEO] Gọi generate_from_prompts_auto (Y NGUYÊN như tạo ảnh)...")
 
             generator = BrowserFlowGenerator(
                 project_path=str(proj_dir),
                 profile_name="default",
-                headless=True,
+                headless=False,  # Hiển thị Chrome
                 verbose=True,
                 config_path=str(settings_path),
                 worker_id=self.worker_id
             )
 
-            # Gọi generate_videos - method tạo video riêng (giống generate_images)
-            if hasattr(generator, 'generate_videos_from_excel'):
-                result = generator.generate_videos_from_excel(
-                    excel_path=excel_path,
-                    max_videos=video_count
-                )
-                self.log(f"[VIDEO] Kết quả: {result.get('success', 0)} OK, {result.get('failed', 0)} failed")
-            else:
-                # Fallback: Gọi generate_from_prompts_auto với video_only mode
-                # browser_flow_generator sẽ tự detect và tạo video
-                self.log("[VIDEO] Gọi generate_from_prompts_auto (video mode)...")
-                result = generator.generate_from_prompts_auto(
-                    prompts=[],  # Không có ảnh mới, chỉ tạo video
-                    excel_path=excel_path,
-                    video_only=True  # Flag để chỉ tạo video
-                )
+            # Gọi generate_from_prompts_auto với prompts=[]
+            # Flow sẽ: Mở Chrome → Vào project URL → Skip ảnh (không có) → Chạy I2V
+            result = generator.generate_from_prompts_auto(
+                prompts=[],  # Không có ảnh mới
+                excel_path=excel_path
+            )
+
+            self.log(f"[VIDEO] Kết quả: {result}")
 
         except Exception as e:
             self.log(f"[VIDEO] Error: {e}", "ERROR")

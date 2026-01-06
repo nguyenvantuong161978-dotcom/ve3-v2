@@ -1,1 +1,1 @@
-edc8774|2026-01-06 07:17|Fix: Read media_id from cache file (same as image generation)
+beadb32|2026-01-06 07:21|Simplify: Call generate_from_prompts_auto for video (same as image)
