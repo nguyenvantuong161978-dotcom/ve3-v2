@@ -2442,12 +2442,14 @@ class DrissionFlowAPI:
         # 1. Chuyển sang video mode trong Chrome
         self.log("[I2V-Chrome] Chuyển sang mode 'Tạo video từ các thành phần'...")
         result = self.driver.run_js(JS_SELECT_VIDEO_MODE)
-        if result != 'CLICKED':
-            self.log(f"[I2V-Chrome] Không thể chuyển sang video mode: {result}", "WARN")
-            # Thử tiếp dù không click được (có thể đã ở video mode)
-        else:
+        if result == 'CLICKED':
             self.log("[I2V-Chrome] ✓ Đã chuyển sang video mode")
             time.sleep(1)  # Đợi UI update
+        elif result == 'ALREADY_VIDEO_MODE':
+            self.log("[I2V-Chrome] ✓ Đã ở video mode sẵn")
+        else:
+            self.log(f"[I2V-Chrome] Không thể chuyển sang video mode: {result}", "WARN")
+            # Thử tiếp dù không click được
 
         # 2. Reset video state
         self.driver.run_js("""
@@ -2634,6 +2636,9 @@ class DrissionFlowAPI:
                 self.log("[Mode] ✓ Đã chuyển sang Video mode")
                 time.sleep(0.5)
                 return True
+            elif result == 'ALREADY_VIDEO_MODE':
+                self.log("[Mode] ✓ Đã ở Video mode sẵn")
+                return True
             else:
                 self.log(f"[Mode] Không tìm thấy Video mode: {result}", "WARN")
                 return False
@@ -2682,12 +2687,14 @@ class DrissionFlowAPI:
         # 1. Chuyển sang video mode
         self.log("[I2V] Chuyển sang mode 'Tạo video từ các thành phần'...")
         result = self.driver.run_js(JS_SELECT_VIDEO_MODE)
-        if result != 'CLICKED':
-            self.log(f"[I2V] Không thể chuyển sang video mode: {result}", "WARN")
-            # Thử tiếp dù không click được
-        else:
+        if result == 'CLICKED':
             self.log("[I2V] ✓ Đã chuyển sang video mode")
             time.sleep(1)
+        elif result == 'ALREADY_VIDEO_MODE':
+            self.log("[I2V] ✓ Đã ở video mode sẵn")
+        else:
+            self.log(f"[I2V] Không thể chuyển sang video mode: {result}", "WARN")
+            # Thử tiếp dù không click được
 
         # 2. Reset video state
         self.driver.run_js("""
