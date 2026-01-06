@@ -1958,7 +1958,10 @@ class DrissionFlowAPI:
             if self.driver:
                 self.driver.refresh()
                 time.sleep(2)  # Đợi page load
-                self.log("🔄 Refreshed page")
+                # Re-inject JS Interceptor sau khi refresh (bị mất sau F5)
+                self._reset_tokens()
+                self.driver.run_js(JS_INTERCEPTOR)
+                self.log("🔄 Refreshed + re-injected interceptor")
         except Exception as e:
             self.log(f"⚠️ Refresh warning: {e}", "WARN")
 
