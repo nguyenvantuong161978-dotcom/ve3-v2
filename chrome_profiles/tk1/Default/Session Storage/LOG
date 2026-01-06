@@ -1,0 +1,63 @@
+2026/01/06-00:58:31.644 d028 Reusing MANIFEST D:\AUTO\ve3-tool\chrome_profiles\tk1\Default\Session Storage/MANIFEST-000001
+2026/01/06-00:58:31.644 d028 Recovering log #205
+2026/01/06-00:58:31.645 d028 Reusing old log D:\AUTO\ve3-tool\chrome_profiles\tk1\Default\Session Storage/000205.log 
+2026/01/06-01:05:36.021 d028 Level-0 table #208: started
+2026/01/06-01:05:36.023 d028 Level-0 table #208: 53428 bytes OK
+2026/01/06-01:05:36.024 d028 Delete type=0 #205
+2026/01/06-01:05:36.024 d028 Compacting 4@0 + 1@1 files
+2026/01/06-01:05:36.026 d028 Generated table #209@0: 6 keys, 4034 bytes
+2026/01/06-01:05:36.026 d028 Compacted 4@0 + 1@1 files => 4034 bytes
+2026/01/06-01:05:36.026 d028 compacted to: files[ 0 1 0 0 0 0 0 ]
+2026/01/06-01:05:36.026 d028 Delete type=2 #196
+2026/01/06-01:05:36.027 d028 Delete type=2 #198
+2026/01/06-01:05:36.027 d028 Delete type=2 #201
+2026/01/06-01:05:36.027 d028 Delete type=2 #204
+2026/01/06-01:05:36.027 d028 Delete type=2 #208
+2026/01/06-01:23:36.020 6884 Level-0 table #211: started
+2026/01/06-01:23:36.021 6884 Level-0 table #211: 66347 bytes OK
+2026/01/06-01:23:36.022 6884 Delete type=0 #207
+2026/01/06-01:39:36.024 6884 Level-0 table #213: started
+2026/01/06-01:39:36.027 6884 Level-0 table #213: 59414 bytes OK
+2026/01/06-01:39:36.028 6884 Delete type=0 #210
+2026/01/06-01:55:36.021 6884 Level-0 table #215: started
+2026/01/06-01:55:36.026 6884 Level-0 table #215: 58330 bytes OK
+2026/01/06-01:55:36.027 6884 Delete type=0 #212
+2026/01/06-02:11:36.013 6884 Level-0 table #217: started
+2026/01/06-02:11:36.017 6884 Level-0 table #217: 57415 bytes OK
+2026/01/06-02:11:36.018 6884 Delete type=0 #214
+2026/01/06-02:11:36.018 6884 Compacting 4@0 + 1@1 files
+2026/01/06-02:11:36.020 6884 Generated table #218@0: 6 keys, 4056 bytes
+2026/01/06-02:11:36.020 6884 Compacted 4@0 + 1@1 files => 4056 bytes
+2026/01/06-02:11:36.021 6884 compacted to: files[ 0 1 0 0 0 0 0 ]
+2026/01/06-02:11:36.021 6884 Delete type=2 #209
+2026/01/06-02:11:36.021 6884 Delete type=2 #211
+2026/01/06-02:11:36.021 6884 Delete type=2 #213
+2026/01/06-02:11:36.021 6884 Delete type=2 #215
+2026/01/06-02:11:36.021 6884 Delete type=2 #217
+2026/01/06-02:27:36.025 6884 Level-0 table #220: started
+2026/01/06-02:27:36.029 6884 Level-0 table #220: 58892 bytes OK
+2026/01/06-02:27:36.031 6884 Delete type=0 #216
+2026/01/06-02:43:36.020 6884 Level-0 table #222: started
+2026/01/06-02:43:36.025 6884 Level-0 table #222: 57399 bytes OK
+2026/01/06-02:43:36.026 6884 Delete type=0 #219
+2026/01/06-02:59:36.009 6884 Level-0 table #224: started
+2026/01/06-02:59:36.011 6884 Level-0 table #224: 58391 bytes OK
+2026/01/06-02:59:36.011 6884 Delete type=0 #221
+2026/01/06-03:15:36.008 6884 Level-0 table #226: started
+2026/01/06-03:15:36.010 6884 Level-0 table #226: 60730 bytes OK
+2026/01/06-03:15:36.011 6884 Delete type=0 #223
+2026/01/06-03:15:36.011 6884 Compacting 4@0 + 1@1 files
+2026/01/06-03:15:36.012 6884 Generated table #227@0: 6 keys, 4056 bytes
+2026/01/06-03:15:36.012 6884 Compacted 4@0 + 1@1 files => 4056 bytes
+2026/01/06-03:15:36.012 6884 compacted to: files[ 0 1 0 0 0 0 0 ]
+2026/01/06-03:15:36.013 6884 Delete type=2 #218
+2026/01/06-03:15:36.013 6884 Delete type=2 #220
+2026/01/06-03:15:36.013 6884 Delete type=2 #222
+2026/01/06-03:15:36.013 6884 Delete type=2 #224
+2026/01/06-03:15:36.013 6884 Delete type=2 #226
+2026/01/06-03:31:36.026 6884 Level-0 table #229: started
+2026/01/06-03:31:36.029 6884 Level-0 table #229: 59845 bytes OK
+2026/01/06-03:31:36.030 6884 Delete type=0 #225
+2026/01/06-03:47:36.021 6884 Level-0 table #231: started
+2026/01/06-03:47:36.022 6884 Level-0 table #231: 56804 bytes OK
+2026/01/06-03:47:36.023 6884 Delete type=0 #228

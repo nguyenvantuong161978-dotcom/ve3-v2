@@ -1,0 +1,221 @@
+# VE3 Tool Configuration
+# ========================
+
+project_root: "./VE3_TOOL"
+
+# ============================================================================
+# CHROME SETTINGS (Cho tự động lấy Bearer Token)
+# ============================================================================
+# Tool sẽ sử dụng Chrome profile của bạn để tự động lấy token
+
+chrome_path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+chrome_profile: "C:\\Users\\admin\\AppData\\Local\\Google\\Chrome\\User Data\\Profile 2"
+
+# ============================================================================
+# GOOGLE FLOW API Configuration
+# ============================================================================
+# Token sẽ được tự động lấy khi chạy GUI
+# Hoặc paste thủ công vào đây
+
+flow_bearer_token: ""
+flow_project_id: ""
+flow_aspect_ratio: "landscape"
+flow_image_count: 1
+flow_timeout: 120
+flow_delay: 3.0
+
+# DrissionPage Settings (Image Generation)
+# Sử dụng DrissionPage + Interceptor để tạo ảnh
+# IPv6 proxy đã bị bỏ - chỉ dùng Webshare
+
+# Webshare Proxy Pool
+# Có 2 chế độ:
+#   1. Direct Proxy List: 100 IP datacenter cố định, tự xoay khi block
+#   2. Rotating Residential: IP tự động đổi mỗi session
+#
+# Lấy API key: https://proxy.webshare.io/dashboard → API Keys
+webshare_proxy:
+  enabled: true               # BẬT Webshare proxy
+
+  # === PROXY MODE ===
+  # "direct" = Sử dụng Direct Proxy List (100 IP cố định)
+  # "rotating" = Sử dụng Rotating Residential (IP tự động đổi)
+  proxy_mode: "direct"  # Mặc định: Direct Proxy List (100 IP cố định, ổn định hơn)
+
+  # === ROTATING RESIDENTIAL ===
+  # Có 2 mode:
+  #   1. Random IP: username kết thúc bằng '-rotate' → mỗi request = IP ngẫu nhiên
+  #   2. Sticky Session: username không có '-rotate' → session ID tự động thêm
+  #
+  # VD Random: jhvbehdf-residential-rotate:password@p.webshare.io:80
+  # VD Sticky: jhvbehdf-residential-1:password@p.webshare.io:80
+  rotating_host: "p.webshare.io"
+  rotating_port: 80
+  rotating_password: "cf1bi3yvq0t1"
+  rotating_base_username: "jhvbehdf-residential-rotate"  # -rotate = Random IP mỗi request
+  machine_id: 1  # Chỉ dùng khi Sticky Session (Máy 1→ 1... Máy 2→ 30001...)
+
+  # === DIRECT PROXY LIST (100 IPs) ===
+  proxy_file: "config/proxies.txt"  # File chứa danh sách proxy
+  api_key: "pfi2ljk73uysoze9ozg58nsp4af7au0vchs0b027"  # Webshare API key
+
+# ============================================================================
+# VIDEO GENERATION (VEO 3) Settings
+# ============================================================================
+# Tạo video bằng Veo 3 qua Google Flow API
+# Endpoint: aisandbox-pa.googleapis.com/v1/video:batchAsyncGenerateVideoText
+
+# Số ảnh chuyển thành video (0 = tắt, "full" = tất cả)
+# VD: 10 = chỉ 10 ảnh đầu tiên sẽ được chuyển thành video
+# Nếu đã có đủ số video trong img/, sẽ tự động skip
+video_count: 10
+
+# Video aspect ratio: "landscape" (16:9), "portrait" (9:16), "square" (1:1)
+video_aspect_ratio: "landscape"
+
+# Video model: "fast" (veo_3_1_t2v_fast_ultra) hoặc "quality" (veo_3_1_t2v)
+video_model: "fast"
+
+# User paygate tier: "TIER_ONE" hoặc "TIER_TWO"
+video_paygate_tier: "PAYGATE_TIER_TWO"
+
+# ============================================================================
+# PROXY API Configuration (Bypass Captcha qua nanoai.pics)
+# ============================================================================
+# Sử dụng proxy API để bypass reCAPTCHA khi gọi trực tiếp Google API
+
+# Bật/tắt proxy mode
+use_proxy: true
+
+# Token cho proxy API (lấy từ nanoai.pics)
+proxy_api_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ODMsInJvbGUiOjMsImlhdCI6MTc2NjQxOTE4OX0.D8tvSOeFpXCEgRL_ovWcp_A7pDZvGoOL5kVQRsuuUmc"
+
+# Proxy API endpoint
+proxy_api_url: "https://flow-api.nanoai.pics/api/fix/create-video-veo3"
+
+# ============================================================================
+# AI API Configuration (Cho tạo prompts từ SRT)
+# ============================================================================
+# Thứ tự ưu tiên: DeepSeek > Gemini > Groq > Ollama (local fallback)
+
+# DeepSeek API (ưu tiên - rẻ và ổn định)
+# Lấy key tại: https://platform.deepseek.com/
+deepseek_api_keys:
+  - ""  # Thêm API key của bạn vào đây
+
+# Gemini API
+# Lấy key tại: https://makersuite.google.com/app/apikey
+gemini_api_keys:
+  - ""  # Thêm API key của bạn vào đây
+
+gemini_models:
+  - "gemini-2.0-flash"
+  - "gemini-2.5-flash"
+
+# Groq API (miễn phí)
+# Lấy key tại: https://console.groq.com/keys
+groq_api_keys:
+  - ""  # Thêm API key của bạn vào đây
+
+# ============================================================================
+# OLLAMA - LOCAL AI (FALLBACK khi API keys hết)
+# ============================================================================
+# Cài đặt Ollama: https://ollama.ai
+# Pull model: ollama pull qwen2.5:14b
+# Chạy: ollama serve
+#
+# Với RTX 4070 12GB + 64GB RAM:
+# - qwen2.5:14b: Tối ưu nhất (~10GB VRAM, 128K context, JSON xuất sắc)
+# - qwen2.5:7b: Nhanh hơn nhưng chất lượng thấp hơn
+# - gemma3:27b: Quá lớn cho 12GB VRAM, sẽ chạy CPU (chậm)
+
+ollama_model: "qwen2.5:14b"  # Tối ưu cho RTX 4070 12GB - 128K context, JSON tốt
+ollama_endpoint: "http://localhost:11434"  # Ollama server endpoint
+
+# ============================================================================
+# Automation Settings (Optional)
+# ============================================================================
+max_scenes_per_account: 50
+retry_count: 3
+wait_timeout: 30
+
+# Scene duration (giây) - thời lượng mỗi ảnh trong video
+# 5-8s: Phù hợp với video (đủ thời gian để người xem nhìn rõ)
+# Video chuyên nghiệp thường dùng 5-8s mỗi scene
+min_scene_duration: 5
+max_scene_duration: 8
+
+# ============================================================================
+# VIDEO COMPOSITION - Chế độ ghép video
+# ============================================================================
+
+# Chế độ edit: "quality", "balanced", "fast"
+# - quality: Ken Burns đầy đủ + easing mượt (chậm nhất, đẹp nhất)
+# - balanced: Ken Burns đơn giản hóa (cân bằng tốc độ/chất lượng) [KHUYÊN DÙNG]
+# - fast: Chỉ fade in/out, không zoom/pan (nhanh nhất)
+#
+# Thời gian ước tính cho 100 clips:
+#   RTX 4070/3060: quality ~8 phút, balanced ~3 phút, fast ~1 phút
+#   CPU only:      quality ~30 phút, balanced ~15 phút, fast ~5 phút
+video_compose_mode: "fast"
+
+# ============================================================================
+# KEN BURNS EFFECTS - Hiệu ứng zoom/pan cho ảnh tĩnh
+# ============================================================================
+# Chỉ áp dụng khi video_compose_mode = "quality" hoặc "balanced"
+
+# Cường độ hiệu ứng: "subtle", "normal", "strong"
+# - subtle: Zoom 6%, pan 4% - rất nhẹ, gần như tĩnh
+# - normal: Zoom 12%, pan 8% - cân bằng (mặc định)
+# - strong: Zoom 18%, pan 12% - mạnh hơn, chuyển động rõ ràng
+ken_burns_intensity: "normal"
+
+# Whisper Settings (Voice to SRT)
+whisper_model: "base"
+whisper_language: "vi"
+
+# Logging
+log_level: "INFO"
+
+# ============================================================================
+# PARALLEL PROCESSING Settings - Tối ưu tốc độ xử lý
+# ============================================================================
+
+# Số lượng voice xử lý song song (1-5)
+# Ví dụ: 3 voices x 90 phút = 270 phút (tuần tự) -> ~100 phút (song song)
+# Cần nhiều RAM và CPU khi tăng số này
+parallel_voices: 3
+
+# Số lượng ảnh bắt đầu tạo video ngay (không chờ hết ảnh)
+# VD: 10 = khi có 10 ảnh đầu tiên sẽ bắt đầu tạo video song song với tạo ảnh
+early_video_start: 10
+
+# ============================================================================
+# BROWSER AUTOMATION Settings
+# ============================================================================
+# Su dung browser automation thay cho API (khong can bearer token)
+
+# Generation mode: "api" hoặc "chrome"
+# API mode: Gọi trực tiếp API qua nanoai.pics (nhanh, ổn định)
+# Chrome mode: Dùng DrissionPage + Webshare proxy (backup)
+generation_mode: "api"
+
+# Parallel mode: So luong browser chay song song (1-5)
+# Nhieu browser = nhanh hon, nhung can nhieu RAM va profile
+# Workflow: Tao anh tham chieu truoc, roi tao phan canh song song
+parallel_browsers: 3
+
+# Thu muc chua Chrome profiles (luu session login)
+browser_profiles_dir: "./chrome_profiles"
+
+# Chay headless (an trinh duyet) - Mac dinh True khi da dang nhap
+browser_headless: false
+
+# Timeout cho dang nhap (giay)
+browser_login_timeout: 120
+
+# Delay giua cac prompt (ms)
+browser_delay_between_prompts: 2000
+
+# Timeout cho moi anh (giay)
+browser_generate_timeout: 120

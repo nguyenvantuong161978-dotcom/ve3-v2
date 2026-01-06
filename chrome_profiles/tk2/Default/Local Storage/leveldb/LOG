@@ -1,0 +1,9 @@
+2026/01/01-14:02:49.057 b08 Reusing MANIFEST D:\AUTO\ve3-tool\chrome_profiles\tk2\Default\Local Storage\leveldb/MANIFEST-000001
+2026/01/01-14:02:49.059 b08 Recovering log #27
+2026/01/01-14:02:49.060 b08 Reusing old log D:\AUTO\ve3-tool\chrome_profiles\tk2\Default\Local Storage\leveldb/000027.log 
+2026/01/01-15:01:55.959 4148 Level-0 table #31: started
+2026/01/01-15:01:55.964 4148 Level-0 table #31: 21226 bytes OK
+2026/01/01-15:01:55.967 4148 Delete type=0 #27
+2026/01/01-16:03:55.956 4148 Level-0 table #33: started
+2026/01/01-16:03:55.958 4148 Level-0 table #33: 21289 bytes OK
+2026/01/01-16:03:55.959 4148 Delete type=0 #30

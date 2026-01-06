@@ -1,0 +1,21 @@
+2026/01/06-00:58:31.554 d028 Reusing MANIFEST D:\AUTO\ve3-tool\chrome_profiles\tk1\Default\Local Storage\leveldb/MANIFEST-000001
+2026/01/06-00:58:31.556 d028 Recovering log #76
+2026/01/06-00:58:31.557 d028 Reusing old log D:\AUTO\ve3-tool\chrome_profiles\tk1\Default\Local Storage\leveldb/000076.log 
+2026/01/06-01:43:36.022 6884 Level-0 table #79: started
+2026/01/06-01:43:36.024 6884 Level-0 table #79: 17129 bytes OK
+2026/01/06-01:43:36.025 6884 Delete type=0 #76
+2026/01/06-02:31:35.438 6884 Level-0 table #81: started
+2026/01/06-02:31:35.443 6884 Level-0 table #81: 17129 bytes OK
+2026/01/06-02:31:35.445 6884 Delete type=0 #78
+2026/01/06-03:19:35.435 6884 Level-0 table #83: started
+2026/01/06-03:19:35.437 6884 Level-0 table #83: 17159 bytes OK
+2026/01/06-03:19:35.438 6884 Delete type=0 #80
+2026/01/06-03:19:35.438 6884 Compacting 4@0 + 1@1 files
+2026/01/06-03:19:35.441 6884 Generated table #84@0: 5996 keys, 69907 bytes
+2026/01/06-03:19:35.441 6884 Compacted 4@0 + 1@1 files => 69907 bytes
+2026/01/06-03:19:35.442 6884 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/01/06-03:19:35.442 6884 Delete type=2 #73
+2026/01/06-03:19:35.442 6884 Delete type=2 #75
+2026/01/06-03:19:35.442 6884 Delete type=2 #79
+2026/01/06-03:19:35.442 6884 Delete type=2 #81
+2026/01/06-03:19:35.442 6884 Delete type=2 #83

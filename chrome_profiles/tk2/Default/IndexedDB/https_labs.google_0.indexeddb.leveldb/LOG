@@ -1,0 +1,14 @@
+2026/01/01-14:02:56.492 574c Reusing MANIFEST D:\AUTO\ve3-tool\chrome_profiles\tk2\Default\IndexedDB\https_labs.google_0.indexeddb.leveldb/MANIFEST-000001
+2026/01/01-14:02:56.492 574c Recovering log #55
+2026/01/01-14:02:56.493 574c Reusing old log D:\AUTO\ve3-tool\chrome_profiles\tk2\Default\IndexedDB\https_labs.google_0.indexeddb.leveldb/000055.log 
+2026/01/01-14:02:56.493 574c Delete type=2 #54
+2026/01/01-14:02:56.504 4e88 Level-0 table #60: started
+2026/01/01-14:02:56.505 4e88 Level-0 table #60: 1178 bytes OK
+2026/01/01-14:02:56.506 4e88 Delete type=0 #55
+2026/01/01-14:02:56.506 4e88 Manual compaction at level-0 from '\x00\x13\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x14\x00\x00\x00' @ 0 : 0; will stop at '\x00\x13\x00\x00\x05' @ 1072 : 1
+2026/01/01-14:02:56.506 4e88 Compacting 1@0 + 1@1 files
+2026/01/01-14:02:56.507 4e88 Generated table #61@0: 172 keys, 3671 bytes
+2026/01/01-14:02:56.507 4e88 Compacted 1@0 + 1@1 files => 3671 bytes
+2026/01/01-14:02:56.507 4e88 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/01/01-14:02:56.507 4e88 Delete type=2 #60
+2026/01/01-14:02:56.507 2e8c Manual compaction at level-0 from '\x00\x13\x00\x00\x05' @ 1072 : 1 .. '\x00\x14\x00\x00\x00' @ 0 : 0; will stop at (end)
