@@ -74,7 +74,8 @@ webshare_proxy:
 # Số ảnh chuyển thành video (0 = tắt, "full" = tất cả)
 # VD: 10 = chỉ 10 ảnh đầu tiên sẽ được chuyển thành video
 # Nếu đã có đủ số video trong img/, sẽ tự động skip
-video_count: "full"
+# NOTE: Tạm tắt video generation (đang fix bug)
+video_count: 0
 
 # Video aspect ratio: "landscape" (16:9), "portrait" (9:16), "square" (1:1)
 video_aspect_ratio: "landscape"
