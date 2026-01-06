@@ -4291,35 +4291,33 @@ class SmartEngine:
                     }
                     video_model = VIDEO_MODEL_MAP.get(model_setting, 'veo_3_0_r2v_fast_ultra')
 
-                    # Gọi DrissionFlowAPI.generate_video()
-                    ok, video_url, error = drission_api.generate_video(
+                    # Gọi DrissionFlowAPI.generate_video_chrome() - Chrome UI mode
+                    # Tự động switch Chrome sang video mode, inject media_id
+                    video_path = img_dir / f"{image_id}.mp4"
+                    ok, result_path, error = drission_api.generate_video_chrome(
                         media_id=media_name,
                         prompt=video_prompt,
-                        video_model=video_model
+                        video_model=video_model,
+                        save_path=video_path  # Tự download luôn
                     )
 
-                    if ok and video_url:
-                        # Download và save video
-                        video_path = img_dir / f"{image_id}.mp4"
-                        if self._download_video(video_url, video_path):
-                            self._video_results['success'] += 1
-                            self.log(f"[VIDEO] OK: {image_id} -> {video_path.name}")
+                    if ok:
+                        self._video_results['success'] += 1
+                        self.log(f"[VIDEO] OK: {image_id} -> {video_path.name}")
 
-                            # Xóa ảnh gốc nếu cần
-                            if self._video_settings.get('replace_image', True):
-                                png_path = img_dir / f"{image_id}.png"
-                                if png_path.exists():
-                                    try:
-                                        png_path.unlink()
-                                    except:
-                                        pass
+                        # Xóa ảnh gốc nếu cần
+                        if self._video_settings.get('replace_image', True):
+                            png_path = img_dir / f"{image_id}.png"
+                            if png_path.exists():
+                                try:
+                                    png_path.unlink()
+                                except:
+                                    pass
 
-                            success = True
-                            break
-                        else:
-                            error = "Failed to download video"
+                        success = True
+                        break
 
-                    # generate_video() đã xử lý 403/retry bên trong rồi
+                    # generate_video_chrome() đã xử lý bên trong rồi
                     if not success:
                         self._video_results['failed'] += 1
                         self._video_results['failed_items'].append(item)  # Track for retry

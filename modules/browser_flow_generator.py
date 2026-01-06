@@ -3852,36 +3852,26 @@ class BrowserFlowGenerator:
                     self._log(f"[I2V] [{i+1}/{len(scenes_for_video)}] Scene {scene_id}...")
 
                     try:
-                        # generate_video sẽ tự refresh recaptcha token (one-time token)
-                        success, video_url, error = drission_api.generate_video(
+                        # Dùng generate_video_chrome() - Chrome UI mode (giống flow tạo ảnh)
+                        # Tự động switch Chrome sang video mode, inject media_id, và Chrome gửi request
+                        video_dir = output_dir  # img/ folder
+                        video_file = video_dir / f"{scene_id}.mp4"
+
+                        success, result_path, error = drission_api.generate_video_chrome(
                             media_id=media_id,
                             prompt=video_prompt,
-                            video_model="veo_3_0_r2v_fast_ultra"
+                            video_model="veo_3_0_r2v_fast_ultra",
+                            save_path=video_file  # Tự download luôn
                         )
 
-                        if success and video_url:
-                            # Download video - lưu vào img/ folder (giống smart_engine)
-                            video_dir = output_dir  # img/ folder
-                            video_file = video_dir / f"{scene_id}.mp4"
+                        if success:
+                            self._log(f"   ✓ OK: {video_file.name}")
+                            video_success += 1
 
-                            try:
-                                import requests as req
-                                resp = req.get(video_url, timeout=60)
-                                if resp.status_code == 200:
-                                    video_file.write_bytes(resp.content)
-                                    self._log(f"   ✓ OK: {video_file.name}")
-                                    video_success += 1
-
-                                    # Update Excel
-                                    if workbook:
-                                        workbook.update_scene(int(scene_id), video_path=video_file.name, status_vid='done')
-                                        workbook.save()
-                                else:
-                                    self._log(f"   ✗ Download failed: {resp.status_code}", "warn")
-                                    video_failed += 1
-                            except Exception as dl_err:
-                                self._log(f"   ✗ Download error: {dl_err}", "warn")
-                                video_failed += 1
+                            # Update Excel
+                            if workbook:
+                                workbook.update_scene(int(scene_id), video_path=video_file.name, status_vid='done')
+                                workbook.save()
                         else:
                             self._log(f"   ✗ Failed: {error}", "warn")
                             video_failed += 1
@@ -3892,6 +3882,9 @@ class BrowserFlowGenerator:
 
                     # Delay giữa các video
                     time.sleep(3)
+
+                # Chuyển lại image mode sau khi xong video
+                drission_api.switch_to_image_mode()
 
                 self._log(f"[I2V] Hoàn tất: {video_success} OK, {video_failed} failed")
             else:

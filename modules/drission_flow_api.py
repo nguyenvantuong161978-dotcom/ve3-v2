@@ -99,8 +99,9 @@ class GeneratedImage:
 JS_INTERCEPTOR = '''
 window._tk=null;window._pj=null;window._xbv=null;window._rct=null;window._payload=null;window._sid=null;window._url=null;
 window._response=null;window._responseError=null;window._requestPending=false;
-window._customPayload=null; // Payload đầy đủ từ Python (có media_id)
+window._customPayload=null; // Payload đầy đủ từ Python (có media_id) cho IMAGE
 window._videoResponse=null;window._videoError=null;window._videoPending=false;
+window._customVideoPayload=null; // Payload đầy đủ từ Python cho VIDEO (có referenceImages.mediaId)
 
 (function(){
     if(window.__interceptReady) return 'ALREADY_READY';
@@ -232,7 +233,7 @@ window._videoResponse=null;window._videoError=null;window._videoPending=false;
         }
 
         // ============================================
-        // VIDEO GENERATION REQUESTS (I2V)
+        // VIDEO GENERATION REQUESTS (I2V) - CUSTOM PAYLOAD INJECTION
         // ============================================
         if (urlStr.includes('aisandbox') && urlStr.includes('video:')) {
             console.log('[VIDEO] Request to:', urlStr);
@@ -240,34 +241,82 @@ window._videoResponse=null;window._videoError=null;window._videoPending=false;
             window._videoResponse = null;
             window._videoError = null;
 
+            // Capture headers
             if (opts && opts.headers) {
                 var h = opts.headers;
                 if (h['Authorization']) window._tk = h['Authorization'].replace('Bearer ', '');
                 if (h['x-browser-validation']) window._xbv = h['x-browser-validation'];
             }
 
+            // Parse Chrome's original body để lấy reCAPTCHA token FRESH
+            var chromeVideoBody = null;
+            var freshVideoRecaptcha = null;
             if (opts && opts.body) {
                 try {
-                    var body = JSON.parse(opts.body);
-                    if (body.clientContext) {
-                        window._sid = body.clientContext.sessionId;
-                        window._pj = body.clientContext.projectId;
-                        window._rct = body.clientContext.recaptchaToken;
+                    chromeVideoBody = JSON.parse(opts.body);
+                    if (chromeVideoBody.clientContext) {
+                        window._sid = chromeVideoBody.clientContext.sessionId;
+                        window._pj = chromeVideoBody.clientContext.projectId;
+                        freshVideoRecaptcha = chromeVideoBody.clientContext.recaptchaToken;
+                        window._rct = freshVideoRecaptcha;
                     }
-                } catch(e) {}
+                } catch(e) {
+                    console.log('[VIDEO] Parse Chrome body failed:', e);
+                }
             }
 
+            // ============================================
+            // CUSTOM VIDEO PAYLOAD MODE: Thay thế body (inject media_id)
+            // ============================================
+            if (window._customVideoPayload && freshVideoRecaptcha) {
+                try {
+                    var customVideoBody = window._customVideoPayload;
+
+                    // INJECT fresh reCAPTCHA token vào payload của chúng ta
+                    if (customVideoBody.clientContext) {
+                        customVideoBody.clientContext.recaptchaToken = freshVideoRecaptcha;
+                        // Copy sessionId và projectId từ Chrome
+                        if (chromeVideoBody && chromeVideoBody.clientContext) {
+                            customVideoBody.clientContext.sessionId = chromeVideoBody.clientContext.sessionId;
+                            customVideoBody.clientContext.projectId = chromeVideoBody.clientContext.projectId;
+                        }
+                    }
+
+                    // Thay thế body
+                    opts.body = JSON.stringify(customVideoBody);
+                    console.log('[VIDEO-INJECT] Custom payload với fresh reCAPTCHA!');
+                    if (customVideoBody.requests && customVideoBody.requests[0]) {
+                        var refImages = customVideoBody.requests[0].referenceImages;
+                        if (refImages && refImages.length > 0) {
+                            console.log('[VIDEO-INJECT] referenceImages.mediaId:', refImages[0].mediaId ? refImages[0].mediaId.substring(0, 50) + '...' : 'NONE');
+                        }
+                    }
+
+                    // Clear để không dùng lại
+                    window._customVideoPayload = null;
+                } catch(e) {
+                    console.log('[VIDEO] Inject custom payload failed:', e);
+                }
+            }
+
+            // FORWARD request
             try {
+                console.log('[VIDEO] Sending request...');
                 var response = await orig.apply(this, [url, opts]);
                 var cloned = response.clone();
                 try {
                     window._videoResponse = await cloned.json();
+                    console.log('[VIDEO] Response status:', response.status);
+                    if (window._videoResponse.operations) {
+                        console.log('[VIDEO] Got operations:', window._videoResponse.operations.length);
+                    }
                 } catch(e) {
                     window._videoResponse = {status: response.status, error: 'parse_failed'};
                 }
                 window._videoPending = false;
                 return response;
             } catch(e) {
+                console.log('[VIDEO] Request failed:', e);
                 window._videoError = e.toString();
                 window._videoPending = false;
                 throw e;
@@ -322,6 +371,42 @@ JS_SELECT_IMAGE_MODE = '''
             if (rect.height > 10 && rect.height < 80 && rect.width > 50) {
                 el.click();
                 console.log('[AUTO] Clicked: Tao hinh anh');
+                return 'CLICKED';
+            }
+        }
+    }
+    return 'NOT_FOUND';
+})();
+'''
+
+# JS để chọn "Tạo video từ các thành phần" từ dropdown (cho I2V)
+JS_SELECT_VIDEO_MODE = '''
+(async function() {
+    // 1. Click dropdown
+    var dropdown = document.querySelector('button[role="combobox"]');
+    if (!dropdown) {
+        console.log('[VIDEO] Dropdown not found');
+        return 'NO_DROPDOWN';
+    }
+    dropdown.click();
+    console.log('[VIDEO] Clicked dropdown');
+
+    // 2. Đợi dropdown mở
+    await new Promise(r => setTimeout(r, 500));
+
+    // 3. Tìm và click "Tạo video từ các thành phần"
+    var allElements = document.querySelectorAll('*');
+    for (var el of allElements) {
+        var text = el.textContent || '';
+        // Vietnamese: "Tạo video từ các thành phần" hoặc "Tạo video từ hình ảnh"
+        // English: "Create video from components" hoặc "Generate video from image"
+        if (text.includes('Tạo video từ') || text.includes('video từ các thành phần') ||
+            text.includes('Create video from') || text.includes('Generate video from') ||
+            text.includes('Image to video') || text.includes('Ảnh thành video')) {
+            var rect = el.getBoundingClientRect();
+            if (rect.height > 10 && rect.height < 80 && rect.width > 50) {
+                el.click();
+                console.log('[VIDEO] Clicked: Tao video tu cac thanh phan');
                 return 'CLICKED';
             }
         }
@@ -2213,6 +2298,247 @@ class DrissionFlowAPI:
                 return False, None, last_error
 
         return False, None, last_error or "Failed after all retries"
+
+    def generate_video_chrome(
+        self,
+        media_id: str,
+        prompt: str = "Subtle motion, cinematic, slow movement",
+        aspect_ratio: str = "VIDEO_ASPECT_RATIO_LANDSCAPE",
+        video_model: str = "veo_3_0_r2v_fast_ultra",
+        max_wait: int = 300,
+        save_path: Optional[Path] = None
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
+        """
+        Tạo video từ ảnh (I2V) sử dụng Chrome UI - giống flow tạo ảnh.
+
+        Flow:
+        1. Chuyển Chrome sang mode "Tạo video từ các thành phần"
+        2. Inject custom payload với media_id (reference image)
+        3. Chrome gửi request với fresh reCAPTCHA
+        4. Đợi response và poll cho video hoàn thành
+        5. Download video (nếu có save_path)
+
+        Args:
+            media_id: Media ID của ảnh đã tạo (từ generate_image)
+            prompt: Prompt mô tả chuyển động video
+            aspect_ratio: Tỷ lệ video (landscape/portrait/square)
+            video_model: Model video (fast/quality)
+            max_wait: Thời gian chờ tối đa (giây)
+            save_path: Đường dẫn lưu video (optional)
+
+        Returns:
+            Tuple[success, video_url, error]
+        """
+        if not self._ready:
+            return False, None, "API chưa setup! Gọi setup() trước."
+
+        if not media_id:
+            return False, None, "Media ID không được để trống"
+
+        self.log(f"[I2V-Chrome] Tạo video từ media: {media_id[:50]}...")
+        self.log(f"[I2V-Chrome] Prompt: {prompt[:60]}...")
+
+        # 1. Chuyển sang video mode trong Chrome
+        self.log("[I2V-Chrome] Chuyển sang mode 'Tạo video từ các thành phần'...")
+        result = self.driver.run_js(JS_SELECT_VIDEO_MODE)
+        if result != 'CLICKED':
+            self.log(f"[I2V-Chrome] Không thể chuyển sang video mode: {result}", "WARN")
+            # Thử tiếp dù không click được (có thể đã ở video mode)
+        else:
+            self.log("[I2V-Chrome] ✓ Đã chuyển sang video mode")
+            time.sleep(1)  # Đợi UI update
+
+        # 2. Reset video state
+        self.driver.run_js("""
+            window._videoResponse = null;
+            window._videoError = null;
+            window._videoPending = false;
+            window._customVideoPayload = null;
+        """)
+
+        # 3. Chuẩn bị custom video payload với media_id
+        import uuid
+        session_id = f";{int(time.time() * 1000)}"
+        scene_id = str(uuid.uuid4())
+
+        video_payload = {
+            "clientContext": {
+                "projectId": self.project_id or "",
+                "recaptchaToken": "",  # Sẽ được inject bởi interceptor
+                "sessionId": session_id,
+                "tool": "PINHOLE",
+                "userPaygateTier": "PAYGATE_TIER_TWO"
+            },
+            "requests": [{
+                "aspectRatio": aspect_ratio,
+                "metadata": {"sceneId": scene_id},
+                "referenceImages": [{
+                    "imageUsageType": "IMAGE_USAGE_TYPE_ASSET",
+                    "mediaId": media_id
+                }],
+                "seed": int(time.time()) % 100000,
+                "textInput": {"prompt": prompt},
+                "videoModelKey": video_model
+            }]
+        }
+
+        # Set custom payload - interceptor sẽ inject fresh reCAPTCHA
+        self.driver.run_js(f"window._customVideoPayload = {json.dumps(video_payload)};")
+        self.log(f"[I2V-Chrome] ✓ Custom payload ready (mediaId: {media_id[:40]}...)")
+
+        # 4. Tìm textarea và nhập prompt (trigger Chrome gửi request)
+        textarea = self._find_textarea()
+        if not textarea:
+            return False, None, "Không tìm thấy textarea"
+
+        try:
+            textarea.click()
+            time.sleep(0.3)
+        except:
+            pass
+
+        textarea.clear()
+        time.sleep(0.2)
+        textarea.input(prompt)
+
+        # Đợi reCAPTCHA chuẩn bị token
+        time.sleep(2)
+
+        # Nhấn Enter để gửi
+        textarea.input('\n')
+        self.log("[I2V-Chrome] → Pressed Enter, Chrome đang gửi request...")
+
+        # 5. Đợi video response từ browser
+        start_time = time.time()
+        timeout = 60  # 60s cho initial request
+
+        while time.time() - start_time < timeout:
+            result = self.driver.run_js("""
+                return {
+                    pending: window._videoPending,
+                    response: window._videoResponse,
+                    error: window._videoError
+                };
+            """)
+
+            if result.get('error'):
+                error_msg = result['error']
+                self.log(f"[I2V-Chrome] ✗ Request error: {error_msg}", "ERROR")
+                return False, None, error_msg
+
+            if result.get('response'):
+                response_data = result['response']
+
+                # Check for API errors
+                if isinstance(response_data, dict):
+                    if response_data.get('error'):
+                        error_info = response_data['error']
+                        error_msg = f"{error_info.get('code', 'unknown')}: {error_info.get('message', str(error_info))}"
+                        self.log(f"[I2V-Chrome] ✗ API Error: {error_msg}", "ERROR")
+                        return False, None, error_msg
+
+                    # Check nếu có video ngay trong response
+                    if "media" in response_data or "generatedVideos" in response_data:
+                        videos = response_data.get("generatedVideos", response_data.get("media", []))
+                        if videos:
+                            video_url = videos[0].get("video", {}).get("fifeUrl") or videos[0].get("fifeUrl")
+                            if video_url:
+                                self.log(f"[I2V-Chrome] ✓ Video ready (no poll): {video_url[:60]}...")
+                                return self._download_video_if_needed(video_url, save_path)
+
+                    # Có operations - cần poll
+                    operations = response_data.get("operations", [])
+                    if operations:
+                        self.log(f"[I2V-Chrome] Got {len(operations)} operations, polling...")
+                        op = operations[0]
+
+                        # Build headers cho polling
+                        headers = {
+                            "Authorization": self.bearer_token,
+                            "Content-Type": "application/json",
+                            "Origin": "https://labs.google",
+                            "Referer": "https://labs.google/",
+                        }
+                        if self.x_browser_validation:
+                            headers["x-browser-validation"] = self.x_browser_validation
+
+                        proxies = None
+                        if self._use_webshare and hasattr(self, '_bridge_port') and self._bridge_port:
+                            bridge_url = f"http://127.0.0.1:{self._bridge_port}"
+                            proxies = {"http": bridge_url, "https": bridge_url}
+
+                        # Poll cho video hoàn thành
+                        video_url = self._poll_video_operation(op, headers, proxies, max_wait)
+
+                        if video_url:
+                            self.log(f"[I2V-Chrome] ✓ Video ready: {video_url[:60]}...")
+                            return self._download_video_if_needed(video_url, save_path)
+                        else:
+                            return False, None, "Timeout hoặc lỗi khi poll video"
+
+                    return False, None, "Không có operations/videos trong response"
+
+            time.sleep(0.5)
+
+        self.log("[I2V-Chrome] ✗ Timeout đợi response từ browser", "ERROR")
+        return False, None, "Timeout waiting for video response"
+
+    def _download_video_if_needed(
+        self,
+        video_url: str,
+        save_path: Optional[Path]
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
+        """Download video nếu có save_path, trả về (success, url, error)."""
+        if save_path:
+            try:
+                resp = requests.get(video_url, timeout=120)
+                if resp.status_code == 200:
+                    save_path.parent.mkdir(parents=True, exist_ok=True)
+                    save_path.write_bytes(resp.content)
+                    self.log(f"[I2V-Chrome] ✓ Downloaded: {save_path.name}")
+                    return True, str(save_path), None
+                else:
+                    self.log(f"[I2V-Chrome] Download error: HTTP {resp.status_code}", "ERROR")
+                    return False, video_url, f"Download failed: HTTP {resp.status_code}"
+            except Exception as e:
+                self.log(f"[I2V-Chrome] Download error: {e}", "ERROR")
+                return False, video_url, str(e)
+
+        return True, video_url, None
+
+    def switch_to_image_mode(self) -> bool:
+        """Chuyển Chrome về mode tạo ảnh."""
+        if not self._ready:
+            return False
+        try:
+            result = self.driver.run_js(JS_SELECT_IMAGE_MODE)
+            if result == 'CLICKED':
+                self.log("[Mode] ✓ Đã chuyển về Image mode")
+                time.sleep(0.5)
+                return True
+            else:
+                self.log(f"[Mode] Không tìm thấy Image mode: {result}", "WARN")
+                return False
+        except Exception as e:
+            self.log(f"[Mode] Error: {e}", "ERROR")
+            return False
+
+    def switch_to_video_mode(self) -> bool:
+        """Chuyển Chrome sang mode tạo video từ ảnh."""
+        if not self._ready:
+            return False
+        try:
+            result = self.driver.run_js(JS_SELECT_VIDEO_MODE)
+            if result == 'CLICKED':
+                self.log("[Mode] ✓ Đã chuyển sang Video mode")
+                time.sleep(0.5)
+                return True
+            else:
+                self.log(f"[Mode] Không tìm thấy Video mode: {result}", "WARN")
+                return False
+        except Exception as e:
+            self.log(f"[Mode] Error: {e}", "ERROR")
+            return False
 
     def _poll_video_operation(
         self,
