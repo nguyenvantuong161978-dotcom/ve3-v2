@@ -252,72 +252,94 @@ class BrowserFlowGenerator:
         try:
             options = Options()
 
-            # Tim Chrome binary
-            chrome_paths = [
-                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-                "/usr/bin/google-chrome",
-                "/usr/bin/chromium-browser",
-            ]
-            for chrome_path in chrome_paths:
-                if os.path.exists(chrome_path):
-                    options.binary_location = chrome_path
-                    self._log(f"Chrome: {chrome_path}")
-                    break
+            # Tim Chrome binary - ƯU TIÊN chrome_portable từ config
+            chrome_portable = self.config.get('chrome_portable', '')
+            chrome_portable_user_data = None
 
-            # Tao working profile rieng (khong phai temp, giu nguyen settings)
-            # Vi tri: ~/.ve3_chrome_profiles/{profile_name}
-            self.profile_dir.mkdir(parents=True, exist_ok=True)
-            working_profile_base = Path.home() / ".ve3_chrome_profiles"
-            working_profile_base.mkdir(parents=True, exist_ok=True)
-            working_profile = working_profile_base / self.profile_name
+            if chrome_portable:
+                options.binary_location = chrome_portable
+                self._log(f"Chrome portable: {chrome_portable}")
 
-            self._log(f"Profile goc: {self.profile_dir}")
-            self._log(f"Working profile: {working_profile}")
+                # Tìm User Data của Chrome portable
+                chrome_dir = Path(chrome_portable).parent
+                for data_path in [chrome_dir / "Data" / "profile", chrome_dir / "User Data"]:
+                    if data_path.exists():
+                        chrome_portable_user_data = data_path
+                        break
+            else:
+                # Fallback: Tim Chrome system
+                chrome_paths = [
+                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                    "/usr/bin/google-chrome",
+                    "/usr/bin/chromium-browser",
+                ]
+                for chrome_path in chrome_paths:
+                    if os.path.exists(chrome_path):
+                        options.binary_location = chrome_path
+                        self._log(f"Chrome: {chrome_path}")
+                        break
 
-            # LUÔN sync cookies/login data từ profile gốc (đảm bảo dùng đúng account đã đăng nhập)
-            import shutil
-            if not working_profile.exists():
-                working_profile.mkdir(parents=True, exist_ok=True)
+            # Xử lý User Data
+            if chrome_portable_user_data:
+                # Dùng User Data của Chrome portable (đã đăng nhập sẵn)
+                self._log(f"User Data: {chrome_portable_user_data}")
+                options.add_argument(f"--user-data-dir={chrome_portable_user_data}")
+                self._working_profile = str(chrome_portable_user_data)
+            else:
+                # Tao working profile rieng (khong phai temp, giu nguyen settings)
+                # Vi tri: ~/.ve3_chrome_profiles/{profile_name}
+                self.profile_dir.mkdir(parents=True, exist_ok=True)
+                working_profile_base = Path.home() / ".ve3_chrome_profiles"
+                working_profile_base.mkdir(parents=True, exist_ok=True)
+                working_profile = working_profile_base / self.profile_name
 
-            # Sync các file quan trọng (cookies, login data) mỗi lần chạy
-            critical_files = [
-                "Cookies", "Login Data", "Web Data",
-                "Network/Cookies", "Network/TransportSecurity"
-            ]
-            critical_dirs = ["Default", "Network"]
+                self._log(f"Profile goc: {self.profile_dir}")
+                self._log(f"Working profile: {working_profile}")
 
-            if any(self.profile_dir.iterdir()):
-                # Sync critical dirs first
-                for dir_name in critical_dirs:
-                    src_dir = self.profile_dir / dir_name
-                    if src_dir.exists() and src_dir.is_dir():
-                        dest_dir = working_profile / dir_name
-                        dest_dir.mkdir(parents=True, exist_ok=True)
-                        for item in src_dir.iterdir():
-                            try:
-                                dest = dest_dir / item.name
-                                if item.is_file():
-                                    shutil.copy2(item, dest)
-                            except Exception:
-                                pass  # Skip locked files
+                # LUÔN sync cookies/login data từ profile gốc (đảm bảo dùng đúng account đã đăng nhập)
+                import shutil
+                if not working_profile.exists():
+                    working_profile.mkdir(parents=True, exist_ok=True)
 
-                # Sync root level files
-                for item in self.profile_dir.iterdir():
-                    try:
-                        dest = working_profile / item.name
-                        if item.is_file():
-                            shutil.copy2(item, dest)
-                        elif item.is_dir() and item.name not in critical_dirs:
-                            if not dest.exists():
-                                shutil.copytree(item, dest, dirs_exist_ok=True)
-                    except Exception:
-                        pass  # Skip locked files
+                # Sync các file quan trọng (cookies, login data) mỗi lần chạy
+                critical_files = [
+                    "Cookies", "Login Data", "Web Data",
+                    "Network/Cookies", "Network/TransportSecurity"
+                ]
+                critical_dirs = ["Default", "Network"]
 
-                self._log(f"Da sync profile data tu profile goc")
+                if any(self.profile_dir.iterdir()):
+                    # Sync critical dirs first
+                    for dir_name in critical_dirs:
+                        src_dir = self.profile_dir / dir_name
+                        if src_dir.exists() and src_dir.is_dir():
+                            dest_dir = working_profile / dir_name
+                            dest_dir.mkdir(parents=True, exist_ok=True)
+                            for item in src_dir.iterdir():
+                                try:
+                                    dest = dest_dir / item.name
+                                    if item.is_file():
+                                        shutil.copy2(item, dest)
+                                except Exception:
+                                    pass  # Skip locked files
 
-            self._working_profile = str(working_profile)  # Luu de reference
-            options.add_argument(f"--user-data-dir={working_profile}")
+                    # Sync root level files
+                    for item in self.profile_dir.iterdir():
+                        try:
+                            dest = working_profile / item.name
+                            if item.is_file():
+                                shutil.copy2(item, dest)
+                            elif item.is_dir() and item.name not in critical_dirs:
+                                if not dest.exists():
+                                    shutil.copytree(item, dest, dirs_exist_ok=True)
+                        except Exception:
+                            pass  # Skip locked files
+
+                    self._log(f"Da sync profile data tu profile goc")
+
+                self._working_profile = str(working_profile)  # Luu de reference
+                options.add_argument(f"--user-data-dir={working_profile}")
 
             # PARALLEL SAFE: Moi instance dung port rieng
             debug_port = random.randint(9222, 9999)
