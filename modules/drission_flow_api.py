@@ -187,6 +187,14 @@ window._customVideoPayload=null; // Payload đầy đủ từ Python cho VIDEO (
                 try {
                     var cfg = window._modifyConfig;
 
+                    // LOG: Xem Chrome đang dùng model gì
+                    if (chromeBody.requests && chromeBody.requests[0]) {
+                        var req = chromeBody.requests[0];
+                        console.log('[CHROME MODEL] generationModelId:', req.generationModelId || 'NOT_SET');
+                        console.log('[CHROME MODEL] aspectRatio:', req.aspectRatio || 'NOT_SET');
+                        console.log('[CHROME MODEL] outputOptions:', JSON.stringify(req.outputOptions || {}));
+                    }
+
                     if (cfg.imageCount && chromeBody.requests) {
                         chromeBody.requests = chromeBody.requests.slice(0, cfg.imageCount);
                     }
