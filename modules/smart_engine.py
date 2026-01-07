@@ -3168,25 +3168,39 @@ class SmartEngine:
                 if row[id_col] is None:
                     continue
 
-                scene_id = str(row[id_col]).strip()
+                scene_id_raw = str(row[id_col]).strip()
 
-                # Chỉ lấy scenes có số (1, 2, 3...), bỏ qua nv1, loc1
-                if not scene_id.isdigit():
+                # Normalize scene_id: "1.0" -> "1", "2.0" -> "2"
+                # Cũng chấp nhận "1", "2", "3"...
+                try:
+                    # Try to convert to float then int to handle "1.0" -> 1
+                    scene_id_int = int(float(scene_id_raw))
+                    scene_id = str(scene_id_int)
+                except ValueError:
+                    # Không phải số (có thể là "nv1", "loc1") -> bỏ qua
                     continue
 
-                # Ưu tiên video clip (.mp4), fallback to image (.png)
-                video_path = img_dir / f"{scene_id}.mp4"
-                img_path = img_dir / f"{scene_id}.png"
+                # Tìm media file - thử cả 2 format: "1.png" và "1.0.png"
+                media_path = None
+                is_video = False
 
-                if video_path.exists():
-                    media_path = video_path
-                    is_video = True
-                    video_count += 1
-                elif img_path.exists():
-                    media_path = img_path
-                    is_video = False
-                    image_count += 1
-                else:
+                # Try với scene_id đã normalize (1, 2, 3...)
+                for sid in [scene_id, scene_id_raw]:
+                    video_path = img_dir / f"{sid}.mp4"
+                    img_path = img_dir / f"{sid}.png"
+
+                    if video_path.exists():
+                        media_path = video_path
+                        is_video = True
+                        video_count += 1
+                        break
+                    elif img_path.exists():
+                        media_path = img_path
+                        is_video = False
+                        image_count += 1
+                        break
+
+                if not media_path:
                     continue
 
                 # Parse start_time
