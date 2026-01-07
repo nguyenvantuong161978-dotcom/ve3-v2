@@ -42,9 +42,14 @@ def is_project_complete_on_master(code: str) -> bool:
     visual_dir = MASTER_VISUAL / code
     if not visual_dir.exists():
         return False
-    # Check if has images
-    img_files = list(visual_dir.glob("img/*.png")) + list(visual_dir.glob("img/*.mp4"))
-    return len(img_files) > 0
+
+    # Check if has ANY images (*.png, *.mp4, *.jpg)
+    img_dir = visual_dir / "img"
+    if img_dir.exists():
+        img_files = list(img_dir.glob("*.png")) + list(img_dir.glob("*.mp4")) + list(img_dir.glob("*.jpg"))
+        return len(img_files) > 0
+
+    return False
 
 
 def has_excel_with_prompts(project_dir: Path, name: str) -> bool:
@@ -120,18 +125,13 @@ def is_local_complete(project_dir: Path, name: str) -> bool:
     """Check if local project has images/videos created."""
     img_dir = project_dir / "img"
     if not img_dir.exists():
-        print(f"    [DEBUG] img folder not found: {img_dir}")
         return False
 
-    # Check for scene images/videos
-    img_files = list(img_dir.glob("scene_*.png")) + list(img_dir.glob("scene_*.mp4"))
-    print(f"    [DEBUG] Found {len(img_files)} scene files in img/")
+    # Check for ANY image/video files (*.png, *.mp4, *.jpg)
+    # Ảnh có thể tên: scene_1.png, 1.0.png, image_1.png, etc.
+    img_files = list(img_dir.glob("*.png")) + list(img_dir.glob("*.mp4")) + list(img_dir.glob("*.jpg"))
 
-    if len(img_files) == 0:
-        # List what's actually in img folder
-        all_files = list(img_dir.iterdir())
-        print(f"    [DEBUG] Actual files in img/: {[f.name for f in all_files[:10]]}")
-
+    # Cần ít nhất 1 file ảnh/video
     return len(img_files) > 0
 
 
