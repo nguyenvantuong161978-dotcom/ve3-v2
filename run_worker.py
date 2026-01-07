@@ -212,6 +212,38 @@ def scan_master_projects() -> list:
     return sorted(pending)
 
 
+def sync_local_to_visual() -> int:
+    """
+    Scan local PROJECTS và copy các project đã có ảnh sang VISUAL.
+    Chạy khi bắt đầu để sync các project đã hoàn thành trước đó.
+
+    Returns:
+        Số lượng projects đã copy
+    """
+    if not LOCAL_PROJECTS.exists():
+        return 0
+
+    copied = 0
+
+    for item in LOCAL_PROJECTS.iterdir():
+        if not item.is_dir():
+            continue
+
+        code = item.name
+
+        # Skip nếu đã có trong VISUAL
+        if is_project_complete_on_master(code):
+            continue
+
+        # Check local có ảnh không
+        if is_local_complete(item, code):
+            print(f"  📤 Found local project with images: {code}")
+            if copy_to_visual(code, item):
+                copied += 1
+
+    return copied
+
+
 def run_scan_loop():
     """Run continuous scan loop."""
     print(f"\n{'='*60}")
@@ -229,13 +261,26 @@ def run_scan_loop():
         print(f"   Make sure RDP is connected and D: drive is shared.")
         print(f"   Path: {MASTER_PROJECTS}")
 
+    # === SYNC: Copy local projects đã có ảnh sang VISUAL ===
+    print(f"\n[SYNC] Checking local projects to sync to VISUAL...")
+    synced = sync_local_to_visual()
+    if synced > 0:
+        print(f"  ✅ Synced {synced} projects to VISUAL")
+    else:
+        print(f"  No local projects to sync")
+
     cycle = 0
 
     while True:
         cycle += 1
-        print(f"\n[CYCLE {cycle}] Scanning master PROJECTS...")
+        print(f"\n[CYCLE {cycle}] Scanning...")
 
-        # Find pending projects
+        # === SYNC: Copy local projects đã có ảnh sang VISUAL ===
+        synced = sync_local_to_visual()
+        if synced > 0:
+            print(f"  📤 Synced {synced} local projects to VISUAL")
+
+        # Find pending projects from master
         pending = scan_master_projects()
 
         if not pending:
