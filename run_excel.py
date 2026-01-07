@@ -27,7 +27,10 @@ import sys
 import os
 import shutil
 import time
+import threading
 from pathlib import Path
+from queue import Queue, Empty
+from concurrent.futures import ThreadPoolExecutor
 
 # Add current directory to path
 TOOL_DIR = Path(__file__).parent
@@ -41,6 +44,14 @@ PROJECTS_DIR = TOOL_DIR / "PROJECTS"
 
 # Scan interval (seconds)
 SCAN_INTERVAL = 30
+
+# Thread-safe print lock
+_print_lock = threading.Lock()
+
+def safe_print(*args, **kwargs):
+    """Thread-safe print."""
+    with _print_lock:
+        print(*args, **kwargs)
 
 
 def is_project_complete(project_dir: Path, name: str) -> bool:
@@ -118,13 +129,12 @@ def delete_voice_source(voice_path: Path):
         print(f"  ⚠️ Cleanup warning: {e}")
 
 
-def process_voice_to_excel(voice_path: Path) -> bool:
-    """Process single voice file to Excel."""
+def process_voice_to_srt(voice_path: Path) -> bool:
+    """
+    Process voice file to SRT (Step 0 + Step 1 only).
+    Returns True if SRT exists/created successfully.
+    """
     name = voice_path.stem
-
-    print(f"\n{'='*60}")
-    print(f"Processing: {voice_path.name}")
-    print(f"{'='*60}")
 
     # Output directory = PROJECTS/{name}/
     output_dir = PROJECTS_DIR / name
@@ -133,57 +143,61 @@ def process_voice_to_excel(voice_path: Path) -> bool:
     # Paths
     voice_copy = output_dir / voice_path.name
     srt_path = output_dir / f"{name}.srt"
-    excel_path = output_dir / f"{name}_prompts.xlsx"
-
-    print(f"  Input:  {voice_path}")
-    print(f"  Output: {output_dir}")
-    print()
 
     # === STEP 0: Copy voice file and txt to project folder ===
     if not voice_copy.exists():
-        print(f"[STEP 0] Copying voice to project folder...")
+        safe_print(f"[SRT] {name}: Copying voice...")
         shutil.copy2(voice_path, voice_copy)
-        print(f"  ✅ Copied: {voice_copy.name}")
-    else:
-        print(f"[SKIP] Voice already in project: {voice_copy.name}")
 
     # Copy .txt file if exists (same name as voice)
     txt_src = voice_path.parent / f"{name}.txt"
     txt_dst = output_dir / f"{name}.txt"
     if txt_src.exists() and not txt_dst.exists():
         shutil.copy2(txt_src, txt_dst)
-        print(f"  ✅ Copied: {txt_dst.name}")
 
     # === STEP 1: Voice to SRT ===
     if srt_path.exists():
-        print(f"[SKIP] SRT already exists: {srt_path.name}")
-    else:
-        print("[STEP 1] Creating SRT from voice (Whisper)...")
-        try:
-            # Load whisper settings from config
-            import yaml
-            whisper_cfg = {}
-            cfg_file = TOOL_DIR / "config" / "settings.yaml"
-            if cfg_file.exists():
-                with open(cfg_file, "r", encoding="utf-8") as f:
-                    whisper_cfg = yaml.safe_load(f) or {}
+        return True  # Already done
 
-            whisper_model = whisper_cfg.get('whisper_model', 'medium')
-            whisper_lang = whisper_cfg.get('whisper_language', 'en')
+    safe_print(f"[SRT] {name}: Creating SRT (Whisper)...")
+    try:
+        # Load whisper settings from config
+        import yaml
+        whisper_cfg = {}
+        cfg_file = TOOL_DIR / "config" / "settings.yaml"
+        if cfg_file.exists():
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                whisper_cfg = yaml.safe_load(f) or {}
 
-            print(f"  Whisper model: {whisper_model}, language: {whisper_lang}")
+        whisper_model = whisper_cfg.get('whisper_model', 'medium')
+        whisper_lang = whisper_cfg.get('whisper_language', 'en')
 
-            from modules.voice_to_srt import VoiceToSrt
-            conv = VoiceToSrt(model_name=whisper_model, language=whisper_lang)
-            conv.transcribe(str(voice_copy), str(srt_path))
-            print(f"  ✅ SRT created: {srt_path.name}")
-        except Exception as e:
-            print(f"  ❌ Whisper error: {e}")
-            return False
+        from modules.voice_to_srt import VoiceToSrt
+        conv = VoiceToSrt(model_name=whisper_model, language=whisper_lang)
+        conv.transcribe(str(voice_copy), str(srt_path))
+        safe_print(f"[SRT] {name}: ✅ Done")
+        return True
+    except Exception as e:
+        safe_print(f"[SRT] {name}: ❌ Error - {e}")
+        return False
 
-    # === STEP 2: SRT to Excel (Prompts) ===
+
+def process_srt_to_excel(project_dir: Path, voice_source: Path = None) -> bool:
+    """
+    Process SRT to Excel (Step 2 only).
+    Requires SRT to exist already.
+    Returns True if Excel created successfully.
+    """
+    name = project_dir.name
+    srt_path = project_dir / f"{name}.srt"
+    excel_path = project_dir / f"{name}_prompts.xlsx"
+
+    # Must have SRT
+    if not srt_path.exists():
+        return False
+
+    # Check if Excel already complete
     if excel_path.exists():
-        # Check if Excel already has prompts
         try:
             from modules.excel_manager import PromptWorkbook
             wb = PromptWorkbook(str(excel_path))
@@ -192,21 +206,17 @@ def process_voice_to_excel(voice_path: Path) -> bool:
             scenes_with_prompts = stats.get('scenes_with_prompts', 0)
 
             if total_scenes > 0 and scenes_with_prompts >= total_scenes:
-                print(f"[SKIP] Excel already has prompts: {excel_path.name}")
-                print(f"       ({scenes_with_prompts}/{total_scenes} scenes)")
-                print(f"  ✅ Done! Project ready for worker.")
-                # Cleanup: delete source voice file
-                delete_voice_source(voice_path)
+                # Already complete - cleanup source
+                if voice_source:
+                    delete_voice_source(voice_source)
                 return True
             else:
-                print(f"  Excel exists but missing prompts ({scenes_with_prompts}/{total_scenes})")
-                # Delete incomplete Excel to regenerate
+                # Incomplete - delete and regenerate
                 excel_path.unlink()
-                print(f"  Deleted incomplete Excel, regenerating...")
         except Exception as e:
-            print(f"  Warning: {e}")
+            safe_print(f"[API] {name}: Warning - {e}")
 
-    print("[STEP 2] Creating prompts from SRT (AI API)...")
+    safe_print(f"[API] {name}: Creating prompts (AI API)...")
     try:
         # Load config
         import yaml
@@ -224,39 +234,44 @@ def process_voice_to_excel(voice_path: Path) -> bool:
         if deepseek_key:
             cfg['deepseek_api_keys'] = [deepseek_key]
         if not groq_keys and not gemini_keys and not deepseek_key:
-            print("  ❌ No API keys found in config/settings.yaml")
-            print("     Please add: deepseek_api_key, groq_api_keys, or gemini_api_keys")
+            safe_print(f"[API] {name}: ❌ No API keys configured")
             return False
 
         # Prefer DeepSeek for prompts
         cfg['preferred_provider'] = 'deepseek' if deepseek_key else ('groq' if groq_keys else 'gemini')
 
-        print(f"  Using AI: {cfg['preferred_provider']}")
-
         # Generate prompts
         from modules.prompts_generator import PromptGenerator
         gen = PromptGenerator(cfg)
 
-        # Generate for project (uses SRT in output_dir)
-        if gen.generate_for_project(output_dir, name):
-            print(f"  ✅ Excel created: {excel_path.name}")
+        if gen.generate_for_project(project_dir, name):
+            safe_print(f"[API] {name}: ✅ Excel created")
+            # Cleanup source voice file
+            if voice_source:
+                delete_voice_source(voice_source)
+            return True
         else:
-            print(f"  ❌ Failed to generate prompts")
+            safe_print(f"[API] {name}: ❌ Failed to generate prompts")
             return False
 
     except Exception as e:
-        print(f"  ❌ Error: {e}")
+        safe_print(f"[API] {name}: ❌ Error - {e}")
         import traceback
         traceback.print_exc()
         return False
 
-    print()
-    print(f"✅ Done! Project ready for worker: {output_dir}")
 
-    # Cleanup: delete source voice file
-    delete_voice_source(voice_path)
+def process_voice_to_excel(voice_path: Path) -> bool:
+    """Process single voice file to Excel (legacy sequential mode)."""
+    name = voice_path.stem
+    output_dir = PROJECTS_DIR / name
 
-    return True
+    # Step 1: Voice to SRT
+    if not process_voice_to_srt(voice_path):
+        return False
+
+    # Step 2: SRT to Excel
+    return process_srt_to_excel(output_dir, voice_path)
 
 
 def scan_voice_folder(voice_dir: Path) -> list:
@@ -327,75 +342,173 @@ def scan_incomplete_projects() -> list:
     return sorted(incomplete, key=lambda x: x.stem)
 
 
+def get_pending_srt(voice_dir: Path) -> list:
+    """Get voice files that need SRT generation."""
+    pending = []
+
+    # From voice folder
+    voice_files = scan_voice_folder(voice_dir)
+    for voice_path in voice_files:
+        name = voice_path.stem
+        project_dir = PROJECTS_DIR / name
+        srt_path = project_dir / f"{name}.srt"
+        if not srt_path.exists():
+            pending.append(voice_path)
+
+    # From PROJECTS folder (incomplete)
+    for project_dir in PROJECTS_DIR.iterdir():
+        if not project_dir.is_dir():
+            continue
+        name = project_dir.name
+        srt_path = project_dir / f"{name}.srt"
+        if srt_path.exists():
+            continue
+        # Find voice file in project
+        voice_extensions = {'.mp3', '.wav', '.m4a', '.flac', '.ogg'}
+        for f in project_dir.iterdir():
+            if f.is_file() and f.suffix.lower() in voice_extensions:
+                pending.append(f)
+                break
+
+    # Deduplicate by name
+    seen = set()
+    result = []
+    for v in pending:
+        if v.stem not in seen:
+            result.append(v)
+            seen.add(v.stem)
+    return result
+
+
+def get_pending_api() -> list:
+    """Get projects that have SRT but need Excel."""
+    pending = []
+
+    if not PROJECTS_DIR.exists():
+        return pending
+
+    for project_dir in PROJECTS_DIR.iterdir():
+        if not project_dir.is_dir():
+            continue
+        name = project_dir.name
+        srt_path = project_dir / f"{name}.srt"
+        excel_path = project_dir / f"{name}_prompts.xlsx"
+
+        # Must have SRT
+        if not srt_path.exists():
+            continue
+
+        # Check if Excel complete
+        if is_project_complete(project_dir, name):
+            continue
+
+        pending.append(project_dir)
+
+    return pending
+
+
+def srt_worker(voice_dir: Path, stop_event: threading.Event):
+    """Worker thread for SRT generation (runs continuously)."""
+    safe_print("[SRT Worker] Started")
+
+    while not stop_event.is_set():
+        try:
+            pending = get_pending_srt(voice_dir)
+
+            if pending:
+                safe_print(f"[SRT Worker] Found {len(pending)} voices needing SRT")
+                for voice_path in pending:
+                    if stop_event.is_set():
+                        break
+                    process_voice_to_srt(voice_path)
+
+            # Short sleep between checks
+            stop_event.wait(5)
+        except Exception as e:
+            safe_print(f"[SRT Worker] Error: {e}")
+            stop_event.wait(10)
+
+    safe_print("[SRT Worker] Stopped")
+
+
+def api_worker(voice_dir: Path, stop_event: threading.Event):
+    """Worker thread for API/Excel generation (runs continuously)."""
+    safe_print("[API Worker] Started")
+
+    # Build voice source mapping for cleanup
+    def get_voice_source(name: str) -> Path:
+        """Find original voice file for a project."""
+        # Check voice folder
+        for subdir in voice_dir.iterdir():
+            if subdir.is_dir():
+                for ext in ['.mp3', '.wav', '.m4a', '.flac', '.ogg']:
+                    voice_path = subdir / f"{name}{ext}"
+                    if voice_path.exists():
+                        return voice_path
+        return None
+
+    while not stop_event.is_set():
+        try:
+            pending = get_pending_api()
+
+            if pending:
+                safe_print(f"[API Worker] Found {len(pending)} projects needing Excel")
+                for project_dir in pending:
+                    if stop_event.is_set():
+                        break
+                    voice_source = get_voice_source(project_dir.name)
+                    process_srt_to_excel(project_dir, voice_source)
+
+            # Short sleep between checks
+            stop_event.wait(5)
+        except Exception as e:
+            safe_print(f"[API Worker] Error: {e}")
+            stop_event.wait(10)
+
+    safe_print("[API Worker] Stopped")
+
+
 def run_scan_loop(voice_dir: Path):
-    """Run continuous scan loop."""
+    """Run parallel processing with SRT and API workers."""
     print(f"\n{'='*60}")
-    print(f"  VE3 TOOL - VOICE TO EXCEL (MASTER MODE)")
+    print(f"  VE3 TOOL - VOICE TO EXCEL (PARALLEL MODE)")
     print(f"{'='*60}")
     print(f"  Input:  {voice_dir}")
     print(f"  Output: {PROJECTS_DIR}")
-    print(f"  Scan interval: {SCAN_INTERVAL}s")
+    print(f"  Mode:   SRT + API workers running in parallel")
     print(f"{'='*60}")
 
+    stop_event = threading.Event()
+
+    # Start worker threads
+    srt_thread = threading.Thread(target=srt_worker, args=(voice_dir, stop_event), daemon=True)
+    api_thread = threading.Thread(target=api_worker, args=(voice_dir, stop_event), daemon=True)
+
+    srt_thread.start()
+    api_thread.start()
+
+    # Status monitor loop
     cycle = 0
-
-    while True:
-        cycle += 1
-        print(f"\n[CYCLE {cycle}] Scanning...")
-
-        # 1. Find voice files in voice folder
-        voice_files = scan_voice_folder(voice_dir)
-        pending_from_voice = get_pending_files(voice_files) if voice_files else []
-
-        # 2. Find incomplete projects in PROJECTS folder
-        incomplete_projects = scan_incomplete_projects()
-
-        # Combine and deduplicate (by project name)
-        all_pending = []
-        seen_names = set()
-
-        for voice_path in pending_from_voice:
-            name = voice_path.stem
-            if name not in seen_names:
-                all_pending.append(voice_path)
-                seen_names.add(name)
-
-        for voice_path in incomplete_projects:
-            name = voice_path.stem
-            if name not in seen_names:
-                all_pending.append(voice_path)
-                seen_names.add(name)
-
-        print(f"  Voice folder: {len(voice_files)} files, {len(pending_from_voice)} pending")
-        print(f"  PROJECTS folder: {len(incomplete_projects)} incomplete")
-        print(f"  Total pending: {len(all_pending)}")
-
-        if all_pending:
-            # Process pending files
-            success = 0
-            failed = 0
-
-            for voice_path in all_pending:
-                try:
-                    if process_voice_to_excel(voice_path):
-                        success += 1
-                    else:
-                        failed += 1
-                except Exception as e:
-                    print(f"  ❌ Error processing {voice_path.name}: {e}")
-                    failed += 1
-
-            print(f"\n[CYCLE {cycle} DONE] {success} success, {failed} failed")
-        else:
-            print(f"  All projects complete!")
-
-        # Wait before next scan
-        print(f"\n  Waiting {SCAN_INTERVAL}s before next scan... (Ctrl+C to stop)")
-        try:
+    try:
+        while True:
+            cycle += 1
             time.sleep(SCAN_INTERVAL)
-        except KeyboardInterrupt:
-            print("\n\nStopped by user.")
-            break
+
+            # Print status
+            pending_srt = get_pending_srt(voice_dir)
+            pending_api = get_pending_api()
+
+            safe_print(f"\n[STATUS {cycle}] SRT pending: {len(pending_srt)}, API pending: {len(pending_api)}")
+
+            if not pending_srt and not pending_api:
+                safe_print("  All projects complete!")
+
+    except KeyboardInterrupt:
+        safe_print("\n\nStopping workers...")
+        stop_event.set()
+        srt_thread.join(timeout=5)
+        api_thread.join(timeout=5)
+        safe_print("Stopped.")
 
 
 def main():
