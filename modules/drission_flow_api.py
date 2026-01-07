@@ -3050,9 +3050,9 @@ class DrissionFlowAPI:
         # 1. Chuyển sang T2V mode ("Từ văn bản sang video")
         self.log("[T2V→I2V] Chuyển sang mode 'Từ văn bản sang video'...")
         self.driver.run_js(JS_SELECT_T2V_MODE_STEP1)  # Click dropdown lần 1
-        time.sleep(0.1)
+        time.sleep(0.2)
         self.driver.run_js(JS_SELECT_T2V_MODE_STEP2)  # Click dropdown lần 2
-        time.sleep(0.3)
+        time.sleep(0.5)  # Tăng delay để dropdown mở hoàn toàn
         result = self.driver.run_js(JS_SELECT_T2V_MODE_STEP3)  # Click option
         if result == 'CLICKED':
             self.log("[T2V→I2V] ✓ Đã chuyển sang T2V mode")
