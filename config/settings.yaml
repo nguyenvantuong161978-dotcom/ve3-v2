@@ -10,8 +10,8 @@ project_root: "./VE3_TOOL"
 # Chrome này đã đăng nhập Google sẵn, không cần tạo profile mới
 
 # Đường dẫn đến Chrome portable (đã đăng nhập Google)
-# Ví dụ: C:\Users\phuonghoa\Documents\KP\KP.exe
-chrome_portable: "C:\\Users\\phuonghoa\\Documents\\KP\\KP.exe"
+# %USERNAME% sẽ tự động thay bằng tên user của máy
+chrome_portable: "C:\\Users\\%USERNAME%\\Documents\\KP\\KP.exe"
 
 # [KHÔNG CẦN SỬA] - Chỉ dùng khi chrome_portable trống
 chrome_path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
