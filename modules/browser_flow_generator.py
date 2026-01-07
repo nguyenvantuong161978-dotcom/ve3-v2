@@ -3386,6 +3386,8 @@ class BrowserFlowGenerator:
         for setup_attempt in range(MAX_SETUP_RETRIES):
             if drission_api.setup(project_url=saved_project_url):
                 setup_success = True
+                # Reset về model Pro khi bắt đầu project mới
+                drission_api.reset_to_pro_model()
 
                 # === LƯU PROJECT URL VÀO EXCEL NGAY SAU KHI SETUP ===
                 # Đảm bảo 1 voice = 1 project link (không bị mất nếu fail giữa chừng)

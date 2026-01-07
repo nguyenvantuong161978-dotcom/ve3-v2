@@ -867,6 +867,9 @@ class DrissionFlowAPI:
         # State
         self._ready = False
 
+        # Model fallback: khi quota exceeded (429), chuyển từ GEM_PIX_2 (Pro) sang GEM_PIX
+        self._use_fallback_model = False  # True = dùng nano banana (GEM_PIX) thay vì pro (GEM_PIX_2)
+
     def log(self, msg: str, level: str = "INFO"):
         """Log message - chỉ dùng 1 trong 2: callback hoặc print."""
         if self.log_callback:
@@ -876,6 +879,22 @@ class DrissionFlowAPI:
             # Fallback: print trực tiếp nếu không có callback
             timestamp = datetime.now().strftime("%H:%M:%S")
             print(f"[{timestamp}] [{level}] {msg}")
+
+    def reset_to_pro_model(self):
+        """Reset về model pro (GEM_PIX_2) - gọi khi bắt đầu project mới."""
+        if self._use_fallback_model:
+            self._use_fallback_model = False
+            self.log("[MODEL] ↩️ Reset về Nano Banana Pro (GEM_PIX_2)")
+
+    def switch_to_fallback_model(self):
+        """Chuyển sang model fallback (GEM_PIX) khi quota exceeded."""
+        if not self._use_fallback_model:
+            self._use_fallback_model = True
+            self.log("[MODEL] 🔄 Chuyển sang Nano Banana (GEM_PIX) do quota exceeded")
+
+    def get_current_model(self) -> str:
+        """Trả về model đang dùng."""
+        return "GEM_PIX" if self._use_fallback_model else "GEM_PIX_2"
 
     def _auto_setup_project(self, timeout: int = 60) -> bool:
         """
@@ -2062,9 +2081,21 @@ class DrissionFlowAPI:
                 last_error = error
 
                 # === ERROR 253/429: Quota exceeded ===
-                # Close Chrome, đổi session/proxy, mở lại
+                # Thử chuyển sang model fallback (nano banana) trước khi close Chrome
                 if "253" in error or "429" in error or "quota" in error.lower() or "exceeds" in error.lower():
-                    self.log(f"⚠️ QUOTA EXCEEDED - Đổi session và restart...", "WARN")
+
+                    # === BƯỚC 1: Thử chuyển sang nano banana (không close Chrome) ===
+                    if not self._use_fallback_model:
+                        self.switch_to_fallback_model()
+                        self.log(f"  → Retry với model Nano Banana (không cần restart)...", "WARN")
+                        # Override force_model cho lần retry này
+                        force_model = "GEM_PIX"
+                        if attempt < max_retries - 1:
+                            time.sleep(2)  # Đợi ngắn trước khi retry
+                            continue  # Retry ngay với model mới
+
+                    # === BƯỚC 2: Đã dùng fallback rồi mà vẫn quota → close Chrome ===
+                    self.log(f"⚠️ QUOTA EXCEEDED (cả 2 model) - Đổi session và restart...", "WARN")
 
                     # Close Chrome của tool (không kill tất cả Chrome)
                     self._kill_chrome()
