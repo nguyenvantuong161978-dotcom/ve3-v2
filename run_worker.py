@@ -107,6 +107,28 @@ def has_excel_with_prompts(project_dir: Path, name: str) -> bool:
         return False
 
 
+def delete_master_source(code: str):
+    """Delete project from master PROJECTS after copying to local."""
+    try:
+        src = MASTER_PROJECTS / code
+        if src.exists():
+            shutil.rmtree(src)
+            print(f"  🗑️ Deleted from master PROJECTS: {code}")
+    except Exception as e:
+        print(f"  ⚠️ Cleanup master warning: {e}")
+
+
+def delete_local_project(code: str):
+    """Delete local project after copying to VISUAL."""
+    try:
+        local_dir = LOCAL_PROJECTS / code
+        if local_dir.exists():
+            shutil.rmtree(local_dir)
+            print(f"  🗑️ Deleted local project: {code}")
+    except Exception as e:
+        print(f"  ⚠️ Cleanup local warning: {e}")
+
+
 def copy_from_master(code: str) -> Path:
     """Copy project from master to local."""
     src = MASTER_PROJECTS / code
@@ -124,6 +146,8 @@ def copy_from_master(code: str) -> Path:
         print(f"  📥 Copying from master: {code}")
         shutil.copytree(src, dst)
         print(f"  ✅ Copied to: {dst}")
+        # Cleanup: delete from master after successful copy
+        delete_master_source(code)
     else:
         # Check if Excel updated on master
         excel_src = src / f"{code}_prompts.xlsx"
@@ -152,6 +176,10 @@ def copy_to_visual(code: str, local_dir: Path) -> bool:
         # Copy entire project folder
         shutil.copytree(local_dir, dst)
         print(f"  ✅ Copied to: {dst}")
+
+        # Cleanup: delete local project after successful copy
+        delete_local_project(code)
+
         return True
     except Exception as e:
         print(f"  ❌ Copy failed: {e}")

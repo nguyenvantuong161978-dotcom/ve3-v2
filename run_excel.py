@@ -63,6 +63,34 @@ def is_project_complete(project_dir: Path, name: str) -> bool:
         return False
 
 
+def delete_voice_source(voice_path: Path):
+    """Delete original voice file and its txt after processing."""
+    try:
+        name = voice_path.stem
+        voice_dir = voice_path.parent
+
+        # Delete voice file
+        if voice_path.exists():
+            voice_path.unlink()
+            print(f"  🗑️ Deleted source: {voice_path.name}")
+
+        # Delete associated txt file
+        txt_path = voice_dir / f"{name}.txt"
+        if txt_path.exists():
+            txt_path.unlink()
+            print(f"  🗑️ Deleted source: {txt_path.name}")
+
+        # Delete parent folder if empty
+        if voice_dir.exists():
+            remaining = list(voice_dir.iterdir())
+            if not remaining:
+                voice_dir.rmdir()
+                print(f"  🗑️ Deleted empty folder: {voice_dir.name}")
+
+    except Exception as e:
+        print(f"  ⚠️ Cleanup warning: {e}")
+
+
 def process_voice_to_excel(voice_path: Path) -> bool:
     """Process single voice file to Excel."""
     name = voice_path.stem
@@ -140,6 +168,8 @@ def process_voice_to_excel(voice_path: Path) -> bool:
                 print(f"[SKIP] Excel already has prompts: {excel_path.name}")
                 print(f"       ({scenes_with_prompts}/{total_scenes} scenes)")
                 print(f"  ✅ Done! Project ready for worker.")
+                # Cleanup: delete source voice file
+                delete_voice_source(voice_path)
                 return True
             else:
                 print(f"  Excel exists but missing prompts ({scenes_with_prompts}/{total_scenes})")
@@ -195,6 +225,10 @@ def process_voice_to_excel(voice_path: Path) -> bool:
 
     print()
     print(f"✅ Done! Project ready for worker: {output_dir}")
+
+    # Cleanup: delete source voice file
+    delete_voice_source(voice_path)
+
     return True
 
 
