@@ -2081,71 +2081,24 @@ class DrissionFlowAPI:
                 last_error = error
 
                 # === ERROR 253/429: Quota exceeded ===
-                # Thử chuyển sang model fallback (nano banana) trước khi close Chrome
+                # Chuyển sang nano banana và tiếp tục (quota sẽ hết sau 1 lúc)
                 if "253" in error or "429" in error or "quota" in error.lower() or "exceeds" in error.lower():
 
-                    # === BƯỚC 1: Thử chuyển sang nano banana (không close Chrome) ===
+                    # Luôn chuyển sang nano banana khi gặp quota (nếu chưa)
                     if not self._use_fallback_model:
                         self.switch_to_fallback_model()
-                        self.log(f"  → Retry với model Nano Banana (không cần restart)...", "WARN")
-                        # Override force_model cho lần retry này
-                        force_model = "GEM_PIX"
-                        if attempt < max_retries - 1:
-                            time.sleep(2)  # Đợi ngắn trước khi retry
-                            continue  # Retry ngay với model mới
+                        force_model = "GEM_PIX"  # Override cho các lần retry sau
 
-                    # === BƯỚC 2: Đã dùng fallback rồi mà vẫn quota → close Chrome ===
-                    self.log(f"⚠️ QUOTA EXCEEDED (cả 2 model) - Đổi session và restart...", "WARN")
-
-                    # Close Chrome của tool (không kill tất cả Chrome)
-                    self._kill_chrome()
-                    self.close()
-
-                    # Rotating mode: Restart Chrome với IP mới
-                    if hasattr(self, '_is_rotating_mode') and self._is_rotating_mode:
-                        if hasattr(self, '_is_random_ip_mode') and self._is_random_ip_mode:
-                            # Random IP mode: Chỉ cần restart Chrome, Webshare tự đổi IP
-                            self.log(f"  → 🎲 Random IP: Restart Chrome để lấy IP mới...")
-                        else:
-                            # Sticky Session mode: Tăng session ID
-                            self._rotating_session_id += 1
-                            # Wrap around nếu hết dải
-                            if self._rotating_session_id > self._session_range_end:
-                                self._rotating_session_id = self._session_range_start
-                                self.log(f"  → ♻️ Hết dải, quay lại session {self._rotating_session_id}")
-                            else:
-                                self.log(f"  → Sticky: Đổi sang session {self._rotating_session_id}")
-                            # Lưu session ID để tiếp tục lần sau
-                            _save_last_session_id(self._machine_id, self.worker_id, self._rotating_session_id)
-
-                        if attempt < max_retries - 1:
-                            time.sleep(3)
-                            if self.setup(project_url=getattr(self, '_current_project_url', None)):
-                                continue
-                        return False, [], f"Quota exceeded sau {max_retries} lần thử"
-
-                    # Direct mode: Rotate proxy
-                    if self._use_webshare and self._webshare_proxy:
-                        success, msg = self._webshare_proxy.rotate_ip(self.worker_id, "253 Quota")
-                        self.log(f"  → Webshare rotate [Worker {self.worker_id}]: {msg}", "WARN")
-
-                        if success and attempt < max_retries - 1:
-                            # Mở Chrome mới với proxy mới
-                            self.log("  → Mở Chrome mới với proxy mới...")
-                            time.sleep(3)  # Đợi proxy ổn định
-                            if self.setup(project_url=getattr(self, '_current_project_url', None)):
-                                continue
-                            else:
-                                return False, [], "Không setup được Chrome mới sau khi đổi proxy"
-
-                    # Không có proxy hoặc rotate thất bại
+                    # Retry với nano banana (đợi ngắn, không close Chrome)
+                    self.log(f"⚠️ 429 Quota - Dùng Nano Banana, đợi 5s rồi retry...", "WARN")
                     if attempt < max_retries - 1:
-                        self.log(f"  → Đợi 30s rồi thử lại với Chrome mới...", "WARN")
-                        time.sleep(30)
-                        if self.setup(project_url=getattr(self, '_current_project_url', None)):
-                            continue
+                        time.sleep(5)
+                        continue
 
-                    return False, [], f"Quota exceeded sau {max_retries} lần thử. Hãy đổi proxy hoặc tài khoản."
+                    # Hết retry trong hàm này, nhưng KHÔNG return False
+                    # Để caller có thể retry tiếp với scene tiếp theo
+                    self.log(f"⚠️ 429 sau {max_retries} lần, tiếp tục scene tiếp...", "WARN")
+                    return False, [], f"429 quota - tiếp tục với scene tiếp theo"
 
                 # Nếu lỗi 500 (Internal Error), retry với delay
                 if "500" in error:
