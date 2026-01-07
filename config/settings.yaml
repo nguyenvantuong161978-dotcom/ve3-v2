@@ -74,8 +74,7 @@ webshare_proxy:
 # Số ảnh chuyển thành video (0 = tắt, "full" = tất cả)
 # VD: 10 = chỉ 10 ảnh đầu tiên sẽ được chuyển thành video
 # Nếu đã có đủ số video trong img/, sẽ tự động skip
-# NOTE: Tạm tắt video generation (đang fix bug)
-video_count: 0
+video_count: "full"
 
 # Video aspect ratio: "landscape" (16:9), "portrait" (9:16), "square" (1:1)
 video_aspect_ratio: "landscape"
@@ -85,6 +84,14 @@ video_model: "fast"
 
 # User paygate tier: "TIER_ONE" hoặc "TIER_TWO"
 video_paygate_tier: "PAYGATE_TIER_TWO"
+
+# Video generation mode: "t2v" hoặc "i2v"
+# - t2v: Pure Text-to-Video - Gửi prompt trực tiếp, Chrome tạo video từ text
+#        Sử dụng mode "Từ văn bản sang video" trên Flow
+# - i2v: Image-to-Video - Tạo video từ ảnh đã gen (cần media_id)
+#        Sử dụng mode "Tạo video từ các thành phần" trên Flow
+# Mặc định: t2v (Text-to-Video vì đơn giản hơn, không cần ảnh)
+video_generation_mode: "t2v"
 
 # ============================================================================
 # PROXY API Configuration (Bypass Captcha qua nanoai.pics)

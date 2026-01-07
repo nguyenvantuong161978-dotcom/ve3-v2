@@ -3195,6 +3195,156 @@ class DrissionFlowAPI:
             self.log(f"[Mode] Error: {e}", "ERROR")
             return False
 
+    def generate_video_pure_t2v(
+        self,
+        prompt: str,
+        save_path: Optional[Path] = None,
+        max_wait: int = 300,
+        timeout: int = 60
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
+        """
+        Tạo video bằng PURE TEXT-TO-VIDEO mode - KHÔNG cần ảnh.
+
+        Flow (giống như tạo ảnh, nhưng ở mode T2V):
+        1. Chuyển sang mode "Từ văn bản sang video" (T2V)
+        2. KHÔNG set _t2vToI2vConfig → Chrome gửi T2V request thuần
+        3. Type prompt vào textarea
+        4. Click Tạo → Chrome gửi batchAsyncGenerateVideoText
+        5. Interceptor capture response (không convert)
+        6. Poll và download video
+
+        Args:
+            prompt: Video prompt (mô tả video muốn tạo)
+            save_path: Đường dẫn lưu video
+            max_wait: Thời gian poll tối đa (giây)
+            timeout: Timeout đợi response đầu tiên
+
+        Returns:
+            Tuple[success, video_path_or_url, error]
+        """
+        if not self._ready:
+            return False, None, "API chưa setup! Gọi setup() trước."
+
+        self.log(f"[T2V-PURE] Tạo video từ text prompt...")
+        self.log(f"[T2V-PURE] Prompt: {prompt[:80]}...")
+
+        # 1. Chuyển sang T2V mode ("Từ văn bản sang video")
+        self.log("[T2V-PURE] Chuyển sang mode 'Từ văn bản sang video'...")
+        self.driver.run_js(JS_SELECT_T2V_MODE_STEP1)  # Click dropdown lần 1
+        time.sleep(0.1)
+        self.driver.run_js(JS_SELECT_T2V_MODE_STEP2)  # Click dropdown lần 2
+        time.sleep(0.3)
+        result = self.driver.run_js(JS_SELECT_T2V_MODE_STEP3)  # Click option
+        if result == 'CLICKED':
+            self.log("[T2V-PURE] ✓ Đã chuyển sang T2V mode")
+            time.sleep(1)  # Đợi UI update
+        else:
+            self.log(f"[T2V-PURE] ⚠️ Không thể chuyển sang T2V mode: {result}", "WARN")
+            # Vẫn tiếp tục vì có thể đã ở T2V mode
+
+        # 2. Reset video state - KHÔNG set _t2vToI2vConfig để giữ T2V thuần
+        self.driver.run_js("""
+            window._videoResponse = null;
+            window._videoError = null;
+            window._videoPending = false;
+            window._t2vToI2vConfig = null;
+            window._modifyVideoConfig = null;
+            window._customVideoPayload = null;
+            window._forceVideoPayload = null;
+        """)
+        self.log("[T2V-PURE] ✓ Pure T2V mode (không convert sang I2V)")
+
+        # 3. Tìm textarea và nhập prompt
+        textarea = self._find_textarea()
+        if not textarea:
+            return False, None, "Không tìm thấy textarea"
+
+        try:
+            textarea.click()
+            time.sleep(0.3)
+        except:
+            pass
+
+        # Type prompt
+        try:
+            textarea.clear()
+            textarea.input(prompt[:500])
+            time.sleep(0.3)
+        except Exception as e:
+            self.log(f"[T2V-PURE] Không thể nhập prompt: {e}", "WARN")
+
+        # 4. Click nút Tạo (trigger Chrome gửi T2V request thuần)
+        self.log("[T2V-PURE] Click 'Tạo' → Chrome gửi batchAsyncGenerateVideoText...")
+        clicked = self._click_generate_button()
+        if not clicked:
+            return False, None, "Không click được nút Tạo"
+
+        # 5. Đợi VIDEO response (T2V thuần)
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            # Check video response
+            response = self.driver.run_js("return window._videoResponse;")
+            error = self.driver.run_js("return window._videoError;")
+
+            if error:
+                self.log(f"[T2V-PURE] ✗ Error: {error}", "ERROR")
+                return False, None, error
+
+            if response:
+                self.log(f"[T2V-PURE] Got response!")
+
+                # Check error response
+                if isinstance(response, dict):
+                    if response.get('error') and response.get('error').get('code'):
+                        error_code = response['error']['code']
+                        error_msg = response['error'].get('message', '')
+                        self.log(f"[T2V-PURE] ✗ API Error {error_code}: {error_msg}", "ERROR")
+                        return False, None, f"Error {error_code}: {error_msg}"
+
+                    # Check for operations (async video generation)
+                    if response.get('operations'):
+                        operation = response['operations'][0]
+                        self.log(f"[T2V-PURE] ✓ Video operation started")
+
+                        # Build headers cho polling
+                        headers = {
+                            "Authorization": self.bearer_token,
+                            "Content-Type": "application/json",
+                            "Origin": "https://labs.google",
+                            "Referer": "https://labs.google/",
+                        }
+                        if self.x_browser_validation:
+                            headers["x-browser-validation"] = self.x_browser_validation
+
+                        proxies = None
+                        if self._use_webshare and hasattr(self, '_bridge_port') and self._bridge_port:
+                            bridge_url = f"http://127.0.0.1:{self._bridge_port}"
+                            proxies = {"http": bridge_url, "https": bridge_url}
+
+                        # Poll cho video hoàn thành
+                        video_url = self._poll_video_operation(operation, headers, proxies, max_wait)
+
+                        if video_url:
+                            self.log(f"[T2V-PURE] ✓ Video ready: {video_url[:60]}...")
+                            return self._download_video_if_needed(video_url, save_path)
+                        else:
+                            return False, None, "Timeout hoặc lỗi khi poll video"
+
+                    # Check for direct video URL
+                    if response.get('videos'):
+                        video = response['videos'][0]
+                        video_url = video.get('videoUri') or video.get('uri')
+                        if video_url:
+                            self.log(f"[T2V-PURE] ✓ Video ready: {video_url[:60]}...")
+                            return self._download_video_if_needed(video_url, save_path)
+
+                return False, None, "Response không có operations/videos"
+
+            time.sleep(0.5)
+
+        self.log("[T2V-PURE] ✗ Timeout đợi video response", "ERROR")
+        return False, None, "Timeout waiting for video response"
+
     def generate_video_modify_mode(
         self,
         media_id: str,
