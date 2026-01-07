@@ -335,9 +335,10 @@ def sync_local_to_visual() -> int:
         if not matches_channel(code):
             continue  # Silent skip - not our channel
 
-        # Skip nếu đã có trong VISUAL
+        # Nếu đã có trong VISUAL thì xóa local (cleanup)
         if is_project_complete_on_master(code):
-            print(f"    - {code}: already in VISUAL ✓")
+            print(f"    - {code}: already in VISUAL, cleaning up local...")
+            delete_local_project(code)
             continue
 
         # Check local có ảnh không
