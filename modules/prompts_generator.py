@@ -2359,7 +2359,8 @@ Trả về JSON:"""
         self.logger.info("[Director's Shooting Plan] Đạo diễn đang lên kế hoạch quay...")
         self.logger.info("=" * 50)
 
-        response = self._generate_content_large(prompt, temperature=0.4, max_tokens=8192)
+        # Temperature 0.5 để AI đa dạng hơn với planned_duration (không uniform 5s)
+        response = self._generate_content_large(prompt, temperature=0.5, max_tokens=8192)
 
         self.logger.info(f"[Director's Shooting Plan] Response length: {len(response) if response else 0}")
         if response:
@@ -2566,7 +2567,8 @@ Estimated Shots: {part_info.get('estimated_shots', 5)}
                     import time
                     time.sleep(2)
 
-                response = self._generate_content_large(pass2_prompt, temperature=0.4, max_tokens=8000)
+                # Temperature 0.5 để planned_duration đa dạng hơn
+                response = self._generate_content_large(pass2_prompt, temperature=0.5, max_tokens=8000)
 
                 if response:
                     json_data = self._extract_json(response)
