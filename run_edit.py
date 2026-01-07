@@ -235,7 +235,7 @@ def compose_video(project_info: Dict, callback=None) -> Tuple[bool, Optional[Pat
 
         # Create engine instance
         engine = SmartEngine()
-        engine.callback = lambda msg, lvl: plog(msg, lvl)
+        engine.callback = lambda msg: plog(msg)  # SmartEngine callback chỉ gửi 1 arg
 
         # Call compose method
         output_path = engine._compose_video(project_dir, excel_path, code)
