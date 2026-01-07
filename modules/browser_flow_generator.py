@@ -3123,6 +3123,15 @@ class BrowserFlowGenerator:
                     video_success += 1
                     self.stats["success"] += 1
 
+                    # Xóa ảnh sau khi tạo video thành công
+                    image_file = output_dir / f"{scene_id}.png"
+                    if image_file.exists():
+                        try:
+                            image_file.unlink()
+                            self._log(f"   🗑️ Deleted image: {image_file.name}")
+                        except Exception as e:
+                            self._log(f"   ⚠️ Cannot delete image: {e}", "warn")
+
                     # Update Excel
                     workbook.update_scene(int(scene_id), video_path=video_file.name, status_vid='done')
                     workbook.save()
@@ -4157,6 +4166,15 @@ class BrowserFlowGenerator:
                         if success:
                             self._log(f"   ✓ OK: {video_file.name}")
                             video_success += 1
+
+                            # Xóa ảnh sau khi tạo video thành công (tiết kiệm dung lượng)
+                            image_file = video_dir / f"{scene_id}.png"
+                            if image_file.exists():
+                                try:
+                                    image_file.unlink()
+                                    self._log(f"   🗑️ Deleted image: {image_file.name}")
+                                except Exception as e:
+                                    self._log(f"   ⚠️ Cannot delete image: {e}", "warn")
 
                             # Update Excel
                             if workbook:
