@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 VE3 Tool - Worker Mode (Image/Video Generation)
-Chạy trên máy ảo, copy dữ liệu từ máy chủ qua RDP.
+Chạy trên máy ảo, copy dữ liệu từ máy chủ qua RDP/VMware.
 
 Workflow:
-    1. Copy project từ \\tsclient\D\AUTO\ve3-tool-simple\PROJECTS\{code}
+    1. Copy project từ MASTER\AUTO\ve3-tool-simple\PROJECTS\{code}
     2. Tạo ảnh (characters + scenes)
     3. Tạo video từ ảnh (VEO3)
     4. KHÔNG edit ra MP4 (máy chủ sẽ làm)
-    5. Copy kết quả về \\tsclient\D\AUTO\VISUAL\{code}
+    5. Copy kết quả về MASTER\AUTO\VISUAL\{code}
 
 Usage:
     python run_worker.py                     (quét và xử lý tự động)
@@ -25,10 +25,44 @@ from pathlib import Path
 TOOL_DIR = Path(__file__).parent
 sys.path.insert(0, str(TOOL_DIR))
 
-# === NETWORK PATHS (qua RDP tsclient) ===
-# Máy chủ share qua RDP: \\tsclient\D\...
-MASTER_PROJECTS = Path(r"\\tsclient\D\AUTO\ve3-tool-simple\PROJECTS")
-MASTER_VISUAL = Path(r"\\tsclient\D\AUTO\VISUAL")
+# === AUTO-DETECT NETWORK PATH ===
+# Các đường dẫn có thể có đến \AUTO (tùy máy chủ)
+POSSIBLE_AUTO_PATHS = [
+    r"\\tsclient\D\AUTO",                          # RDP từ Windows
+    r"\\tsclient\C\AUTO",                          # RDP từ Windows (ổ C)
+    r"\\vmware-host\Shared Folders\D\AUTO",        # VMware Workstation
+    r"\\vmware-host\Shared Folders\AUTO",          # VMware Workstation (direct)
+    r"\\VBOXSVR\AUTO",                             # VirtualBox
+    r"Z:\AUTO",                                    # Mapped drive
+    r"Y:\AUTO",                                    # Mapped drive
+    r"D:\AUTO",                                    # Direct access (same machine)
+]
+
+def detect_auto_path() -> Path:
+    """
+    Auto-detect đường dẫn đến thư mục \AUTO trên máy chủ.
+    Thử các đường dẫn có thể và trả về cái đầu tiên hoạt động.
+    """
+    for path_str in POSSIBLE_AUTO_PATHS:
+        try:
+            path = Path(path_str)
+            if path.exists():
+                print(f"  ✓ Found AUTO at: {path}")
+                return path
+        except Exception:
+            continue
+    return None
+
+# Detect AUTO path lần đầu
+AUTO_PATH = detect_auto_path()
+
+if AUTO_PATH:
+    MASTER_PROJECTS = AUTO_PATH / "ve3-tool-simple" / "PROJECTS"
+    MASTER_VISUAL = AUTO_PATH / "VISUAL"
+else:
+    # Fallback to default (will fail if not accessible)
+    MASTER_PROJECTS = Path(r"\\tsclient\D\AUTO\ve3-tool-simple\PROJECTS")
+    MASTER_VISUAL = Path(r"\\tsclient\D\AUTO\VISUAL")
 
 # Local PROJECTS folder (worker)
 LOCAL_PROJECTS = TOOL_DIR / "PROJECTS"
@@ -433,11 +467,27 @@ def sync_local_to_visual() -> int:
 
 def run_scan_loop():
     """Run continuous scan loop."""
+    global AUTO_PATH, MASTER_PROJECTS, MASTER_VISUAL
+
     print(f"\n{'='*60}")
     print(f"  VE3 TOOL - WORKER MODE (Image/Video)")
     print(f"{'='*60}")
     print(f"  Worker folder:   {TOOL_DIR.parent.name}")
     print(f"  Channel filter:  {WORKER_CHANNEL or 'ALL (no filter)'}")
+
+    # Re-detect AUTO path nếu chưa có
+    if not AUTO_PATH:
+        print(f"\n  🔍 Detecting network path to \\AUTO...")
+        AUTO_PATH = detect_auto_path()
+        if AUTO_PATH:
+            MASTER_PROJECTS = AUTO_PATH / "ve3-tool-simple" / "PROJECTS"
+            MASTER_VISUAL = AUTO_PATH / "VISUAL"
+
+    if AUTO_PATH:
+        print(f"  ✓ AUTO path:     {AUTO_PATH}")
+    else:
+        print(f"  ✗ AUTO path:     NOT FOUND")
+
     print(f"  Master PROJECTS: {MASTER_PROJECTS}")
     print(f"  Master VISUAL:   {MASTER_VISUAL}")
     print(f"  Local PROJECTS:  {LOCAL_PROJECTS}")
@@ -445,10 +495,17 @@ def run_scan_loop():
     print(f"{'='*60}")
 
     # Check network paths
-    if not MASTER_PROJECTS.exists():
-        print(f"\n⚠️ Cannot access master PROJECTS!")
-        print(f"   Make sure RDP is connected and D: drive is shared.")
-        print(f"   Path: {MASTER_PROJECTS}")
+    if not AUTO_PATH or not MASTER_PROJECTS.exists():
+        print(f"\n❌ Cannot access master PROJECTS!")
+        print(f"   Tried paths:")
+        for p in POSSIBLE_AUTO_PATHS:
+            print(f"     - {p}")
+        print(f"\n   Make sure:")
+        print(f"     - RDP/VMware is connected")
+        print(f"     - Drive is shared (D: or Shared Folders)")
+        print(f"     - \\AUTO folder exists")
+        print(f"\n   Press Ctrl+C to exit and fix the connection.")
+        print(f"   Will retry every {SCAN_INTERVAL}s...")
 
     # === SYNC: Copy local projects đã có ảnh sang VISUAL ===
     print(f"\n[SYNC] Checking local projects to sync to VISUAL...")
