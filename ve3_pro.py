@@ -813,22 +813,35 @@ class UnixVoiceToVideo:
     def load_config(self):
         """Load config from chrome_profiles/ and accounts.json."""
         # === AUTO DETECT CHROME PORTABLE ===
-        # Tự động tìm: C:\Users\{username}\Documents\KP\KP.exe
+        # Ưu tiên: tool/GoogleChromePortable/GoogleChromePortable.exe
+        # Fallback: Documents/GoogleChromePortable hoặc Documents/ve3
         self.chrome_portable = ""
         import platform
         if platform.system() == 'Windows':
             home = Path.home()
-            kp_chrome = home / "Documents" / "KP" / "KP.exe"
-            if kp_chrome.exists():
-                self.chrome_portable = str(kp_chrome)
-                # Tìm User Data
-                kp_dir = kp_chrome.parent
-                for data_path in [kp_dir / "Data" / "profile", kp_dir / "User Data"]:
-                    if data_path.exists():
-                        self.profiles = [str(data_path)]
-                        print(f"[AUTO] Chrome portable: {self.chrome_portable}")
-                        print(f"[AUTO] Profile: {data_path}")
-                        break
+            chrome_locations = [
+                # Ưu tiên 1: Trong thư mục tool
+                ROOT_DIR / "GoogleChromePortable" / "GoogleChromePortable.exe",
+                # Ưu tiên 2: Documents/GoogleChromePortable
+                home / "Documents" / "GoogleChromePortable" / "GoogleChromePortable.exe",
+                # Legacy: Documents/ve3
+                home / "Documents" / "ve3" / "ve3.exe",
+                home / "Documents" / "ve3" / "chrome.exe",
+                # Legacy: Documents/KP
+                home / "Documents" / "KP" / "KP.exe",
+            ]
+            for chrome_path in chrome_locations:
+                if chrome_path.exists():
+                    self.chrome_portable = str(chrome_path)
+                    # Tìm User Data
+                    chrome_dir = chrome_path.parent
+                    for data_path in [chrome_dir / "Data" / "profile", chrome_dir / "User Data"]:
+                        if data_path.exists():
+                            self.profiles = [str(data_path)]
+                            print(f"[AUTO] Chrome portable: {self.chrome_portable}")
+                            print(f"[AUTO] Profile: {data_path}")
+                            break
+                    break
 
         # Nếu không có Chrome portable, scan chrome_profiles/ như cũ
         if not self.chrome_portable:

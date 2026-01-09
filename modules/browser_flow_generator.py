@@ -267,7 +267,7 @@ class BrowserFlowGenerator:
                 self._log(f"Chrome: {chrome_portable}")
 
                 # Tìm User Data của Chrome portable
-                # GoogleChromePortable: KP/Data/profile
+                # GoogleChromePortable/Data/profile hoặc GoogleChromePortable/User Data
                 for data_path in [chrome_dir / "Data" / "profile", chrome_dir / "User Data"]:
                     if data_path.exists():
                         chrome_portable_user_data = data_path

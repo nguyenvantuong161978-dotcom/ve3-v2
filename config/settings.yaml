@@ -10,8 +10,11 @@ project_root: "./VE3_TOOL"
 # Chrome này đã đăng nhập Google sẵn, không cần tạo profile mới
 
 # Đường dẫn đến Chrome portable (đã đăng nhập Google)
-# %USERNAME% sẽ tự động thay bằng tên user của máy
-chrome_portable: "C:\\Users\\%USERNAME%\\Documents\\KP\\KP.exe"
+# Để trống = tự động detect theo thứ tự:
+#   1. GoogleChromePortable/GoogleChromePortable.exe (trong thư mục tool)
+#   2. Documents/GoogleChromePortable/GoogleChromePortable.exe
+#   3. Documents/ve3/ve3.exe (legacy)
+chrome_portable: ""
 
 # Parallel Chrome - Chạy nhiều Chrome song song
 # Format: "worker/total" - VD: "1/2", "2/4"
