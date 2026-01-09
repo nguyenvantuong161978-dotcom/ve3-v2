@@ -5415,9 +5415,9 @@ OUTPUT FORMAT (JSON only):
 
             # BƯỚC 4: Lưu vào Excel
             self.logger.info("\n[V2 BƯỚC 4] Lưu vào Excel...")
-            from .excel_manager import ExcelManager, Scene
+            from .excel_manager import PromptWorkbook, Scene
 
-            workbook = ExcelManager(excel_path)
+            workbook = PromptWorkbook(excel_path)
             workbook.load_or_create()
 
             for shot in all_shots:
