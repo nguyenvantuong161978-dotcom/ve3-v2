@@ -72,7 +72,8 @@ class BrowserFlowGenerator:
         headless: bool = False,
         verbose: bool = True,
         config_path: str = "config/settings.yaml",
-        worker_id: int = 0
+        worker_id: int = 0,
+        total_workers: int = 1
     ):
         """
         Khoi tao BrowserFlowGenerator.
@@ -84,6 +85,7 @@ class BrowserFlowGenerator:
             verbose: In log chi tiet
             config_path: Duong dan file config
             worker_id: Worker ID for parallel processing (affects proxy, Chrome port)
+            total_workers: Total number of workers (for window layout)
         """
         if not SELENIUM_AVAILABLE:
             raise ImportError(
@@ -96,6 +98,7 @@ class BrowserFlowGenerator:
         self.headless = headless
         self.verbose = verbose
         self.worker_id = worker_id  # For parallel processing
+        self.total_workers = total_workers  # For window layout
 
         # Load config
         self.config = {}
@@ -105,10 +108,19 @@ class BrowserFlowGenerator:
 
         # Paths
         self.img_path = self.project_path / "img"
-        self.prompts_path = self.project_path / "prompts"
         self.nv_path = self.project_path / "nv"
 
-        # Tao thu muc neu chua co
+        # Check flat vs nested structure for prompts
+        # Flat: Excel trực tiếp trong project folder
+        # Nested: Excel trong prompts/ subfolder
+        if list(self.project_path.glob("*_prompts.xlsx")):
+            self.prompts_path = self.project_path  # Flat structure
+            self.use_flat_structure = True
+        else:
+            self.prompts_path = self.project_path / "prompts"  # Nested structure
+            self.use_flat_structure = False
+
+        # Tao thu muc neu chua co (chi img va nv, KHONG tao prompts cho flat structure)
         self.img_path.mkdir(parents=True, exist_ok=True)
         self.nv_path.mkdir(parents=True, exist_ok=True)
 
@@ -243,72 +255,97 @@ class BrowserFlowGenerator:
         try:
             options = Options()
 
-            # Tim Chrome binary
-            chrome_paths = [
-                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-                "/usr/bin/google-chrome",
-                "/usr/bin/chromium-browser",
-            ]
-            for chrome_path in chrome_paths:
-                if os.path.exists(chrome_path):
-                    options.binary_location = chrome_path
-                    self._log(f"Chrome: {chrome_path}")
-                    break
+            # Tim Chrome binary - ƯU TIÊN chrome_portable từ config
+            chrome_portable = self.config.get('chrome_portable', '')
+            chrome_portable_user_data = None
 
-            # Tao working profile rieng (khong phai temp, giu nguyen settings)
-            # Vi tri: ~/.ve3_chrome_profiles/{profile_name}
-            self.profile_dir.mkdir(parents=True, exist_ok=True)
-            working_profile_base = Path.home() / ".ve3_chrome_profiles"
-            working_profile_base.mkdir(parents=True, exist_ok=True)
-            working_profile = working_profile_base / self.profile_name
+            if chrome_portable:
+                chrome_dir = Path(chrome_portable).parent
 
-            self._log(f"Profile goc: {self.profile_dir}")
-            self._log(f"Working profile: {working_profile}")
+                # Dùng trực tiếp chrome_portable (launcher tự chạy đúng Chrome)
+                options.binary_location = chrome_portable
+                self._log(f"Chrome: {chrome_portable}")
 
-            # LUÔN sync cookies/login data từ profile gốc (đảm bảo dùng đúng account đã đăng nhập)
-            import shutil
-            if not working_profile.exists():
-                working_profile.mkdir(parents=True, exist_ok=True)
+                # Tìm User Data của Chrome portable
+                # GoogleChromePortable: KP/Data/profile
+                for data_path in [chrome_dir / "Data" / "profile", chrome_dir / "User Data"]:
+                    if data_path.exists():
+                        chrome_portable_user_data = data_path
+                        break
+            else:
+                # Fallback: Tim Chrome system
+                chrome_paths = [
+                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                    "/usr/bin/google-chrome",
+                    "/usr/bin/chromium-browser",
+                ]
+                for chrome_path in chrome_paths:
+                    if os.path.exists(chrome_path):
+                        options.binary_location = chrome_path
+                        self._log(f"Chrome: {chrome_path}")
+                        break
 
-            # Sync các file quan trọng (cookies, login data) mỗi lần chạy
-            critical_files = [
-                "Cookies", "Login Data", "Web Data",
-                "Network/Cookies", "Network/TransportSecurity"
-            ]
-            critical_dirs = ["Default", "Network"]
+            # Xử lý User Data
+            if chrome_portable_user_data:
+                # Dùng User Data của Chrome portable (đã đăng nhập sẵn)
+                self._log(f"User Data: {chrome_portable_user_data}")
+                options.add_argument(f"--user-data-dir={chrome_portable_user_data}")
+                self._working_profile = str(chrome_portable_user_data)
+            else:
+                # Tao working profile rieng (khong phai temp, giu nguyen settings)
+                # Vi tri: ~/.ve3_chrome_profiles/{profile_name}
+                self.profile_dir.mkdir(parents=True, exist_ok=True)
+                working_profile_base = Path.home() / ".ve3_chrome_profiles"
+                working_profile_base.mkdir(parents=True, exist_ok=True)
+                working_profile = working_profile_base / self.profile_name
 
-            if any(self.profile_dir.iterdir()):
-                # Sync critical dirs first
-                for dir_name in critical_dirs:
-                    src_dir = self.profile_dir / dir_name
-                    if src_dir.exists() and src_dir.is_dir():
-                        dest_dir = working_profile / dir_name
-                        dest_dir.mkdir(parents=True, exist_ok=True)
-                        for item in src_dir.iterdir():
-                            try:
-                                dest = dest_dir / item.name
-                                if item.is_file():
-                                    shutil.copy2(item, dest)
-                            except Exception:
-                                pass  # Skip locked files
+                self._log(f"Profile goc: {self.profile_dir}")
+                self._log(f"Working profile: {working_profile}")
 
-                # Sync root level files
-                for item in self.profile_dir.iterdir():
-                    try:
-                        dest = working_profile / item.name
-                        if item.is_file():
-                            shutil.copy2(item, dest)
-                        elif item.is_dir() and item.name not in critical_dirs:
-                            if not dest.exists():
-                                shutil.copytree(item, dest, dirs_exist_ok=True)
-                    except Exception:
-                        pass  # Skip locked files
+                # LUÔN sync cookies/login data từ profile gốc (đảm bảo dùng đúng account đã đăng nhập)
+                import shutil
+                if not working_profile.exists():
+                    working_profile.mkdir(parents=True, exist_ok=True)
 
-                self._log(f"Da sync profile data tu profile goc")
+                # Sync các file quan trọng (cookies, login data) mỗi lần chạy
+                critical_files = [
+                    "Cookies", "Login Data", "Web Data",
+                    "Network/Cookies", "Network/TransportSecurity"
+                ]
+                critical_dirs = ["Default", "Network"]
 
-            self._working_profile = str(working_profile)  # Luu de reference
-            options.add_argument(f"--user-data-dir={working_profile}")
+                if any(self.profile_dir.iterdir()):
+                    # Sync critical dirs first
+                    for dir_name in critical_dirs:
+                        src_dir = self.profile_dir / dir_name
+                        if src_dir.exists() and src_dir.is_dir():
+                            dest_dir = working_profile / dir_name
+                            dest_dir.mkdir(parents=True, exist_ok=True)
+                            for item in src_dir.iterdir():
+                                try:
+                                    dest = dest_dir / item.name
+                                    if item.is_file():
+                                        shutil.copy2(item, dest)
+                                except Exception:
+                                    pass  # Skip locked files
+
+                    # Sync root level files
+                    for item in self.profile_dir.iterdir():
+                        try:
+                            dest = working_profile / item.name
+                            if item.is_file():
+                                shutil.copy2(item, dest)
+                            elif item.is_dir() and item.name not in critical_dirs:
+                                if not dest.exists():
+                                    shutil.copytree(item, dest, dirs_exist_ok=True)
+                        except Exception:
+                            pass  # Skip locked files
+
+                    self._log(f"Da sync profile data tu profile goc")
+
+                self._working_profile = str(working_profile)  # Luu de reference
+                options.add_argument(f"--user-data-dir={working_profile}")
 
             # PARALLEL SAFE: Moi instance dung port rieng
             debug_port = random.randint(9222, 9999)
@@ -498,7 +535,9 @@ class BrowserFlowGenerator:
     # =========================================================================
 
     def _get_media_cache_path(self) -> Path:
-        """Duong dan file cache media_names."""
+        """Duong dan file cache media_names (flat hoặc nested)."""
+        if getattr(self, 'use_flat_structure', False):
+            return self.project_path / ".media_cache.json"
         return self.project_path / "prompts" / ".media_cache.json"
 
     def _load_media_cache(self) -> Dict[str, Any]:
@@ -1098,7 +1137,8 @@ class BrowserFlowGenerator:
         # QUAN TRONG: Dung numeric ID (1, 2, 3) de khop voi SmartEngine video composer
         prompts_data = []
         for scene in scenes_to_process:
-            scene_id = str(scene.scene_id)  # Dung numeric ID, khong phai scene_001
+            # Normalize scene_id: 1.0 -> "1", 2.0 -> "2"
+            scene_id = str(int(float(scene.scene_id))) if scene.scene_id else "0"
             prompts_data.append({
                 "sceneId": scene_id,
                 "prompt": scene.img_prompt
@@ -2552,7 +2592,8 @@ class BrowserFlowGenerator:
 
         # Process tung scene
         for i, scene in enumerate(scenes_to_process):
-            scene_id = str(scene.scene_id)
+            # Normalize: 1.0 -> "1"
+            scene_id = str(int(float(scene.scene_id))) if scene.scene_id else "0"
             prompt = scene.img_prompt
 
             self._log(f"\n[{i+1}/{len(scenes_to_process)}] Scene {scene_id}")
@@ -2822,7 +2863,8 @@ class BrowserFlowGenerator:
 
         # Generate videos
         for i, (scene, video_prompt) in enumerate(scenes_to_process):
-            scene_id = str(scene.scene_id)
+            # Normalize: 1.0 -> "1"
+            scene_id = str(int(float(scene.scene_id))) if scene.scene_id else "0"
             self._log(f"\n[{i+1}/{len(scenes_to_process)}] Scene: {scene_id}")
             self._log(f"Prompt ({len(video_prompt)} chars): {video_prompt[:80]}...")
 
@@ -2890,6 +2932,246 @@ class BrowserFlowGenerator:
             "stats": self.stats.copy()
         }
 
+    def generate_videos_from_excel(
+        self,
+        excel_path: Optional[Path] = None,
+        max_videos: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Tạo video từ Excel - GIỐNG HỆT FLOW TẠO ẢNH.
+        Mở Chrome → Chuyển mode video → Tạo video → Đóng Chrome.
+
+        Args:
+            excel_path: Đường dẫn file Excel
+            max_videos: Số video tối đa cần tạo
+
+        Returns:
+            Dict với kết quả {success, failed, stats}
+        """
+        self._log("=" * 60)
+        self._log("TẠO VIDEO TỪ ẢNH (Chrome UI - giống tạo ảnh)")
+        self._log("=" * 60)
+
+        # Reset stats
+        self.stats = {"total": 0, "success": 0, "failed": 0, "skipped": 0}
+
+        # Import DrissionFlowAPI
+        try:
+            from modules.drission_flow_api import DrissionFlowAPI
+        except ImportError as e:
+            return {"success": False, "error": f"Không import được DrissionFlowAPI: {e}"}
+
+        # Load Excel
+        from modules.excel_manager import PromptWorkbook
+        if not excel_path:
+            excel_path = self._find_excel_file()
+        if not excel_path:
+            return {"success": False, "error": "Không tìm thấy file Excel"}
+
+        workbook = PromptWorkbook(excel_path)
+        workbook.load_or_create()
+
+        # === ĐỌC MEDIA_ID TỪ CACHE (giống tạo ảnh đọc cached_media_names) ===
+        cache_path = Path(excel_path).parent / ".media_cache.json"
+        cached_media_names = {}
+        if cache_path.exists():
+            try:
+                import json
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    cache_data = json.load(f)
+                for key, value in cache_data.items():
+                    if key.startswith('_'):
+                        continue  # Skip metadata
+                    if isinstance(value, dict):
+                        cached_media_names[key] = value.get('mediaName', '')
+                    elif isinstance(value, str):
+                        cached_media_names[key] = value
+                self._log(f"[CACHE] Loaded {len(cached_media_names)} media_ids từ cache")
+            except Exception as e:
+                self._log(f"[CACHE] Error: {e}", "warn")
+
+        # Lấy scenes cần tạo video (có media_id trong cache, chưa có video)
+        scenes_for_video = []
+        for scene in workbook.get_scenes():
+            # Normalize: 1.0 -> "1"
+            scene_id = str(int(float(scene.scene_id))) if hasattr(scene, 'scene_id') and scene.scene_id else ''
+            if not scene_id or not scene_id.isdigit():
+                continue
+
+            # Lấy media_id từ CACHE (giống tạo ảnh)
+            media_id = cached_media_names.get(scene_id, '')
+            if not media_id:
+                # Fallback: thử Excel
+                media_id = getattr(scene, 'media_id', '') or ''
+
+            video_path = getattr(scene, 'video_path', '') or ''
+            status_vid = getattr(scene, 'status_vid', '') or ''
+
+            if not media_id:
+                continue
+            if video_path or status_vid == 'done':
+                continue
+
+            video_prompt = getattr(scene, 'video_prompt', '') or 'Subtle cinematic motion'
+            scenes_for_video.append({
+                'scene_id': scene_id,
+                'media_id': media_id,
+                'video_prompt': video_prompt
+            })
+
+            if len(scenes_for_video) >= max_videos:
+                break
+
+        if not scenes_for_video:
+            self._log(f"Không có scene nào cần tạo video (cache có {len(cached_media_names)} items)")
+            return {"success": True, "message": "No scenes to process"}
+
+        self._log(f"Sẽ tạo {len(scenes_for_video)} video")
+        self.stats["total"] = len(scenes_for_video)
+
+        # === ĐỌC PROJECT_URL TỪ EXCEL (giống tạo ảnh) ===
+        # Để vào đúng project đã tạo ảnh, giữ media_id valid
+        saved_project_url = None
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(excel_path, data_only=True)
+            if 'Config' in wb.sheetnames:
+                ws = wb['Config']
+                for row in ws.iter_rows(min_row=2, max_col=2):
+                    key = row[0].value
+                    val = row[1].value
+                    if key == 'flow_project_url' and val and '/project/' in str(val):
+                        saved_project_url = str(val)
+                        self._log(f"📂 Project URL từ Excel: {saved_project_url[:50]}...")
+                        break
+                    elif key == 'flow_project_id' and val and not saved_project_url:
+                        saved_project_url = f"https://labs.google/fx/vi/tools/flow/project/{val}"
+                        self._log(f"📂 Project ID từ Excel: {val[:20]}...")
+            wb.close()
+        except Exception as e:
+            self._log(f"Đọc Excel config error: {e}", "warn")
+
+        # Fallback: đọc từ cache
+        if not saved_project_url:
+            cache_path = Path(excel_path).parent / ".media_cache.json"
+            if cache_path.exists():
+                try:
+                    import json
+                    with open(cache_path, 'r', encoding='utf-8') as f:
+                        cache_data = json.load(f)
+                    cached_url = cache_data.get('_project_url', '')
+                    cached_id = cache_data.get('_project_id', '')
+                    if cached_url and '/project/' in cached_url:
+                        saved_project_url = cached_url
+                        self._log(f"📂 Project URL từ cache: {saved_project_url[:50]}...")
+                    elif cached_id:
+                        saved_project_url = f"https://labs.google/fx/vi/tools/flow/project/{cached_id}"
+                except:
+                    pass
+
+        if not saved_project_url:
+            return {"success": False, "error": "Không tìm thấy project URL. Hãy tạo ảnh trước!"}
+
+        # Webshare config
+        ws_cfg = self.config.get('webshare_proxy', {})
+
+        # Tạo DrissionFlowAPI (giống tạo ảnh)
+        self._log("Khởi tạo Chrome (hiển thị)...")
+        drission_api = DrissionFlowAPI(
+            headless=False,  # Chrome hiển thị
+            verbose=True,
+            log_callback=lambda msg, lvl: self._log(msg, lvl),
+            webshare_enabled=ws_cfg.get('enabled', False),
+            machine_id=ws_cfg.get('machine_id', 1),
+            worker_id=self.worker_id,
+            total_workers=self.total_workers,  # Chia màn hình
+            chrome_portable=self.config.get('chrome_portable', '')
+        )
+
+        # Setup Chrome - VÀO ĐÚNG PROJECT ĐÃ TẠO ẢNH
+        self._log(f"Vào project: {saved_project_url[:60]}...")
+        if not drission_api.setup(project_url=saved_project_url):
+            return {"success": False, "error": "Không setup được Chrome"}
+
+        self._log("✓ Chrome sẵn sàng - bắt đầu tạo video...")
+
+        # Output folder
+        output_dir = Path(self.project_path) / "img"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Tạo video cho từng scene
+        video_success = 0
+        video_failed = 0
+
+        for i, scene_info in enumerate(scenes_for_video):
+            scene_id = scene_info['scene_id']
+            media_id = scene_info['media_id']
+            video_prompt = scene_info['video_prompt']
+
+            self._log(f"\n[{i+1}/{len(scenes_for_video)}] Scene {scene_id}...")
+
+            try:
+                video_file = output_dir / f"{scene_id}.mp4"
+
+                # Gọi generate_video_t2v_mode - Chuyển sang "Từ văn bản sang video"
+                # Chrome gửi T2V request → Interceptor convert sang I2V với media_id
+                success, result_path, error = drission_api.generate_video_t2v_mode(
+                    media_id=media_id,
+                    prompt=video_prompt,
+                    video_model="veo_3_0_r2v_fast",
+                    save_path=video_file
+                )
+
+                if success:
+                    self._log(f"   ✓ OK: {video_file.name}")
+                    video_success += 1
+                    self.stats["success"] += 1
+
+                    # Xóa ảnh sau khi tạo video thành công
+                    image_file = output_dir / f"{scene_id}.png"
+                    if image_file.exists():
+                        try:
+                            image_file.unlink()
+                            self._log(f"   🗑️ Deleted image: {image_file.name}")
+                        except Exception as e:
+                            self._log(f"   ⚠️ Cannot delete image: {e}", "warn")
+
+                    # Update Excel
+                    workbook.update_scene(int(scene_id), video_path=video_file.name, status_vid='done')
+                    workbook.save()
+                else:
+                    self._log(f"   ✗ Failed: {error}", "warn")
+                    video_failed += 1
+                    self.stats["failed"] += 1
+
+            except Exception as e:
+                self._log(f"   ✗ Error: {e}", "error")
+                video_failed += 1
+                self.stats["failed"] += 1
+
+            # Delay giữa các video
+            time.sleep(3)
+
+        # Chuyển lại image mode sau khi xong
+        drission_api.switch_to_image_mode()
+
+        # Close Chrome
+        drission_api.close()
+
+        # Summary
+        self._log("\n" + "=" * 60)
+        self._log("HOÀN THÀNH VIDEO (Chrome UI)")
+        self._log("=" * 60)
+        self._log(f"Tổng: {self.stats['total']}")
+        self._log(f"Thành công: {self.stats['success']}")
+        self._log(f"Thất bại: {self.stats['failed']}")
+
+        return {
+            "success": video_success,
+            "failed": video_failed,
+            "stats": self.stats.copy()
+        }
+
     def generate_from_prompts_api(
         self,
         prompts: List[Dict],
@@ -2913,8 +3195,15 @@ class BrowserFlowGenerator:
 
         # === DRISSION MODE ONLY ===
         # Sử dụng DrissionPage + Interceptor để tạo ảnh
-        if not prompts:
-            return {"success": False, "error": "Khong co prompts"}
+        # Cho phép prompts=[] nếu có video_count > 0 (chỉ tạo video, không tạo ảnh)
+        video_count_setting = self.config.get('video_count', 0)
+        try:
+            video_count = 999999 if video_count_setting == 'full' else int(video_count_setting)
+        except:
+            video_count = 0
+
+        if not prompts and video_count <= 0:
+            return {"success": False, "error": "Khong co prompts va video_count=0"}
 
         try:
             from modules.drission_flow_api import DrissionFlowAPI
@@ -3042,14 +3331,19 @@ class BrowserFlowGenerator:
         # Dùng chung setting 'browser_headless' với Selenium mode
         drission_headless = self.config.get('browser_headless', True)
 
+        # Chrome portable - ưu tiên cao nhất
+        chrome_portable = self.config.get('chrome_portable', '')
+
         drission_api = DrissionFlowAPI(
             profile_dir=profile_to_use,
             verbose=self.verbose,
             log_callback=self._log,
             webshare_enabled=use_webshare,
             worker_id=self.worker_id,  # Parallel mode - mỗi worker có proxy riêng
+            total_workers=self.total_workers,  # Chia màn hình theo số workers
             headless=drission_headless,  # Chạy Chrome ẩn (default: True)
-            machine_id=machine_id  # Máy số mấy - tránh trùng session giữa các máy
+            machine_id=machine_id,  # Máy số mấy - tránh trùng session giữa các máy
+            chrome_portable=chrome_portable  # Chrome portable đã đăng nhập
         )
 
         self._log("🚀 DrissionPage + Interceptor")
@@ -3097,6 +3391,10 @@ class BrowserFlowGenerator:
         for setup_attempt in range(MAX_SETUP_RETRIES):
             if drission_api.setup(project_url=saved_project_url):
                 setup_success = True
+                # CHỈ reset về Pro khi đây là project MỚI (không có saved_project_url)
+                # Nếu đang retry cùng project thì giữ nguyên model (có thể đang dùng fallback)
+                if not saved_project_url:
+                    drission_api.reset_to_pro_model()
 
                 # === LƯU PROJECT URL VÀO EXCEL NGAY SAU KHI SETUP ===
                 # Đảm bảo 1 voice = 1 project link (không bị mất nếu fail giữa chừng)
@@ -3211,6 +3509,11 @@ class BrowserFlowGenerator:
         # Track failed prompts để retry sau
         failed_prompts = []  # List[Tuple[prompt_data, index, error]]
 
+        # Đọc force_model từ config (đảm bảo dùng model chất lượng cao)
+        force_model = self.config.get('force_model', 'auto')
+        if force_model:
+            self._log(f"[MODEL] Force model: {force_model}")
+
         # Load Excel workbook
         workbook = None
         if excel_path and Path(excel_path).exists():
@@ -3249,6 +3552,22 @@ class BrowserFlowGenerator:
         if ref_ids:
             self._log(f"[INFO] Reference images (nv/loc): {ref_ids}")
 
+        # === PARALLEL CHROME: chia scene cho nhiều Chrome ===
+        # Cách dùng: python run_worker.py 1 (hoặc 2)
+        # Terminal 1 → Chrome 1 làm scenes 1,3,5,... + ảnh nv*/loc*
+        # Terminal 2 → Chrome 2 làm scenes 2,4,6,...
+        # Format: "1/2", "2/4", etc.
+        parallel_chrome = os.environ.get('PARALLEL_CHROME', '') or str(self.config.get('parallel_chrome', ''))
+        worker_id, total_workers = 0, 1
+        if parallel_chrome and '/' in parallel_chrome:
+            try:
+                parts = parallel_chrome.split('/')
+                worker_id = int(parts[0])
+                total_workers = int(parts[1])
+                self._log(f"[PARALLEL] Chrome {worker_id}/{total_workers} - Scenes: {worker_id},{worker_id+total_workers},{worker_id+2*total_workers}...")
+            except:
+                worker_id, total_workers = 0, 1
+
         for i, prompt_data in enumerate(prompts):
             pid = str(prompt_data.get('id', i + 1))
             prompt = prompt_data.get('prompt', '')
@@ -3263,6 +3582,28 @@ class BrowserFlowGenerator:
                 self._log(f"[{i+1}/{len(prompts)}] ID: {pid} - Skip (DO_NOT_GENERATE)")
                 self.stats["skipped"] += 1
                 continue
+
+            # === PARALLEL: Skip nếu không thuộc worker này ===
+            if total_workers > 1:
+                is_ref = pid.lower().startswith('nv') or pid.lower().startswith('loc')
+
+                if is_ref:
+                    # Reference images: chỉ worker 1 xử lý
+                    if worker_id != 1:
+                        self.stats["skipped"] += 1
+                        continue
+                else:
+                    # Scene số: chia theo modulo
+                    try:
+                        scene_num = int(pid)
+                        # scene_num % total_workers == (worker_id - 1)
+                        # VD: worker 1/4 làm scenes 1,5,9... (mod 4 = 1)
+                        #     worker 2/4 làm scenes 2,6,10... (mod 4 = 2)
+                        if (scene_num % total_workers) != (worker_id % total_workers):
+                            self.stats["skipped"] += 1
+                            continue
+                    except ValueError:
+                        pass
 
             # Xác định là ảnh tham chiếu (nv*/loc*) hay ảnh scene
             is_reference_image = pid.lower().startswith('nv') or pid.lower().startswith('loc')
@@ -3308,10 +3649,13 @@ class BrowserFlowGenerator:
             # Merge Excel và cache media_ids (Excel ưu tiên)
             all_media_ids = {**cached_media_names, **excel_media_ids}
 
-            if not is_reference_image and all_media_ids:
+            if not is_reference_image:
                 # Parse reference_files từ prompt_data
                 ref_str = prompt_data.get('reference_files', '')
                 ref_files = []
+
+                self._log(f"   [REF] Raw reference_files: '{ref_str}'")
+
                 if ref_str:
                     try:
                         parsed = json.loads(ref_str) if ref_str.startswith('[') else None
@@ -3327,41 +3671,62 @@ class BrowserFlowGenerator:
                     ref_files = ["nvc.png"]
                     self._log(f"   [REF] No reference, using default nvc.png")
 
+                self._log(f"   [REF] Parsed ref_files: {ref_files}")
+                self._log(f"   [REF] Available media_ids: {list(all_media_ids.keys())}")
+
                 # Build image_inputs từ media_ids (Excel hoặc cache)
                 # QUAN TRỌNG: Dùng "imageInputType" (không phải "inputType") với giá trị đầy đủ
+                # Build case-insensitive lookup dicts
+                excel_media_ids_lower = {k.lower(): v for k, v in excel_media_ids.items()}
+                cached_media_names_lower = {k.lower(): v for k, v in cached_media_names.items()}
+
+                missing_refs = []
                 for ref_file in ref_files:
                     ref_id = ref_file.replace('.png', '').replace('.jpg', '')
-                    # Thử Excel media_id trước
-                    if ref_id in excel_media_ids:
-                        media_id = excel_media_ids[ref_id]
+                    ref_id_lower = ref_id.lower()
+
+                    # Thử Excel media_id trước (case-insensitive)
+                    if ref_id_lower in excel_media_ids_lower:
+                        media_id = excel_media_ids_lower[ref_id_lower]
                         image_inputs.append({
                             "name": media_id,
                             "imageInputType": "IMAGE_INPUT_TYPE_REFERENCE"
                         })
-                        self._log(f"   [REF] Using (Excel): {ref_id} → {media_id[:30]}...")
-                    elif ref_id in cached_media_names:
-                        # Fallback to cache
-                        media_info = cached_media_names[ref_id]
+                        self._log(f"   [REF] ✓ {ref_id} → {media_id[:30]}... (Excel)")
+                    elif ref_id_lower in cached_media_names_lower:
+                        # Fallback to cache (case-insensitive)
+                        media_info = cached_media_names_lower[ref_id_lower]
                         media_name = media_info.get('mediaName') if isinstance(media_info, dict) else media_info
                         if media_name:
                             image_inputs.append({
                                 "name": media_name,
                                 "imageInputType": "IMAGE_INPUT_TYPE_REFERENCE"
                             })
-                            self._log(f"   [REF] Using (cache): {ref_id} → {media_name[:30]}...")
+                            self._log(f"   [REF] ✓ {ref_id} → {media_name[:30]}... (cache)")
+                    else:
+                        missing_refs.append(ref_id)
+                        self._log(f"   [REF] ✗ {ref_id} - KHÔNG CÓ MEDIA_ID!", "warn")
+
+                if missing_refs:
+                    self._log(f"   [REF] ⚠️ THIẾU {len(missing_refs)} media_id: {missing_refs}", "warn")
+                    self._log(f"   [REF] → Cần tạo ảnh nv/loc trước để có media_id!", "warn")
 
                 if image_inputs:
-                    self._log(f"   [REF] Total: {len(image_inputs)} reference images")
+                    self._log(f"   [REF] Total: {len(image_inputs)}/{len(ref_files)} reference images")
+                    for idx, img_inp in enumerate(image_inputs):
+                        self._log(f"   [REF] #{idx+1}: {img_inp.get('name', 'N/A')[:40]}...")
                 else:
-                    self._log(f"   [REF] No media_id found for references", "warn")
+                    self._log(f"   [REF] ⚠️ KHÔNG CÓ REFERENCE NÀO! Ảnh sẽ tạo không có tham chiếu", "warn")
 
             try:
                 # Generate image using DrissionFlowAPI with reference images
+                # force_model: đảm bảo dùng model chất lượng cao (Nano Banana Pro)
                 success, images, error = drission_api.generate_image(
                     prompt=prompt,
                     save_dir=save_dir,
                     filename=pid,
-                    image_inputs=image_inputs if image_inputs else None
+                    image_inputs=image_inputs if image_inputs else None,
+                    force_model=force_model
                 )
 
                 if success and images:
@@ -3762,7 +4127,8 @@ class BrowserFlowGenerator:
         if video_count > 0 and workbook:
             try:
                 for scene in workbook.get_scenes():
-                    scene_id = str(scene.scene_id) if hasattr(scene, 'scene_id') else ''
+                    # Normalize: 1.0 -> "1"
+                    scene_id = str(int(float(scene.scene_id))) if hasattr(scene, 'scene_id') and scene.scene_id else ''
                     if not scene_id or not scene_id.isdigit():
                         continue  # Bỏ qua nv/loc
 
@@ -3796,12 +4162,18 @@ class BrowserFlowGenerator:
 
                     for scene in all_scenes:
                         # Chỉ lấy scene (không phải character/location)
-                        scene_id = str(scene.scene_id) if hasattr(scene, 'scene_id') else ''
+                        # Normalize: 1.0 -> "1"
+                        scene_id = str(int(float(scene.scene_id))) if hasattr(scene, 'scene_id') and scene.scene_id else ''
                         if not scene_id or not scene_id.isdigit():
                             continue
 
-                        # Kiểm tra có media_id và chưa có video
-                        media_id = getattr(scene, 'media_id', '') or ''
+                        # Lấy media_id từ CACHE trước (giống tạo ảnh), fallback Excel
+                        media_id = cached_media_names.get(scene_id, {})
+                        if isinstance(media_id, dict):
+                            media_id = media_id.get('mediaName', '')
+                        if not media_id:
+                            media_id = getattr(scene, 'media_id', '') or ''
+
                         video_path = getattr(scene, 'video_path', '') or ''
                         status_vid = getattr(scene, 'status_vid', '') or ''
 
@@ -3848,36 +4220,35 @@ class BrowserFlowGenerator:
                     self._log(f"[I2V] [{i+1}/{len(scenes_for_video)}] Scene {scene_id}...")
 
                     try:
-                        # generate_video sẽ tự refresh recaptcha token (one-time token)
-                        success, video_url, error = drission_api.generate_video(
+                        # Dùng generate_video_t2v_mode() - Chuyển sang "Từ văn bản sang video"
+                        # Chrome gửi T2V request → Interceptor convert sang I2V với media_id
+                        video_dir = output_dir  # img/ folder
+                        video_file = video_dir / f"{scene_id}.mp4"
+
+                        success, result_path, error = drission_api.generate_video_t2v_mode(
                             media_id=media_id,
                             prompt=video_prompt,
-                            video_model="veo_3_0_r2v_fast_ultra"
+                            video_model="veo_3_0_r2v_fast",
+                            save_path=video_file  # Tự download luôn
                         )
 
-                        if success and video_url:
-                            # Download video - lưu vào img/ folder (giống smart_engine)
-                            video_dir = output_dir  # img/ folder
-                            video_file = video_dir / f"{scene_id}.mp4"
+                        if success:
+                            self._log(f"   ✓ OK: {video_file.name}")
+                            video_success += 1
 
-                            try:
-                                import requests as req
-                                resp = req.get(video_url, timeout=60)
-                                if resp.status_code == 200:
-                                    video_file.write_bytes(resp.content)
-                                    self._log(f"   ✓ OK: {video_file.name}")
-                                    video_success += 1
+                            # Xóa ảnh sau khi tạo video thành công (tiết kiệm dung lượng)
+                            image_file = video_dir / f"{scene_id}.png"
+                            if image_file.exists():
+                                try:
+                                    image_file.unlink()
+                                    self._log(f"   🗑️ Deleted image: {image_file.name}")
+                                except Exception as e:
+                                    self._log(f"   ⚠️ Cannot delete image: {e}", "warn")
 
-                                    # Update Excel
-                                    if workbook:
-                                        workbook.update_scene(int(scene_id), video_path=video_file.name, status_vid='done')
-                                        workbook.save()
-                                else:
-                                    self._log(f"   ✗ Download failed: {resp.status_code}", "warn")
-                                    video_failed += 1
-                            except Exception as dl_err:
-                                self._log(f"   ✗ Download error: {dl_err}", "warn")
-                                video_failed += 1
+                            # Update Excel
+                            if workbook:
+                                workbook.update_scene(int(scene_id), video_path=video_file.name, status_vid='done')
+                                workbook.save()
                         else:
                             self._log(f"   ✗ Failed: {error}", "warn")
                             video_failed += 1
@@ -3888,6 +4259,9 @@ class BrowserFlowGenerator:
 
                     # Delay giữa các video
                     time.sleep(3)
+
+                # Chuyển lại image mode sau khi xong video
+                drission_api.switch_to_image_mode()
 
                 self._log(f"[I2V] Hoàn tất: {video_success} OK, {video_failed} failed")
             else:

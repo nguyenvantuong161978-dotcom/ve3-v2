@@ -2,7 +2,8 @@
 :: VE3 Tool - Auto Update & Run
 :: Khong can git - tu dong tai tu GitHub
 
-cd /d "%~dp0"
+:: Use pushd for UNC path support (VMware, RDP shared folders)
+pushd "%~dp0"
 
 echo ========================================
 echo   VE3 Tool - Browser JS Mode
@@ -38,9 +39,18 @@ if %errorlevel% neq 0 (
 
 :run
 echo.
+
+:: Check & install dependencies
+python -c "import yaml" 2>nul
+if %errorlevel% neq 0 (
+    echo [*] Installing dependencies...
+    pip install pyyaml pillow requests -q
+)
+
 echo [*] Starting VE3 Tool...
 echo.
 
 python ve3_pro.py
 
+popd
 pause

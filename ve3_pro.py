@@ -50,32 +50,44 @@ PROJECTS_DIR = Path(os.environ.get('VE3_PROJECTS_DIR', ROOT_DIR / "PROJECTS"))
 def get_git_info():
     """Get git commit info: hash, date, message."""
     import subprocess
+
+    # 1. Thử đọc từ git
     git_dir = ROOT_DIR / ".git"
-    if not git_dir.exists():
-        return None
+    if git_dir.exists():
+        try:
+            result = subprocess.run(
+                ["git", "log", "-1", "--format=%h|%ct|%s"],
+                cwd=ROOT_DIR, capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                parts = result.stdout.strip().split("|")
+                if len(parts) >= 3:
+                    timestamp = int(parts[1])
+                    local_time = datetime.fromtimestamp(timestamp)
+                    date_str = local_time.strftime("%Y-%m-%d %H:%M")
+                    return {
+                        "hash": parts[0],
+                        "date": date_str,
+                        "message": parts[2][:50]
+                    }
+        except:
+            pass
 
-    try:
-        # Get commit info: hash, unix timestamp, message
-        # %ct = unix timestamp (seconds since epoch)
-        result = subprocess.run(
-            ["git", "log", "-1", "--format=%h|%ct|%s"],
-            cwd=ROOT_DIR, capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0:
-            parts = result.stdout.strip().split("|")
+    # 2. Fallback: Đọc từ file VERSION
+    version_file = ROOT_DIR / "VERSION"
+    if version_file.exists():
+        try:
+            content = version_file.read_text(encoding='utf-8').strip()
+            parts = content.split("|")
             if len(parts) >= 3:
-                # Convert unix timestamp to local time
-                timestamp = int(parts[1])
-                local_time = datetime.fromtimestamp(timestamp)
-                date_str = local_time.strftime("%Y-%m-%d %H:%M")
-
                 return {
                     "hash": parts[0],
-                    "date": date_str,  # Gio theo may tinh
+                    "date": parts[1],
                     "message": parts[2][:50]
                 }
-    except:
-        pass
+        except:
+            pass
+
     return None
 
 
@@ -187,6 +199,7 @@ class UnixVoiceToVideo:
         self.gemini_keys: List[str] = []
         self.deepseek_keys: List[str] = []
         self.chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        self.chrome_portable = ""  # Chrome portable đã đăng nhập sẵn
         
         # State
         self._running = False
@@ -799,13 +812,32 @@ class UnixVoiceToVideo:
     
     def load_config(self):
         """Load config from chrome_profiles/ and accounts.json."""
-        # Luôn scan thư mục chrome_profiles/ trước (tạo từ GUI)
-        self.profiles = []
-        profiles_dir = ROOT_DIR / "chrome_profiles"
-        if profiles_dir.exists():
-            for item in profiles_dir.iterdir():
-                if item.is_dir() and not item.name.startswith('.'):
-                    self.profiles.append(str(item))
+        # === AUTO DETECT CHROME PORTABLE ===
+        # Tự động tìm: C:\Users\{username}\Documents\KP\KP.exe
+        self.chrome_portable = ""
+        import platform
+        if platform.system() == 'Windows':
+            home = Path.home()
+            kp_chrome = home / "Documents" / "KP" / "KP.exe"
+            if kp_chrome.exists():
+                self.chrome_portable = str(kp_chrome)
+                # Tìm User Data
+                kp_dir = kp_chrome.parent
+                for data_path in [kp_dir / "Data" / "profile", kp_dir / "User Data"]:
+                    if data_path.exists():
+                        self.profiles = [str(data_path)]
+                        print(f"[AUTO] Chrome portable: {self.chrome_portable}")
+                        print(f"[AUTO] Profile: {data_path}")
+                        break
+
+        # Nếu không có Chrome portable, scan chrome_profiles/ như cũ
+        if not self.chrome_portable:
+            self.profiles = []
+            profiles_dir = ROOT_DIR / "chrome_profiles"
+            if profiles_dir.exists():
+                for item in profiles_dir.iterdir():
+                    if item.is_dir() and not item.name.startswith('.'):
+                        self.profiles.append(str(item))
 
         accounts_file = CONFIG_DIR / "accounts.json"
 
@@ -827,7 +859,7 @@ class UnixVoiceToVideo:
                     if path not in existing_paths:
                         self.profiles.append(path)
             
-            # API keys (thu tu uu tien: Ollama > Gemini > Groq > DeepSeek)
+            # API keys (DeepSeek)
             api = data.get('api_keys', {})
             self.gemini_keys = [k for k in api.get('gemini', [])
                               if k and not k.startswith('THAY_BANG')]
@@ -835,12 +867,6 @@ class UnixVoiceToVideo:
                             if k and not k.startswith('THAY_BANG')]
             self.deepseek_keys = [k for k in api.get('deepseek', [])
                                 if k and not k.startswith('THAY_BANG')]
-
-            # Ollama local config
-            ollama_config = api.get('ollama', {})
-            self.ollama_model = ollama_config.get('model', 'qwen2.5:7b')
-            self.ollama_endpoint = ollama_config.get('endpoint', 'http://localhost:11434')
-            self.ollama_priority = ollama_config.get('priority', False)
             
         except Exception as e:
             print(f"Load config error: {e}")

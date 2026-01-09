@@ -2,7 +2,8 @@
 :: VE3 Tool - Switch to new branch (run once)
 :: Chay file nay MOT LAN de chuyen sang phien ban moi
 
-cd /d "%~dp0"
+:: Use pushd for UNC path support (VMware, RDP shared folders)
+pushd "%~dp0"
 
 echo ========================================
 echo   SWITCH TO NEW BRANCH
@@ -40,4 +41,5 @@ echo ========================================
 echo.
 
 :end
+popd
 pause

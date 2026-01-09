@@ -2,7 +2,7 @@
 VE3 Tool - Prompts Generator Module
 ===================================
 Sử dụng AI API để phân tích SRT và tạo prompts cho ảnh/video.
-Hỗ trợ: DeepSeek (primary), Ollama (local fallback)
+Hỗ trợ: DeepSeek API
 """
 
 import json
@@ -36,38 +36,28 @@ from modules.prompts_loader import (
 
 
 # ============================================================================
-# MULTI AI CLIENT (DeepSeek + Ollama)
+# MULTI AI CLIENT (DeepSeek)
 # ============================================================================
 
 class MultiAIClient:
     """
-    Client hỗ trợ AI providers.
-    Ưu tiên: DeepSeek (primary) > Ollama (local fallback)
-
+    Client hỗ trợ DeepSeek API.
     Tự động test và loại bỏ API keys không hoạt động khi khởi tạo.
     """
 
     DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
-    OLLAMA_URL = "http://localhost:11434/api/generate"  # Local Ollama
 
     def __init__(self, config: dict, auto_filter: bool = True):
         """
         Config format:
         {
             "deepseek_api_keys": ["key1"],
-            "ollama_model": "qwen2.5:7b",  # Optional: local model fallback
         }
 
         auto_filter: Tự động test và loại bỏ API keys không hoạt động
         """
         self.config = config
         self.deepseek_keys = [k for k in config.get("deepseek_api_keys", []) if k and k.strip()]
-
-        # Ollama model (fallback)
-        self.ollama_model = config.get("ollama_model", "qwen2.5:7b")
-        self.ollama_endpoint = config.get("ollama_endpoint", "http://localhost:11434")
-        self.OLLAMA_URL = f"{self.ollama_endpoint}/api/generate"
-        self.ollama_available = False
 
         self.deepseek_index = 0
 
@@ -88,7 +78,6 @@ class MultiAIClient:
 
         results = {
             'deepseek': [],
-            'ollama': False
         }
         results_lock = threading.Lock()
 
@@ -97,16 +86,16 @@ class MultiAIClient:
             result = self._test_deepseek_key(key)
             return ('deepseek', i, key, result)
 
-        def test_ollama() -> Tuple[str, int, str, bool]:
-            result = self._test_ollama()
-            return ('ollama', 0, '', result)
-
         # Prepare all test tasks
         tasks = []
         tasks.extend([('deepseek', i, key) for i, key in enumerate(self.deepseek_keys)])
 
+        if not tasks:
+            print("[API Filter] CANH BAO: Khong co DeepSeek API key!")
+            return
+
         # Use ThreadPoolExecutor for parallel API testing
-        max_workers = min(len(tasks) + 1, 10)
+        max_workers = min(len(tasks), 10)
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
@@ -116,41 +105,27 @@ class MultiAIClient:
                 if provider == 'deepseek':
                     futures.append(executor.submit(test_deepseek, (i, key)))
 
-            # Submit Ollama test
-            futures.append(executor.submit(test_ollama))
-
             # Process results as they complete
             for future in as_completed(futures):
                 try:
                     provider, idx, key, success = future.result()
                     status = "OK" if success else "SKIP"
-
-                    if provider == 'ollama':
-                        results['ollama'] = success
-                        print(f"  Ollama ({self.ollama_model}): {'OK (local)' if success else 'NOT AVAILABLE'}")
-                    else:
-                        print(f"  {provider.capitalize()} key #{idx+1}: {status}")
-                        if success:
-                            with results_lock:
-                                results[provider].append(key)
+                    print(f"  {provider.capitalize()} key #{idx+1}: {status}")
+                    if success:
+                        with results_lock:
+                            results[provider].append(key)
                 except Exception as e:
                     self.logger.error(f"API test error: {e}")
 
         # Update with working keys only
         self.deepseek_keys = results['deepseek']
-        self.ollama_available = results['ollama']
 
-        ollama_str = ", Ollama: OK" if self.ollama_available else ""
-        print(f"[API Filter] Ket qua: {len(self.deepseek_keys)} DeepSeek{ollama_str}")
+        print(f"[API Filter] Ket qua: {len(self.deepseek_keys)} DeepSeek")
 
-        if len(self.deepseek_keys) == 0 and not self.ollama_available:
-            print("[API Filter] CANH BAO: Khong co API nao hoat dong! Cai Ollama de dung offline.")
+        if len(self.deepseek_keys) == 0:
+            print("[API Filter] CANH BAO: Khong co API nao hoat dong!")
         else:
-            # Show priority order
-            if self.deepseek_keys:
-                print(f"[API Filter] Se dung: DeepSeek (uu tien)")
-            elif self.ollama_available:
-                print(f"[API Filter] Se dung: Ollama (local fallback)")
+            print(f"[API Filter] Se dung: DeepSeek")
 
     def _test_deepseek_key(self, key: str) -> bool:
         """Test DeepSeek key với request nhỏ."""
@@ -166,25 +141,6 @@ class MultiAIClient:
         except:
             return False
 
-    def _test_ollama(self) -> bool:
-        """Test Ollama local server."""
-        try:
-            data = {
-                "model": self.ollama_model,
-                "prompt": "Say OK",
-                "stream": False
-            }
-            resp = requests.post(self.OLLAMA_URL, json=data, timeout=30)
-            if resp.status_code != 200:
-                print(f"  [Ollama] Error: HTTP {resp.status_code} - {resp.text[:100]}")
-            return resp.status_code == 200
-        except requests.exceptions.ConnectionError:
-            print(f"  [Ollama] Không kết nối được - chạy 'ollama serve' trước")
-            return False
-        except Exception as e:
-            print(f"  [Ollama] Error: {e}")
-            return False
-
     def generate_content(
         self,
         prompt: str,
@@ -192,15 +148,14 @@ class MultiAIClient:
         max_tokens: int = 8192,
         max_retries: int = 3
     ) -> str:
-        """Generate content using available AI providers.
-        Priority: DeepSeek (primary) > Ollama (local fallback)
+        """Generate content using DeepSeek API.
 
         Chi thu cac API da duoc filter la hoat dong.
         """
 
         last_error = None
 
-        # 1. Try DeepSeek first (primary)
+        # Try DeepSeek
         if self.deepseek_keys:
             for attempt in range(max_retries):
                 try:
@@ -225,29 +180,24 @@ class MultiAIClient:
                             else:
                                 break
                         continue
+                    elif any(kw in error_str for kw in ["prematurely", "connection", "timeout", "network", "reset", "eof", "closed"]):
+                        # Connection error - retry with delay
+                        self.logger.warning(f"DeepSeek connection error ({attempt+1}/{max_retries}): {e}")
+                        if attempt < max_retries - 1:
+                            wait_time = 5 * (attempt + 1)  # 5s, 10s, 15s
+                            self.logger.info(f"Waiting {wait_time}s before retry...")
+                            time.sleep(wait_time)
+                            continue
+                        else:
+                            self.logger.error(f"DeepSeek max retries reached for connection error")
+                            break
                     else:
                         self.logger.error(f"DeepSeek error: {e}")
                         break
 
-        # 2. Fallback to Ollama (local, free, offline)
-        if self.ollama_available:
-            for attempt in range(max_retries):
-                try:
-                    print(f"[Ollama] Dang goi local model ({self.ollama_model})...")
-                    result = self._call_ollama(prompt, temperature, max_tokens)
-                    if result:
-                        print(f"[Ollama] Thanh cong!")
-                        return result
-                except Exception as e:
-                    last_error = e
-                    self.logger.error(f"Ollama error: {e}")
-                    if attempt < max_retries - 1:
-                        time.sleep(2)
-                    continue
-
         if last_error:
             raise last_error
-        raise RuntimeError("Khong co API provider nao hoat dong! Cai Ollama: ollama pull qwen2.5:7b")
+        raise RuntimeError("Khong co DeepSeek API key hoat dong!")
 
     def _call_deepseek(self, prompt: str, temperature: float, max_tokens: int) -> str:
         """Call DeepSeek API."""
@@ -301,41 +251,6 @@ class MultiAIClient:
             print(f"[DeepSeek] Error {resp.status_code}: {error_text}")
             raise requests.RequestException(f"DeepSeek API error {resp.status_code}: {error_text}")
 
-    def _call_ollama(self, prompt: str, temperature: float, max_tokens: int = 16000) -> str:
-        """Call Ollama local API.
-
-        Args:
-            prompt: The prompt to send
-            temperature: Temperature for generation
-            max_tokens: Max output tokens (default 16000 for large responses like Director's Shooting Plan)
-        """
-        data = {
-            "model": self.ollama_model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,  # Higher for Director's Shooting Plan
-                "num_ctx": 32768,  # Context window - qwen2.5:7b supports up to 128k
-            }
-        }
-
-        self.logger.debug(f"Calling Ollama API: model={self.ollama_model}, max_tokens={max_tokens}")
-        print(f"[Ollama] Dang xu ly voi {self.ollama_model}... (co the mat 2-5 phut)")
-
-        # Ollama can be slow, increase timeout
-        resp = requests.post(self.OLLAMA_URL, json=data, timeout=600)
-
-        if resp.status_code == 200:
-            result = resp.json()
-            response_text = result.get("response", "")
-            if not response_text or not response_text.strip():
-                self.logger.warning(f"[Ollama] Returned empty response. Full result: {result}")
-                raise ValueError("Ollama returned empty response")
-            return response_text
-        else:
-            raise requests.RequestException(f"Ollama API error {resp.status_code}: {resp.text[:200]}")
-
     def generate_batch_parallel(
         self,
         prompts: List[str],
@@ -366,8 +281,6 @@ class MultiAIClient:
         if max_workers is None:
             # Use total available API keys as max workers
             total_keys = len(self.deepseek_keys)
-            if self.ollama_available:
-                total_keys += 1  # Ollama can handle 1 at a time
             max_workers = min(self.max_parallel_requests, max(1, total_keys))
 
         print(f"[Parallel] Xu ly {len(prompts)} prompts voi {max_workers} workers...")
@@ -592,7 +505,7 @@ class GeminiClient:
 
 class PromptGenerator:
     """
-    Class tạo prompts từ file SRT sử dụng AI API (DeepSeek + Ollama).
+    Class tạo prompts từ file SRT sử dụng DeepSeek API.
 
     Flow:
     1. Đọc SRT và gom thành scenes
@@ -611,7 +524,7 @@ class PromptGenerator:
         self.settings = settings
         self.logger = get_logger("prompt_generator")
 
-        # Sử dụng MultiAIClient (DeepSeek + Ollama)
+        # Sử dụng MultiAIClient (DeepSeek)
         self.ai_client = MultiAIClient(settings)
 
         # Scene grouping settings
@@ -861,12 +774,12 @@ class PromptGenerator:
         return result
 
     def _generate_content(self, prompt: str, temperature: float = 0.7, max_tokens: int = 8192) -> str:
-        """Generate content using available AI providers (DeepSeek + Ollama)."""
+        """Generate content using DeepSeek API."""
         return self.ai_client.generate_content(prompt, temperature, max_tokens)
 
     def _generate_content_large(self, prompt: str, temperature: float = 0.7, max_tokens: int = 8192) -> str:
         """
-        Generate content dùng DeepSeek (ưu tiên) hoặc Ollama (fallback).
+        Generate content dùng DeepSeek API.
 
         DeepSeek API giới hạn max_tokens=8192. Nếu response bị truncate, return empty
         để trigger retry logic ở layer trên (chunk sẽ được chia nhỏ hơn).
@@ -928,14 +841,21 @@ class PromptGenerator:
             True nếu thành công
         """
         project_dir = Path(project_dir)
-        
-        # Paths
-        srt_path = project_dir / "srt" / f"{code}.srt"
-        excel_path = project_dir / "prompts" / f"{code}_prompts.xlsx"
-        
-        # Kiểm tra SRT file
-        if not srt_path.exists():
-            self.logger.error(f"SRT file không tồn tại: {srt_path}")
+
+        # Paths - support both flat (PROJECTS) and nested structure
+        # Flat: PROJECTS/{code}/{code}.srt
+        # Nested: {project}/srt/{code}.srt
+        srt_path_flat = project_dir / f"{code}.srt"
+        srt_path_nested = project_dir / "srt" / f"{code}.srt"
+
+        if srt_path_flat.exists():
+            srt_path = srt_path_flat
+            excel_path = project_dir / f"{code}_prompts.xlsx"
+        elif srt_path_nested.exists():
+            srt_path = srt_path_nested
+            excel_path = project_dir / "prompts" / f"{code}_prompts.xlsx"
+        else:
+            self.logger.error(f"SRT file không tồn tại: {srt_path_flat} hoặc {srt_path_nested}")
             return False
         
         # Load hoặc tạo Excel
@@ -978,8 +898,26 @@ class PromptGenerator:
         
         self.logger.info(f"Tìm thấy {len(srt_entries)} SRT entries")
 
+        # === ĐỌC TXT FILE (nguồn chính cho story content) ===
+        # TXT chứa nội dung đầy đủ hơn SRT, dùng để đạo diễn hiểu tổng thể
+        txt_path = project_dir / f"{code}.txt"
+        txt_content = ""
+        if txt_path.exists():
+            try:
+                with open(txt_path, 'r', encoding='utf-8') as f:
+                    txt_content = f.read().strip()
+                self.logger.info(f"Đọc TXT file: {txt_path.name} ({len(txt_content)} chars)")
+            except Exception as e:
+                self.logger.warning(f"Không thể đọc TXT: {e}")
+
         # Tạo full story text để phân tích
-        full_story = " ".join([e.text for e in srt_entries])
+        # Ưu tiên TXT (đầy đủ hơn), fallback về SRT text
+        if txt_content:
+            full_story = txt_content
+            self.logger.info("[STORY] Sử dụng TXT làm nguồn chính")
+        else:
+            full_story = " ".join([e.text for e in srt_entries])
+            self.logger.info("[STORY] Không có TXT, dùng SRT text")
 
         # Step 1: Phân tích nhân vật + bối cảnh
         # (Luôn phân tích để có context, nhưng chỉ lưu vào Excel nếu chưa có)
@@ -1213,7 +1151,9 @@ Trả về JSON:"""
                                 else:
                                     srt_start = str(original_scene.get("srt_start", "00:00:00,000"))
                                     srt_end = str(original_scene.get("srt_end", "00:00:00,000"))
-                                    duration = original_scene.get("duration", 5.0)
+                                    # Random duration 5-8 giây cho video clips
+                                    import random
+                                    duration = random.uniform(5.0, 8.0)
 
                                 chars_used = ai_scene.get("characters", ["nvc"])
                                 backup_scenes_data.append({
@@ -2129,8 +2069,7 @@ Trả về JSON:"""
         prompt = prompt_template.format(story_text=story_text[:30000])
 
         try:
-            # Dùng _generate_content_large để ưu tiên Ollama (không giới hạn tokens)
-            # DeepSeek chỉ có 8192 tokens output, không đủ cho analyze_story phức tạp
+            # DeepSeek chỉ có 8192 tokens output
             response = self._generate_content_large(prompt, temperature=0.5, max_tokens=8192)
 
             # Parse JSON từ response
@@ -2350,7 +2289,8 @@ Trả về JSON:"""
         self.logger.info("[Director's Shooting Plan] Đạo diễn đang lên kế hoạch quay...")
         self.logger.info("=" * 50)
 
-        response = self._generate_content_large(prompt, temperature=0.4, max_tokens=8192)
+        # Temperature 0.5 để AI đa dạng hơn với planned_duration (không uniform 5s)
+        response = self._generate_content_large(prompt, temperature=0.5, max_tokens=8192)
 
         self.logger.info(f"[Director's Shooting Plan] Response length: {len(response) if response else 0}")
         if response:
@@ -2557,7 +2497,8 @@ Estimated Shots: {part_info.get('estimated_shots', 5)}
                     import time
                     time.sleep(2)
 
-                response = self._generate_content_large(pass2_prompt, temperature=0.4, max_tokens=8000)
+                # Temperature 0.5 để planned_duration đa dạng hơn
+                response = self._generate_content_large(pass2_prompt, temperature=0.5, max_tokens=8000)
 
                 if response:
                     json_data = self._extract_json(response)
@@ -2793,10 +2734,9 @@ Estimated Shots: {part_info.get('estimated_shots', 5)}
             )
 
             # ============================================================
-            # MULTI-TIER FALLBACK STRATEGY:
+            # FALLBACK STRATEGY:
             # 1. DeepSeek (3 retries)
-            # 2. Ollama với timeout dài (nếu có)
-            # 3. SRT Fallback (cuối cùng - luôn hoạt động)
+            # 2. SRT Fallback (cuối cùng - luôn hoạt động)
             # ============================================================
             chunk_parts = None
 
@@ -2829,35 +2769,10 @@ Estimated Shots: {part_info.get('estimated_shots', 5)}
                 else:
                     self.logger.error(f"[TIER 1] Chunk {chunk_num} attempt {attempt+1} - empty story_parts")
 
-            # === TIER 2: Ollama với timeout dài (nếu DeepSeek fail) ===
+            # === TIER 2: SRT Fallback (luôn hoạt động) ===
             if not chunk_parts:
-                self.logger.warning(f"[TIER 2] DeepSeek failed, trying Ollama for chunk {chunk_num}...")
-
-                if hasattr(self.ai_client, 'ollama_available') and self.ai_client.ollama_available:
-                    try:
-                        self.logger.info(f"[TIER 2] Gọi Ollama {self.ai_client.ollama_model} (timeout 10 phút)...")
-                        # Ollama có timeout mặc định 600s (10 phút) - đủ cho chunk lớn
-                        response = self.ai_client._call_ollama(prompt, temperature=0.4, max_tokens=32000)
-
-                        if response:
-                            self.logger.info(f"[TIER 2] Ollama trả về {len(response)} ký tự")
-                            json_data = self._extract_json(response)
-
-                            if json_data and "shooting_plan" in json_data:
-                                chunk_plan = json_data["shooting_plan"]
-                                chunk_parts = chunk_plan.get("story_parts", [])
-
-                                if chunk_parts:
-                                    self.logger.info(f"[TIER 2] ✅ Chunk {chunk_num} succeeded with Ollama!")
-                    except Exception as e:
-                        self.logger.warning(f"[TIER 2] Ollama failed: {e}")
-                else:
-                    self.logger.warning(f"[TIER 2] Ollama không khả dụng, skip...")
-
-            # === TIER 3: SRT Fallback (luôn hoạt động) ===
-            if not chunk_parts:
-                self.logger.warning(f"[TIER 3] ⚠️ All AI failed for chunk {chunk_num}, using SRT FALLBACK...")
-                self.logger.warning(f"[TIER 3] Creating shots from {len(chunk_entries)} SRT entries...")
+                self.logger.warning(f"[TIER 2] ⚠️ DeepSeek failed for chunk {chunk_num}, using SRT FALLBACK...")
+                self.logger.warning(f"[TIER 2] Creating shots from {len(chunk_entries)} SRT entries...")
                 chunk_parts = self._create_fallback_shots_from_srt(
                     chunk_entries,
                     part_number_offset + 1,
@@ -2865,7 +2780,7 @@ Estimated Shots: {part_info.get('estimated_shots', 5)}
                     global_style
                 )
                 fallback_shots = sum(len(p.get("shots", [])) for p in chunk_parts) if chunk_parts else 0
-                self.logger.info(f"[TIER 3] ✅ FALLBACK created {len(chunk_parts) if chunk_parts else 0} parts, {fallback_shots} shots")
+                self.logger.info(f"[TIER 2] ✅ FALLBACK created {len(chunk_parts) if chunk_parts else 0} parts, {fallback_shots} shots")
 
             # Safety check - nếu vẫn không có chunk_parts, tạo empty list để tránh crash
             if not chunk_parts:
@@ -3180,11 +3095,36 @@ Estimated Shots: {part_info.get('estimated_shots', 5)}
             duration_seconds = (entry.end_time - entry.start_time).total_seconds()
             planned_duration = min(max(duration_seconds, 3), 8)  # 3-8s
 
-            # IMPORTANT: KHÔNG đưa dialogue/narration text vào img_prompt!
+            # IMPORTANT: KHÔNG đưa dialogue/narration text trực tiếp vào img_prompt!
             # Điều này sẽ khiến AI vẽ text lên ảnh.
-            # Thay vào đó, tạo prompt mô tả visual chung.
+            # Thay vào đó, tạo visual description từ text.
             base_style = global_style or 'Cinematic, 4K photorealistic, natural lighting'
-            img_prompt = f"{base_style}, medium shot, dramatic scene, subtle film grain"
+
+            # Tạo visual description từ text (không dùng text trực tiếp)
+            entry_text = entry.text[:100] if entry.text else ""
+            entry_text_lower = entry_text.lower()
+
+            # Detect shot type từ text
+            shot_type = "medium shot"
+            if any(kw in entry_text_lower for kw in ['nói', 'hỏi', 'thì thầm', 'whisper', 'said', 'asked']):
+                shot_type = "close-up shot, emotional expression"
+            elif any(kw in entry_text_lower for kw in ['đi', 'chạy', 'walk', 'run', 'moving']):
+                shot_type = "tracking shot, movement"
+            elif any(kw in entry_text_lower for kw in ['nhìn', 'look', 'gaze', 'stare']):
+                shot_type = "medium shot, contemplative mood"
+
+            # Tạo visual cue từ text (không phải text gốc)
+            visual_cue = "person in scene, natural expression"
+            if any(kw in entry_text_lower for kw in ['buồn', 'sad', 'cry', 'khóc']):
+                visual_cue = "emotional moment, melancholic expression"
+            elif any(kw in entry_text_lower for kw in ['vui', 'happy', 'smile', 'cười']):
+                visual_cue = "joyful moment, warm atmosphere"
+            elif any(kw in entry_text_lower for kw in ['sợ', 'fear', 'afraid', 'lo']):
+                visual_cue = "tense moment, worried expression"
+            elif any(kw in entry_text_lower for kw in ['giận', 'angry', 'mad']):
+                visual_cue = "intense moment, dramatic lighting"
+
+            img_prompt = f"{base_style}, {shot_type}, {visual_cue}, dramatic scene, subtle film grain (reference: nvc.png)"
 
             shot = {
                 "shot_number": shot_num,
@@ -3254,7 +3194,9 @@ Estimated Shots: {part_info.get('estimated_shots', 5)}
         else:
             srt_start = str(scene.get("srt_start", "00:00:00,000"))
             srt_end = str(scene.get("srt_end", "00:00:00,000"))
-            duration = scene.get("duration", 5.0)
+            # Random duration 5-8 giây cho video clips
+            import random
+            duration = random.uniform(5.0, 8.0)
 
         # Simple shot type detection
         shot_type = "Medium shot"
@@ -3412,6 +3354,13 @@ Estimated Shots: {part_info.get('estimated_shots', 5)}
                 # Lấy planned_duration từ đạo diễn (nếu có)
                 # Nếu không có, tính từ srt_range
                 planned_duration = shot.get("planned_duration")
+
+                # DEBUG: Log xem AI có trả về planned_duration không
+                if planned_duration:
+                    self.logger.debug(f"Shot {scene_id}: AI returned planned_duration={planned_duration}")
+                else:
+                    self.logger.warning(f"Shot {scene_id}: AI did NOT return planned_duration, will calculate from timestamps")
+
                 if not planned_duration:
                     # Fallback: tính từ timestamps
                     try:

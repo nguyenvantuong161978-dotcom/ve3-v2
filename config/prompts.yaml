@@ -508,7 +508,7 @@ story_structure_analysis: |
         "key_characters": ["nvc", "nv1"],
         "key_locations": ["loc1_courthouse"],
         "visual_tone": "Dark, dramatic, cold lighting",
-        "estimated_shots": 4
+        "estimated_shots": 25
       }},
       {{
         "part_number": 2,
@@ -521,7 +521,7 @@ story_structure_analysis: |
         "key_characters": ["nvc1", "nv1_young"],
         "key_locations": ["loc2_old_house", "loc3_farm"],
         "visual_tone": "Warm, nostalgic, golden hour",
-        "estimated_shots": 8
+        "estimated_shots": 55
       }}
     ]
   }}
@@ -529,7 +529,7 @@ story_structure_analysis: |
   IMPORTANT:
   - Keep response SHORT (just structure, ~2000 tokens max)
   - time_range MUST match SRT timestamps exactly
-  - estimated_shots: aim for 1 shot per 20-30 seconds of content
+  - estimated_shots = duration_seconds ÷ 6 (each shot ~5-6 seconds)
   - DO NOT include detailed prompts yet (that's Pass 2)
 
 # =============================================================================
@@ -1154,13 +1154,19 @@ directors_shooting_plan: |
 
   1. **🚨 MAXIMUM 8 SECONDS per shot!** (HARD LIMIT - system will REJECT shots > 8s!)
   2. **🚨 MUST SPLIT long SRT segments into multiple shots!**
-     - 15s segment → 3 shots (5s + 5s + 5s)
-     - 30s segment → 5 shots (6s + 6s + 6s + 6s + 6s)
-     - 50s segment → 8 shots (6s + 6s + 6s + 6s + 7s + 6s + 6s + 7s)
+     - 15s segment → 3 shots (7s + 5s + 3s) - VARY the durations!
+     - 30s segment → 5 shots (8s + 4s + 6s + 7s + 5s) - emotional peaks get 7-8s
+     - 50s segment → 8 shots (8s + 3s + 7s + 6s + 8s + 5s + 6s + 7s) - action gets 3-4s
      - NEVER create a single shot for a long segment!
   3. **ADD planned_duration to each shot** (integer 2-8 ONLY, based on content)
   4. **Total shot durations MUST EQUAL SRT segment duration exactly**
-  5. **Duration serves CONTENT** - 2-3s for action, 7-8s for emotion, 4-6s for narrative
+  5. **🎯 Duration serves CONTENT - MUST VARY based on emotional weight:**
+     - **2-3s**: Quick cuts for action, reactions, detail shots
+     - **4-5s**: Normal narrative, transitions
+     - **6-7s**: Important moments, character development
+     - **8s**: Emotional peaks, revelations, dramatic pauses
+     - **❌ WRONG**: All shots 5s (boring, no rhythm!)
+     - **✅ CORRECT**: Mix of 3s, 5s, 7s, 8s (creates visual rhythm!)
   6. VARY camera angles - don't repeat the same shot type consecutively!
   7. Use characters/locations from the provided lists
   8. Children (nvc1) should be DESCRIBED in img_prompt, NOT in reference_files

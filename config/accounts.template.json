@@ -9,12 +9,9 @@
         "  3. Tao prompts tu SRT (can AI key)",
         "  4. Tao anh SONG SONG voi nhieu accounts",
         "",
-        "Thu tu uu tien AI: DeepSeek > Gemini > Groq > Ollama (local)",
-        "",
         "DeepSeek API: https://platform.deepseek.com/",
         "Groq API FREE: https://console.groq.com/keys",
-        "Gemini API: https://makersuite.google.com/app/apikey",
-        "Ollama (local): https://ollama.ai"
+        "Gemini API: https://makersuite.google.com/app/apikey"
     ],
 
     "chrome_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
@@ -33,13 +30,7 @@
             "THAY_BANG_GROQ_KEY_1",
             "THAY_BANG_GROQ_KEY_2"
         ],
-        "gemini": [],
-
-        "ollama": {
-            "_comment": "Ollama - LOCAL AI (nhanh, 32k context)",
-            "model": "qwen2.5:7b",
-            "endpoint": "http://localhost:11434"
-        }
+        "gemini": []
     },
 
     "settings": {

@@ -65,7 +65,7 @@ class VoiceToSrt:
     
     def __init__(
         self,
-        model_name: str = "base",
+        model_name: str = "medium",
         language: Optional[str] = None,
         device: Optional[str] = None
     ):
@@ -100,9 +100,10 @@ class VoiceToSrt:
         """Load Whisper model (lazy loading)."""
         if self._model is not None:
             return
-        
+
         self.logger.info(f"Loading Whisper model: {self.model_name}")
-        
+        print(f"  ⏳ Loading Whisper model '{self.model_name}'... (this may take a moment)")
+
         if self.use_timestamped:
             import whisper_timestamped
             self._model = whisper_timestamped.load_model(
@@ -115,7 +116,8 @@ class VoiceToSrt:
                 self.model_name,
                 device=self.device
             )
-        
+
+        print(f"  ✅ Whisper model loaded!")
         self.logger.info("Model loaded successfully")
     
     def transcribe(
@@ -151,9 +153,10 @@ class VoiceToSrt:
         
         # Load model
         self._load_model()
-        
+
         self.logger.info(f"Transcribing: {input_audio_path}")
-        
+        print(f"  ⏳ Transcribing audio... (may take 1-2 minutes for long files)")
+
         # Transcribe
         try:
             if self.use_timestamped:
@@ -313,7 +316,7 @@ class VoiceToSrt:
 def convert_voice_to_srt(
     input_audio_path: Path,
     output_srt_path: Path,
-    model_name: str = "base",
+    model_name: str = "medium",
     language: Optional[str] = None
 ) -> Dict[str, Any]:
     """

@@ -1012,6 +1012,9 @@ class PromptWorkbook:
             total_planned = 0
             plans_done = 0
 
+        # Count invalid prompts
+        invalid_prompts = self.detect_invalid_prompts()
+
         return {
             "total_characters": len(characters),
             "total_scenes": len(scenes),
@@ -1024,4 +1027,152 @@ class PromptWorkbook:
             "total_planned": total_planned,
             "plans_done": plans_done,
             "scenes_missing": total_planned - len(scenes) if total_planned > 0 else 0,
+            # Invalid prompts
+            "invalid_prompts": len(invalid_prompts),
+            "invalid_scene_ids": [s.scene_id for s in invalid_prompts],
         }
+
+    def detect_invalid_prompts(self) -> List:
+        """
+        Detect scenes có prompts bị lỗi (chỉ có template, không có nội dung).
+
+        Returns:
+            List các Scene objects có prompts invalid
+        """
+        # Template patterns - prompts chỉ có style mà không có nội dung cụ thể
+        TEMPLATE_PATTERNS = [
+            "cinematic, 4k photorealistic",
+            "shot on arri alexa",
+            "medium shot, dramatic scene",
+            "subtle film grain",
+            "natural lighting with dramatic shadows",
+        ]
+
+        # Minimum meaningful content length (sau khi loại bỏ template text)
+        MIN_CONTENT_LENGTH = 50
+
+        invalid_scenes = []
+        scenes = self.get_scenes()
+
+        for scene in scenes:
+            prompt = (scene.img_prompt or "").lower().strip()
+
+            if not prompt:
+                invalid_scenes.append(scene)
+                continue
+
+            # Loại bỏ template text để kiểm tra nội dung thực
+            content = prompt
+            for pattern in TEMPLATE_PATTERNS:
+                content = content.replace(pattern.lower(), "")
+
+            # Loại bỏ các ký tự thừa
+            content = content.replace(",", " ").replace(".", " ").strip()
+            content = " ".join(content.split())  # Normalize whitespace
+
+            # Kiểm tra nếu prompt chỉ có template (không đủ nội dung)
+            if len(content) < MIN_CONTENT_LENGTH:
+                invalid_scenes.append(scene)
+
+        return invalid_scenes
+
+    def fix_invalid_prompts_from_backup(self) -> Dict[str, int]:
+        """
+        Tự động fix prompts bị lỗi bằng cách lấy từ director_plan backup.
+        Match theo timestamp (srt_start) hoặc scene_id.
+
+        Returns:
+            Dict với số lượng fixed, skipped, no_backup
+        """
+        result = {"fixed": 0, "skipped": 0, "no_backup": 0}
+
+        # Get invalid scenes và backup plans
+        invalid_scenes = self.detect_invalid_prompts()
+        if not invalid_scenes:
+            return result
+
+        try:
+            backup_plans = self.get_director_plan()
+        except:
+            backup_plans = []
+
+        if not backup_plans:
+            result["no_backup"] = len(invalid_scenes)
+            return result
+
+        # Build lookup dicts cho backup
+        # 1. By scene_id/plan_id
+        backup_by_id = {p["plan_id"]: p for p in backup_plans}
+        # 2. By timestamp
+        backup_by_time = {}
+        for p in backup_plans:
+            ts = p.get("srt_start", "")
+            if ts:
+                backup_by_time[ts] = p
+
+        for scene in invalid_scenes:
+            backup = None
+
+            # Strategy 1: Match by scene_id
+            if scene.scene_id in backup_by_id:
+                backup = backup_by_id[scene.scene_id]
+
+            # Strategy 2: Match by timestamp
+            if not backup and scene.srt_start:
+                backup = backup_by_time.get(scene.srt_start)
+
+            # Strategy 3: Fuzzy timestamp match (within 2 seconds)
+            if not backup and scene.srt_start:
+                scene_seconds = self._timestamp_to_seconds(scene.srt_start)
+                best_match = None
+                best_diff = float('inf')
+
+                for p in backup_plans:
+                    plan_seconds = self._timestamp_to_seconds(p.get("srt_start", ""))
+                    diff = abs(scene_seconds - plan_seconds)
+                    if diff < 2 and diff < best_diff:  # Within 2 seconds
+                        best_diff = diff
+                        best_match = p
+
+                backup = best_match
+
+            if backup and backup.get("img_prompt"):
+                backup_prompt = backup["img_prompt"]
+
+                # Validate backup prompt is not also template-only
+                if len(backup_prompt) > 80:  # Reasonable prompt length
+                    # Update scene with backup data
+                    self.update_scene(
+                        scene.scene_id,
+                        img_prompt=backup_prompt,
+                        characters_used=backup.get("characters_used", ""),
+                        location_used=backup.get("location_used", ""),
+                        reference_files=backup.get("reference_files", "")
+                    )
+                    result["fixed"] += 1
+                    self.logger.info(f"Scene {scene.scene_id}: Fixed from backup")
+                else:
+                    result["skipped"] += 1
+            else:
+                result["no_backup"] += 1
+
+        self.save()
+        return result
+
+    def _timestamp_to_seconds(self, ts: str) -> float:
+        """Convert SRT timestamp (HH:MM:SS,mmm) to seconds."""
+        if not ts:
+            return 0
+        try:
+            ts = ts.replace(",", ".")
+            parts = ts.split(":")
+            if len(parts) == 3:
+                h, m, s = parts
+                return int(h) * 3600 + int(m) * 60 + float(s)
+            elif len(parts) == 2:
+                m, s = parts
+                return int(m) * 60 + float(s)
+            else:
+                return float(ts)
+        except:
+            return 0

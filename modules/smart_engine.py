@@ -107,7 +107,7 @@ class SmartEngine:
     # Chi refresh khi API tra loi 401 (authentication error)
     # Dieu nay toi uu hon vi token thuong valid lau hon 50 phut
 
-    def __init__(self, config_path: str = None, assigned_profile: str = None, worker_id: int = 0):
+    def __init__(self, config_path: str = None, assigned_profile: str = None, worker_id: int = 0, total_workers: int = 1):
         """
         Initialize SmartEngine.
 
@@ -115,6 +115,7 @@ class SmartEngine:
             config_path: Path to accounts.json config file
             assigned_profile: Specific Chrome profile name to use (for parallel processing)
             worker_id: Worker ID for parallel processing (affects proxy selection, Chrome port)
+            total_workers: Total number of workers (for window layout: 1=full, 2=split, ...)
         """
         # Support VE3_CONFIG_DIR environment variable
         if config_path:
@@ -130,12 +131,14 @@ class SmartEngine:
         self.tokens_path = self.config_path.parent / "tokens.json"
 
         self.chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        self.chrome_portable = ""  # Chrome portable đã đăng nhập sẵn
 
         # Assigned profile for parallel processing
         self.assigned_profile = assigned_profile
 
         # Worker ID for parallel processing (proxy, Chrome port)
         self.worker_id = worker_id
+        self.total_workers = total_workers  # Tổng số workers (để chia màn hình)
 
         # Resources
         self.profiles: List[Resource] = []
@@ -143,11 +146,6 @@ class SmartEngine:
         self.deepseek_keys: List[Resource] = []
         self.groq_keys: List[Resource] = []
         self.gemini_keys: List[Resource] = []
-
-        # Ollama model (fallback when all APIs fail)
-        # Default: qwen2.5:7b (fast, 32k context)
-        self.ollama_model: str = "qwen2.5:7b"
-        self.ollama_endpoint: str = "http://localhost:11434"
 
         # Settings - TOI UU TOC DO (PARALLEL OPTIMIZED)
         self.parallel = 20  # Tang len 20 - dung TAT CA tokens co san
@@ -226,6 +224,17 @@ class SmartEngine:
                 with open(settings_path, 'r', encoding='utf-8') as f:
                     settings = yaml.safe_load(f) or {}
                 self.verbose_log = settings.get('verbose_log', False)
+
+                # Chrome portable - ưu tiên cao nhất (KHÔNG check exists)
+                chrome_portable = settings.get('chrome_portable', '')
+                if chrome_portable:
+                    self.chrome_portable = chrome_portable
+                    self.log(f"[Config] Chrome portable: {chrome_portable}", "INFO")
+
+                # Chrome path fallback
+                chrome_path = settings.get('chrome_path', '')
+                if chrome_path and Path(chrome_path).exists():
+                    self.chrome_path = chrome_path
             except:
                 pass
 
@@ -289,18 +298,6 @@ class SmartEngine:
             for k in api.get('gemini', []):
                 if k and not k.startswith('THAY_BANG') and not k.startswith('AIzaSy_YOUR'):
                     self.gemini_keys.append(Resource(type='gemini', value=k))
-
-            # Ollama local (fallback)
-            # Đọc từ nested api.ollama hoặc top-level ollama_model
-            ollama_cfg = api.get('ollama', {})
-            if ollama_cfg:
-                self.ollama_model = ollama_cfg.get('model', 'qwen2.5:7b')
-                self.ollama_endpoint = ollama_cfg.get('endpoint', 'http://localhost:11434')
-            # Fallback: đọc từ top-level (settings.yaml mới)
-            if data.get('ollama_model'):
-                self.ollama_model = data.get('ollama_model')
-            if data.get('ollama_endpoint'):
-                self.ollama_endpoint = data.get('ollama_endpoint')
 
             # Settings
             settings = data.get('settings', {})
@@ -851,8 +848,13 @@ class SmartEngine:
         self.log("Transcribe voice -> SRT...")
 
         try:
+            # Read whisper settings from config
+            whisper_model = self.config.get('whisper_model', 'medium')
+            whisper_lang = self.config.get('whisper_language', 'en')
+            self.log(f"Whisper model: {whisper_model}, language: {whisper_lang}")
+
             from modules.voice_to_srt import VoiceToSrt
-            conv = VoiceToSrt(model_name="base", language="vi")
+            conv = VoiceToSrt(model_name=whisper_model, language=whisper_lang)
             conv.transcribe(voice_path, srt_path)
             self.log(f"OK: {srt_path.name}", "OK")
             return True
@@ -897,18 +899,11 @@ class SmartEngine:
             with open(cfg_file, "r", encoding="utf-8") as f:
                 cfg = yaml.safe_load(f) or {}
 
-        # Add API keys (thu tu uu tien: Gemini > Groq > DeepSeek > Ollama)
+        # Add API keys (DeepSeek)
         cfg['gemini_api_keys'] = [k.value for k in self.gemini_keys if k.status != 'exhausted']
         cfg['groq_api_keys'] = [k.value for k in self.groq_keys if k.status != 'exhausted']
         cfg['deepseek_api_keys'] = [k.value for k in self.deepseek_keys if k.status != 'exhausted']
         cfg['preferred_provider'] = 'gemini' if self.gemini_keys else ('groq' if self.groq_keys else 'deepseek')
-
-        # Ollama local model (fallback khi tat ca API fail)
-        # Ưu tiên từ settings.yaml, fallback từ self (accounts.json)
-        if not cfg.get('ollama_model'):
-            cfg['ollama_model'] = self.ollama_model
-        if not cfg.get('ollama_endpoint'):
-            cfg['ollama_endpoint'] = self.ollama_endpoint
 
         # Retry with different keys
         for attempt in range(self.max_retries):
@@ -1602,8 +1597,10 @@ class SmartEngine:
         """
         self.log("=== TAO ANH BANG API MODE ===")
 
-        # Tim Excel file
-        excel_files = list((proj_dir / "prompts").glob("*_prompts.xlsx"))
+        # Tim Excel file (flat hoặc nested structure)
+        excel_files = list(proj_dir.glob("*_prompts.xlsx"))  # Flat first
+        if not excel_files:
+            excel_files = list((proj_dir / "prompts").glob("*_prompts.xlsx"))  # Nested fallback
         if not excel_files:
             self.log("Khong tim thay file Excel!", "ERROR")
             return {"success": 0, "failed": len(prompts)}
@@ -1681,7 +1678,8 @@ class SmartEngine:
                 headless=headless,
                 verbose=True,
                 config_path=str(settings_path),
-                worker_id=self.worker_id  # For parallel processing
+                worker_id=self.worker_id,  # For parallel processing
+                total_workers=self.total_workers  # For window layout
             )
 
             # === QUAN TRỌNG: Load project_id từ Excel khi chạy lại (RESUME MODE) ===
@@ -1691,9 +1689,11 @@ class SmartEngine:
             if excel_project_id:
                 self.log(f"  -> Resume: Tìm thấy project_id trong Excel: {excel_project_id[:8]}...")
 
-            # Fallback: đọc từ cache nếu Excel không có
+            # Fallback: đọc từ cache nếu Excel không có (flat hoặc nested)
             cached_project_id = None
-            cache_path = proj_dir / "prompts" / ".media_cache.json"
+            cache_path = proj_dir / ".media_cache.json"  # Flat first
+            if not cache_path.exists():
+                cache_path = proj_dir / "prompts" / ".media_cache.json"  # Nested fallback
             if not excel_project_id and cache_path.exists():
                 try:
                     with open(cache_path, 'r', encoding='utf-8') as f:
@@ -1800,8 +1800,10 @@ class SmartEngine:
         except:
             pass
 
-        # Tim Excel file
-        excel_files = list((proj_dir / "prompts").glob("*_prompts.xlsx"))
+        # Tim Excel file (flat hoặc nested structure)
+        excel_files = list(proj_dir.glob("*_prompts.xlsx"))  # Flat first
+        if not excel_files:
+            excel_files = list((proj_dir / "prompts").glob("*_prompts.xlsx"))  # Nested fallback
         if not excel_files:
             self.log("Khong tim thay file Excel!", "ERROR")
             return {"success": 0, "failed": len(prompts)}
@@ -1928,7 +1930,8 @@ class SmartEngine:
                     profile_name=profile_name,
                     headless=headless,
                     verbose=True,
-                    worker_id=self.worker_id  # For parallel processing
+                    worker_id=self.worker_id,  # For parallel processing
+                    total_workers=self.total_workers  # For window layout
                 )
                 self._browser_generator = generator
                 # Restore project_id tu generator cu
@@ -2123,7 +2126,8 @@ class SmartEngine:
         self,
         input_path: str,
         output_dir: str = None,
-        callback: Callable = None
+        callback: Callable = None,
+        skip_compose: bool = False
     ) -> Dict:
         """
         BROWSER MODE PIPELINE - Tao anh bang JS automation.
@@ -2150,18 +2154,42 @@ class SmartEngine:
         ext = inp.suffix.lower()
         name = inp.stem
 
+        # Fix: Nếu file là XXX_prompts.xlsx thì tên thật là XXX
+        if name.endswith('_prompts'):
+            name = name[:-8]  # Bỏ "_prompts"
+
         # Setup output dir
         if output_dir:
             proj_dir = Path(output_dir)
+        elif ext == '.xlsx' and inp.parent.name == name:
+            # Excel đang ở trong đúng project folder rồi (flat structure)
+            # VD: PROJECTS/AR47-0028/AR47-0028_prompts.xlsx → dùng PROJECTS/AR47-0028
+            proj_dir = inp.parent
         else:
             proj_dir = Path("PROJECTS") / name
 
         proj_dir.mkdir(parents=True, exist_ok=True)
-        for d in ["srt", "prompts", "nv", "img"]:
-            (proj_dir / d).mkdir(exist_ok=True)
 
-        excel_path = proj_dir / "prompts" / f"{name}_prompts.xlsx"
-        srt_path = proj_dir / "srt" / f"{name}.srt"
+        # Check flat vs nested structure
+        # Flat: PROJECTS/{name}/{name}.srt, {name}_prompts.xlsx (from master server)
+        # Nested: PROJECTS/{name}/srt/{name}.srt, prompts/{name}_prompts.xlsx (old)
+        srt_path_flat = proj_dir / f"{name}.srt"
+        excel_path_flat = proj_dir / f"{name}_prompts.xlsx"
+
+        if srt_path_flat.exists() or excel_path_flat.exists():
+            # Use flat structure (from master server)
+            self.use_flat_structure = True
+            srt_path = srt_path_flat
+            excel_path = excel_path_flat
+            # Still create img folder for outputs
+            (proj_dir / "img").mkdir(exist_ok=True)
+        else:
+            # Use nested structure (default)
+            self.use_flat_structure = False
+            for d in ["srt", "prompts", "nv", "img"]:
+                (proj_dir / d).mkdir(exist_ok=True)
+            excel_path = proj_dir / "prompts" / f"{name}_prompts.xlsx"
+            srt_path = proj_dir / "srt" / f"{name}.srt"
 
         # Read generation mode from settings
         generation_mode = 'api'  # Default
@@ -2403,17 +2431,20 @@ class SmartEngine:
         else:
             self.log(f"  Tổng: {len(all_prompts)} prompts")
 
-        # === CHỈ START VIDEO WORKER KHI TẤT CẢ ẢNH ĐÃ XONG ===
-        # Nếu còn ảnh → browser_flow_generator sẽ mở Chrome và dùng I2V cùng session
-        # Nếu hết ảnh → VIDEO worker mở Chrome riêng để tạo video
+        # === KHI TẤT CẢ ẢNH ĐÃ XONG: TẠO VIDEO BẰNG BROWSER_FLOW_GENERATOR ===
+        # Giống hệt như tạo ảnh - mở Chrome, chuyển mode, tạo video
         if not prompts:
-            self.log("[VIDEO] Tất cả ảnh đã xong - start VIDEO worker")
-            self._start_video_worker(proj_dir)
+            self.log("[VIDEO] Tất cả ảnh đã xong - tạo video (giống flow ảnh)...")
+            self._create_videos_like_images(proj_dir, excel_path)
 
         # === LOAD CACHED MEDIA_NAMES ===
         # Dùng để tạo video từ ảnh mà không cần upload lại
         media_cache = {}
-        cache_path = proj_dir / "prompts" / ".media_cache.json"
+        # Cache path: flat structure = proj_dir/.media_cache.json, nested = proj_dir/prompts/.media_cache.json
+        if getattr(self, 'use_flat_structure', False):
+            cache_path = proj_dir / ".media_cache.json"
+        else:
+            cache_path = proj_dir / "prompts" / ".media_cache.json"
         if cache_path.exists():
             try:
                 with open(cache_path, 'r', encoding='utf-8') as f:
@@ -2729,16 +2760,20 @@ class SmartEngine:
         self._close_browser()
 
         # === 11. COMPOSE VIDEO (sau khi retry xong) ===
-        self.log("[STEP 11] Ghep video...")
-        if results.get("failed", 0) > 0:
-            self.log(f"  CANH BAO: {results['failed']} anh fail, nhung van ghep video voi anh co san!", "WARN")
-
-        video_path = self._compose_video(proj_dir, excel_path, name)
-        if video_path:
-            self.log(f"  -> Video: {video_path.name}", "OK")
-            results["video"] = str(video_path)
+        if skip_compose:
+            self.log("[STEP 11] Skip ghep video (worker mode)")
+            self.log(f"  ✅ Images/Videos created: {results.get('success', 0)}")
         else:
-            self.log("  Video composer khong kha dung hoac thieu file", "WARN")
+            self.log("[STEP 11] Ghep video...")
+            if results.get("failed", 0) > 0:
+                self.log(f"  CANH BAO: {results['failed']} anh fail, nhung van ghep video voi anh co san!", "WARN")
+
+            video_path = self._compose_video(proj_dir, excel_path, name)
+            if video_path:
+                self.log(f"  -> Video: {video_path.name}", "OK")
+                results["video"] = str(video_path)
+            else:
+                self.log("  Video composer khong kha dung hoac thieu file", "WARN")
 
         return results
 
@@ -2829,7 +2864,8 @@ class SmartEngine:
                         project_path=str(proj_dir),
                         verbose=True,
                         config_path=str(settings_path),
-                        worker_id=self.worker_id  # For parallel processing
+                        worker_id=self.worker_id,  # For parallel processing
+                        total_workers=self.total_workers  # For window layout
                     )
                     # Set config values
                     generator.config['flow_bearer_token'] = bearer_token
@@ -2911,15 +2947,17 @@ class SmartEngine:
             wb = PromptWorkbook(excel_path)
             wb.load_or_create()
 
-            # Export TXT - danh sach phan canh
+            # Export TXT - danh sach phan canh (nếu method tồn tại)
             txt_path = proj_dir / f"{name}_scenes.txt"
-            if wb.export_scenes_txt(txt_path):
-                self.log(f"  -> TXT: {txt_path.name}", "OK")
+            if hasattr(wb, 'export_scenes_txt'):
+                if wb.export_scenes_txt(txt_path):
+                    self.log(f"  -> TXT: {txt_path.name}", "OK")
 
-            # Export SRT - thoi gian phan canh
+            # Export SRT - thoi gian phan canh (nếu method tồn tại)
             srt_output_path = proj_dir / f"{name}_scenes.srt"
-            if wb.export_scenes_srt(srt_output_path):
-                self.log(f"  -> SRT: {srt_output_path.name}", "OK")
+            if hasattr(wb, 'export_scenes_srt'):
+                if wb.export_scenes_srt(srt_output_path):
+                    self.log(f"  -> SRT: {srt_output_path.name}", "OK")
 
         except Exception as e:
             self.log(f"  Export error: {e}", "WARN")
@@ -3111,25 +3149,46 @@ class SmartEngine:
                 if row[id_col] is None:
                     continue
 
-                scene_id = str(row[id_col]).strip()
+                scene_id_raw = str(row[id_col]).strip()
 
-                # Chỉ lấy scenes có số (1, 2, 3...), bỏ qua nv1, loc1
-                if not scene_id.isdigit():
+                # Normalize scene_id: "1.0" -> "1", "2.0" -> "2"
+                # Cũng chấp nhận "1", "2", "3"...
+                try:
+                    # Try to convert to float then int to handle "1.0" -> 1
+                    scene_id_int = int(float(scene_id_raw))
+                    scene_id = str(scene_id_int)
+                except ValueError:
+                    # Không phải số (có thể là "nv1", "loc1") -> bỏ qua
                     continue
 
-                # Ưu tiên video clip (.mp4), fallback to image (.png)
-                video_path = img_dir / f"{scene_id}.mp4"
-                img_path = img_dir / f"{scene_id}.png"
+                # Tìm media file - thử nhiều format: "1.png", "1.0.png"
+                media_path = None
+                is_video = False
 
-                if video_path.exists():
-                    media_path = video_path
-                    is_video = True
-                    video_count += 1
-                elif img_path.exists():
-                    media_path = img_path
-                    is_video = False
-                    image_count += 1
-                else:
+                # Thử các format khác nhau:
+                # - scene_id: "1" (từ Excel integer)
+                # - scene_id.0: "1.0" (ảnh có thể được lưu với .0)
+                # - scene_id_raw: giữ nguyên từ Excel
+                possible_ids = [scene_id, f"{scene_id}.0", scene_id_raw]
+                # Loại bỏ duplicate
+                possible_ids = list(dict.fromkeys(possible_ids))
+
+                for sid in possible_ids:
+                    video_path = img_dir / f"{sid}.mp4"
+                    img_path = img_dir / f"{sid}.png"
+
+                    if video_path.exists():
+                        media_path = video_path
+                        is_video = True
+                        video_count += 1
+                        break
+                    elif img_path.exists():
+                        media_path = img_path
+                        is_video = False
+                        image_count += 1
+                        break
+
+                if not media_path:
                     continue
 
                 # Parse start_time
@@ -3706,10 +3765,14 @@ class SmartEngine:
                     ref_col = i
 
                 # Tim cot characters_used va location_used (de build reference_files neu can)
-                if h_lower == 'characters_used':
+                # Flexible matching: characters_used, character_used, chars_used, etc.
+                if chars_col is None and ('character' in h_lower or 'chars' in h_lower) and 'used' in h_lower:
                     chars_col = i
-                if h_lower == 'location_used':
+                if loc_col is None and ('location' in h_lower or 'loc' in h_lower) and 'used' in h_lower:
                     loc_col = i
+
+            # Debug: Log các cột đã tìm thấy
+            self.log(f"  [COLS] chars_col={chars_col}, loc_col={loc_col}, ref_col={ref_col}")
 
             # Neu khong tim thay, thu cot dau = ID, tim cot co "prompt"
             if id_col is None and len(headers) > 0 and headers[0]:
@@ -3754,34 +3817,44 @@ class SmartEngine:
                 if ref_col is not None and ref_col < len(row):
                     reference_files = row[ref_col] or ""
 
+                # Check if reference_files is empty (string "[]" or "{}" or just whitespace)
+                ref_is_empty = (
+                    not reference_files or
+                    str(reference_files).strip() in ('', '[]', '{}', 'null', 'None')
+                )
+
                 # === FALLBACK: Build reference_files tu characters_used + location_used ===
                 # Neu reference_files rong, tao tu cac cot khac (dao dien da set)
-                if not reference_files:
+                if ref_is_empty:
                     ref_list = []
 
                     # Lay characters_used
                     if chars_col is not None and chars_col < len(row):
                         chars_val = row[chars_col]
                         if chars_val:
+                            self.log(f"  [DEBUG] Scene {pid_str}: characters_used RAW = '{chars_val}'")
                             try:
                                 chars = json.loads(str(chars_val)) if str(chars_val).startswith('[') else [c.strip() for c in str(chars_val).split(',') if c.strip()]
+                                self.log(f"  [DEBUG] Scene {pid_str}: characters parsed = {chars}")
                                 for c in chars:
                                     c_id = c.replace('.png', '').strip()
                                     if c_id and c_id not in ref_list:
                                         ref_list.append(f"{c_id}.png")
-                            except:
-                                pass
+                            except Exception as e:
+                                self.log(f"  [DEBUG] Scene {pid_str}: PARSE ERROR = {e}")
 
                     # Lay location_used
                     if loc_col is not None and loc_col < len(row):
                         loc_val = row[loc_col]
                         if loc_val:
+                            self.log(f"  [DEBUG] Scene {pid_str}: location_used RAW = '{loc_val}'")
                             loc_id = str(loc_val).replace('.png', '').strip()
                             if loc_id and f"{loc_id}.png" not in ref_list:
                                 ref_list.append(f"{loc_id}.png")
 
                     if ref_list:
                         reference_files = json.dumps(ref_list)
+                        self.log(f"  [DEBUG] Scene {pid_str}: FINAL reference_files = {reference_files}")
 
                 # Xac dinh output folder
                 # Characters (nv*) and Locations (loc*) -> nv/ folder
@@ -3872,7 +3945,9 @@ class SmartEngine:
 
                 # 3. FALLBACK: Token từ project cache (.media_cache.json)
                 if proj_dir:
-                    cache_path = proj_dir / "prompts" / ".media_cache.json"
+                    cache_path = proj_dir / ".media_cache.json"  # Flat first
+                    if not cache_path.exists():
+                        cache_path = proj_dir / "prompts" / ".media_cache.json"  # Nested fallback
                     if cache_path.exists():
                         try:
                             with open(cache_path, 'r', encoding='utf-8') as f:
@@ -3942,6 +4017,44 @@ class SmartEngine:
 
         return False
 
+    def _create_videos_like_images(self, proj_dir: Path, excel_path: Path = None):
+        """
+        Tạo video Y NGUYÊN như tạo ảnh - gọi generate_from_prompts_auto.
+        Chrome mở → Vào project URL → Chạy I2V (trong cùng flow với ảnh).
+        """
+        try:
+            import yaml
+            settings_path = self.config_dir / "settings.yaml"
+
+            # Import và tạo BrowserFlowGenerator (giống tạo ảnh)
+            from modules.browser_flow_generator import BrowserFlowGenerator
+
+            self.log("[VIDEO] Gọi generate_from_prompts_auto (Y NGUYÊN như tạo ảnh)...")
+
+            generator = BrowserFlowGenerator(
+                project_path=str(proj_dir),
+                profile_name="default",
+                headless=False,  # Hiển thị Chrome
+                verbose=True,
+                config_path=str(settings_path),
+                worker_id=self.worker_id,
+                total_workers=self.total_workers  # For window layout
+            )
+
+            # Gọi generate_from_prompts_auto với prompts=[]
+            # Flow sẽ: Mở Chrome → Vào project URL → Skip ảnh (không có) → Chạy I2V
+            result = generator.generate_from_prompts_auto(
+                prompts=[],  # Không có ảnh mới
+                excel_path=excel_path
+            )
+
+            self.log(f"[VIDEO] Kết quả: {result}")
+
+        except Exception as e:
+            self.log(f"[VIDEO] Error: {e}", "ERROR")
+            import traceback
+            traceback.print_exc()
+
     def _start_video_worker(self, proj_dir: Path):
         """Start video generation worker thread."""
         if self._video_worker_running:
@@ -4005,12 +4118,27 @@ class SmartEngine:
             self.log("[VIDEO] Chưa có token - thử lấy token mới bằng DrissionPage...")
             try:
                 from modules.drission_flow_api import DrissionFlowAPI
-                ws_cfg = self.config.get('webshare_proxy', {})
+
+                # Load webshare config từ settings.yaml
+                ws_cfg = {}
+                try:
+                    import yaml
+                    settings_path = self.config_dir / "settings.yaml"
+                    if settings_path.exists():
+                        with open(settings_path, 'r', encoding='utf-8') as f:
+                            settings = yaml.safe_load(f) or {}
+                            ws_cfg = settings.get('webshare_proxy', {})
+                except:
+                    pass
+
                 drission_api = DrissionFlowAPI(
-                    headless=True,
+                    headless=True,  # Token extraction - chạy ẩn
                     verbose=False,
-                    webshare_enabled=ws_cfg.get('enabled', True),
-                    machine_id=ws_cfg.get('machine_id', 1)
+                    webshare_enabled=ws_cfg.get('enabled', False),
+                    worker_id=self.worker_id,
+                    total_workers=self.total_workers,
+                    machine_id=ws_cfg.get('machine_id', 1),
+                    chrome_portable=self.chrome_portable
                 )
                 if drission_api.setup():
                     # Lấy token bằng cách trigger một request đơn giản
@@ -4022,8 +4150,10 @@ class SmartEngine:
                         self._video_settings['project_id'] = drission_api.project_id
                         self.log(f"[VIDEO] Lấy được token mới: {drission_api.project_id[:8]}...")
 
-                        # Lưu vào cache để dùng lại
-                        cache_path = proj_dir / "prompts" / ".media_cache.json"
+                        # Lưu vào cache để dùng lại (flat hoặc nested)
+                        cache_path = proj_dir / ".media_cache.json"  # Flat first
+                        if not cache_path.exists() and (proj_dir / "prompts").exists():
+                            cache_path = proj_dir / "prompts" / ".media_cache.json"  # Nested if prompts folder exists
                         try:
                             cache_data = {}
                             if cache_path.exists():
@@ -4212,8 +4342,10 @@ class SmartEngine:
                     log_callback=lambda msg, lvl="INFO": self.log(f"[VIDEO] {msg}", lvl),
                     webshare_enabled=use_webshare,
                     worker_id=getattr(self, 'worker_id', 0),  # Giống image gen
+                    total_workers=getattr(self, 'total_workers', 1),  # Chia màn hình
                     headless=headless_mode,
-                    machine_id=machine_id  # Máy số mấy - tránh trùng session
+                    machine_id=machine_id,  # Máy số mấy - tránh trùng session
+                    chrome_portable=self.chrome_portable
                 )
                 own_drission = True
 
@@ -4266,46 +4398,32 @@ class SmartEngine:
                         self.log(f"[VIDEO] Retry {retry}/{MAX_VIDEO_RETRIES}: {image_id}")
                         time.sleep(5 * retry)  # Exponential backoff
 
-                    # Map model name sang API model key
-                    model_setting = self._video_settings.get('model', 'fast')
-                    VIDEO_MODEL_MAP = {
-                        'fast': 'veo_3_0_r2v_fast_ultra',
-                        'quality': 'veo_3_0_r2v',
-                        # Cho phép dùng trực tiếp model key nếu đã đúng format
-                        'veo_3_0_r2v_fast_ultra': 'veo_3_0_r2v_fast_ultra',
-                        'veo_3_0_r2v': 'veo_3_0_r2v',
-                    }
-                    video_model = VIDEO_MODEL_MAP.get(model_setting, 'veo_3_0_r2v_fast_ultra')
-
-                    # Gọi DrissionFlowAPI.generate_video()
-                    ok, video_url, error = drission_api.generate_video(
+                    # Gọi generate_video_force_mode() - FORCE MODE
+                    # Không chuyển mode, ở nguyên "Tạo hình ảnh", Interceptor convert sang video
+                    video_path = img_dir / f"{image_id}.mp4"
+                    ok, result_path, error = drission_api.generate_video_force_mode(
                         media_id=media_name,
                         prompt=video_prompt,
-                        video_model=video_model
+                        save_path=video_path
                     )
 
-                    if ok and video_url:
-                        # Download và save video
-                        video_path = img_dir / f"{image_id}.mp4"
-                        if self._download_video(video_url, video_path):
-                            self._video_results['success'] += 1
-                            self.log(f"[VIDEO] OK: {image_id} -> {video_path.name}")
+                    if ok:
+                        self._video_results['success'] += 1
+                        self.log(f"[VIDEO] OK: {image_id} -> {video_path.name}")
 
-                            # Xóa ảnh gốc nếu cần
-                            if self._video_settings.get('replace_image', True):
-                                png_path = img_dir / f"{image_id}.png"
-                                if png_path.exists():
-                                    try:
-                                        png_path.unlink()
-                                    except:
-                                        pass
+                        # Xóa ảnh gốc nếu cần
+                        if self._video_settings.get('replace_image', True):
+                            png_path = img_dir / f"{image_id}.png"
+                            if png_path.exists():
+                                try:
+                                    png_path.unlink()
+                                except:
+                                    pass
 
-                            success = True
-                            break
-                        else:
-                            error = "Failed to download video"
+                        success = True
+                        break
 
-                    # generate_video() đã xử lý 403/retry bên trong rồi
+                    # generate_video_chrome() đã xử lý bên trong rồi
                     if not success:
                         self._video_results['failed'] += 1
                         self._video_results['failed_items'].append(item)  # Track for retry

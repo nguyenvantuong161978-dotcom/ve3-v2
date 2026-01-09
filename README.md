@@ -83,10 +83,6 @@ groq_api_keys:
 gemini_api_keys:
   - "..."  # https://aistudio.google.com/apikey
 
-# Hoac dung Ollama (local, mien phi)
-ollama:
-  model: "qwen2.5:7b"
-  endpoint: "http://localhost:11434"
 ```
 
 #### 3.3. (Tuy chon) Cau hinh nhieu Chrome profiles
@@ -177,11 +173,6 @@ ve3-tool/
 1. Vao https://aistudio.google.com/apikey
 2. Create API Key
 3. Copy va dan vao config
-
-### Ollama (Local, mien phi)
-1. Cai dat Ollama: https://ollama.ai
-2. Pull model: `ollama pull qwen2.5:7b`
-3. Chay: `ollama serve`
 
 ---
 
