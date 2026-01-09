@@ -172,12 +172,12 @@ def get_account_info(machine_code: str) -> dict:
 
 def login_google_chrome(account_info: dict) -> bool:
     """
-    Mở Chrome và đăng nhập Google.
+    Mở Chrome và đăng nhập Google bằng JavaScript.
 
     Do Google có nhiều biện pháp chống bot, script này sẽ:
     1. Mở Chrome đến trang đăng nhập
-    2. Tự động điền email
-    3. Để user nhập password và xác thực nếu cần
+    2. Dùng JavaScript để điền email/password và trigger events
+    3. Để user xác thực nếu cần
     """
     try:
         from DrissionPage import ChromiumPage, ChromiumOptions
@@ -223,47 +223,112 @@ def login_google_chrome(account_info: dict) -> bool:
         # Đi đến trang đăng nhập Google
         log("Navigating to Google login...")
         driver.get("https://accounts.google.com/signin")
-        time.sleep(2)
+        time.sleep(3)
 
         # Kiểm tra xem đã đăng nhập chưa
         if "myaccount.google.com" in driver.url or "google.com/search" in driver.url:
             log("Already logged in!", "OK")
             return True
 
-        # Tìm và điền email
-        log("Entering email...")
-        try:
-            email_input = driver.ele('input[type="email"]', timeout=5)
-            if email_input:
-                email_input.clear()
-                email_input.input(email)
-                time.sleep(0.5)
+        # === BƯỚC 1: ĐIỀN EMAIL BẰNG JAVASCRIPT ===
+        log("Entering email with JavaScript...")
+        js_fill_email = f'''
+        (function() {{
+            var emailInput = document.getElementById('identifierId');
+            if (!emailInput) {{
+                emailInput = document.querySelector('input[type="email"]');
+            }}
+            if (emailInput) {{
+                // Focus vào input
+                emailInput.focus();
 
-                # Click Next
-                next_btn = driver.ele('button:contains("Next")') or driver.ele('button:contains("Tiếp theo")')
-                if next_btn:
-                    next_btn.click()
-                    time.sleep(2)
-        except Exception as e:
-            log(f"Cannot enter email: {e}", "WARN")
+                // Xóa giá trị cũ
+                emailInput.value = '';
 
-        # Tìm và điền password
-        log("Entering password...")
-        try:
-            time.sleep(1)
-            pass_input = driver.ele('input[type="password"]', timeout=5)
-            if pass_input:
-                pass_input.clear()
-                pass_input.input(password)
-                time.sleep(0.5)
+                // Điền email từng ký tự (giả lập typing)
+                var email = "{email}";
+                emailInput.value = email;
 
-                # Click Next
-                next_btn = driver.ele('button:contains("Next")') or driver.ele('button:contains("Tiếp theo")')
-                if next_btn:
-                    next_btn.click()
-                    time.sleep(3)
-        except Exception as e:
-            log(f"Cannot enter password: {e}", "WARN")
+                // Trigger các events mà Google cần
+                emailInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                emailInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                emailInput.dispatchEvent(new KeyboardEvent('keydown', {{ bubbles: true }}));
+                emailInput.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true }}));
+
+                return 'Email filled: ' + email;
+            }}
+            return 'Email input not found';
+        }})();
+        '''
+
+        result = driver.run_js(js_fill_email)
+        log(f"Email fill result: {result}")
+        time.sleep(1)
+
+        # Click nút Next bằng JavaScript
+        log("Clicking Next button...")
+        js_click_next = '''
+        (function() {
+            // Tìm nút Next hoặc Tiếp theo
+            var buttons = document.querySelectorAll('button');
+            for (var btn of buttons) {
+                var text = btn.innerText || btn.textContent || '';
+                if (text.includes('Next') || text.includes('Tiếp theo') || text.includes('Tiếp tục')) {
+                    btn.click();
+                    return 'Clicked: ' + text;
+                }
+            }
+            // Fallback: submit form
+            var form = document.querySelector('form');
+            if (form) {
+                form.submit();
+                return 'Form submitted';
+            }
+            return 'Next button not found';
+        })();
+        '''
+
+        result = driver.run_js(js_click_next)
+        log(f"Next click result: {result}")
+        time.sleep(3)
+
+        # === BƯỚC 2: ĐIỀN PASSWORD BẰNG JAVASCRIPT ===
+        log("Entering password with JavaScript...")
+        js_fill_password = f'''
+        (function() {{
+            var passInput = document.querySelector('input[type="password"]');
+            if (!passInput) {{
+                passInput = document.querySelector('input[name="Passwd"]');
+            }}
+            if (passInput) {{
+                // Focus
+                passInput.focus();
+
+                // Điền password
+                var password = "{password}";
+                passInput.value = password;
+
+                // Trigger events
+                passInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                passInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                passInput.dispatchEvent(new KeyboardEvent('keydown', {{ bubbles: true }}));
+                passInput.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true }}));
+
+                return 'Password filled';
+            }}
+            return 'Password input not found';
+        }})();
+        '''
+
+        result = driver.run_js(js_fill_password)
+        log(f"Password fill result: {result}")
+        time.sleep(1)
+
+        # Click nút Next cho password
+        log("Clicking Next button for password...")
+        result = driver.run_js(js_click_next)
+        log(f"Password next click result: {result}")
+        time.sleep(3)
 
         # Kiểm tra kết quả
         time.sleep(2)
