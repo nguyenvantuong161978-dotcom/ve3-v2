@@ -476,9 +476,14 @@ def scan_incomplete_local_projects() -> list:
         if is_local_complete(item, code):
             continue
 
-        # Check if has Excel with prompts (ready to process)
+        # Check if has Excel with prompts OR has SRT (can create Excel)
+        srt_path = item / f"{code}.srt"
         if has_excel_with_prompts(item, code):
             print(f"    - {code}: incomplete (has Excel, no images) → will continue")
+            incomplete.append(code)
+        elif srt_path.exists():
+            # Có SRT nhưng không có Excel - worker sẽ tự tạo
+            print(f"    - {code}: has SRT, no Excel → will create with API")
             incomplete.append(code)
 
     return sorted(incomplete)
@@ -511,18 +516,21 @@ def scan_master_projects() -> list:
             print(f"    - {code}: already in VISUAL ✓")
             continue
 
-        # Check if has Excel (có thể chưa có prompts)
+        # Check if has Excel or SRT
         excel_path = item / f"{code}_prompts.xlsx"
-        if not excel_path.exists():
-            print(f"    - {code}: no Excel file")
-            continue
+        srt_path = item / f"{code}.srt"
 
-        # Check if has prompts
         if has_excel_with_prompts(item, code):
             print(f"    - {code}: ready (has prompts) ✓")
             pending.append(code)
-        else:
+        elif srt_path.exists():
+            # Có SRT nhưng không có Excel - worker sẽ tự tạo
+            print(f"    - {code}: has SRT, no Excel → will create with API")
+            pending.append(code)
+        elif excel_path.exists():
             print(f"    - {code}: Excel exists but no prompts yet")
+        else:
+            print(f"    - {code}: no Excel and no SRT")
 
     return sorted(pending)
 
