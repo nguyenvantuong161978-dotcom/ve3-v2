@@ -536,6 +536,9 @@ class PromptGenerator:
         self.max_parallel_batches = settings.get("max_parallel_batches", 3)  # Parallel batch processing
         self.batch_size = settings.get("prompt_batch_size", 10)  # Scenes per batch
 
+        # V2 Flow: Timestamps từ SRT, không để AI quyết định
+        self.use_v2_flow = settings.get("use_v2_flow", True)  # Mặc định dùng V2
+
     def _is_child_character(self, char_id: str) -> bool:
         """
         Check if a character ID represents a child (cannot use reference image).
@@ -1045,6 +1048,29 @@ class PromptGenerator:
                     video_duration_seconds = len(srt_entries) * 5  # Fallback
 
         self.logger.info(f"[VIDEO] Tổng thời lượng: {video_duration_seconds:.0f}s ({video_duration_seconds/60:.1f} phút)")
+
+        # === V2 FLOW: TIMESTAMPS TỪ SRT, KHÔNG ĐỂ AI QUYẾT ĐỊNH ===
+        if self.use_v2_flow:
+            self.logger.info("=" * 60)
+            self.logger.info("[V2 FLOW] SỬ DỤNG FLOW MỚI - TIMESTAMPS CHÍNH XÁC TỪ SRT")
+            self.logger.info("=" * 60)
+
+            # Gọi V2 flow
+            success = self.generate_prompts_v2(
+                srt_entries=srt_entries,
+                characters=characters,
+                locations=locations,
+                global_style=global_style,
+                excel_path=str(excel_path),
+                project_dir=str(project_dir)
+            )
+
+            if success:
+                self.logger.info("[V2 FLOW] ✓ Hoàn thành!")
+                return True
+            else:
+                self.logger.warning("[V2 FLOW] ✗ Thất bại, fallback về flow cũ...")
+                # Continue với flow cũ nếu V2 thất bại
 
         # === STEP 1.5: TẠO BACKUP SCENES BẰNG AI ===
         # Mục đích: Backup có chất lượng như prompts thật (AI-generated, không phải keyword matching)
@@ -4946,4 +4972,474 @@ Return JSON: {{"scenes": [{{"scene_id": 1, "img_prompt": "...", "video_prompt": 
 
         except Exception as e:
             self.logger.error(f"Error updating Excel prompts: {e}")
+            return False
+
+    # ============================================================================
+    # V2 FLOW: TIMESTAMPS TỪ SRT, KHÔNG ĐỂ AI QUYẾT ĐỊNH
+    # ============================================================================
+
+    def _group_srt_entries_v2(
+        self,
+        srt_entries: list,
+        characters: list,
+        locations: list,
+        chunk_size: int = 20
+    ) -> list:
+        """
+        BƯỚC 2 (V2): Nhóm SRT entries thành scenes.
+
+        AI CHỈ quyết định: entries nào thuộc cùng 1 scene
+        CODE tự tính: timestamps từ entries
+
+        Args:
+            srt_entries: List các SRT entries
+            characters: List characters đã phân tích
+            locations: List locations đã phân tích
+            chunk_size: Số entries mỗi chunk gửi API
+
+        Returns:
+            List scenes với timestamps CHÍNH XÁC từ SRT
+        """
+        self.logger.info(f"[V2] Bắt đầu nhóm {len(srt_entries)} SRT entries thành scenes...")
+
+        all_scenes = []
+        scene_id = 1
+
+        # Chia thành chunks nhỏ để API xử lý chính xác
+        for chunk_start in range(0, len(srt_entries), chunk_size):
+            chunk_end = min(chunk_start + chunk_size, len(srt_entries))
+            chunk_entries = srt_entries[chunk_start:chunk_end]
+
+            self.logger.info(f"[V2] Xử lý chunk: entries {chunk_start+1}-{chunk_end}")
+
+            # Tạo prompt ngắn gọn cho API
+            entries_text = "\n".join([
+                f"  {i+1}. [{self._format_timedelta(e.start_time)} - {self._format_timedelta(e.end_time)}] \"{e.text[:100]}\""
+                for i, e in enumerate(chunk_entries)
+            ])
+
+            # Characters và locations info
+            chars_list = ", ".join([f"{c.id} ({c.name})" for c in characters[:5]]) if characters else "nvc (narrator)"
+            locs_list = ", ".join([f"{l.id} ({l.name})" for l in locations[:5]]) if locations else "generic location"
+
+            prompt = f"""Nhóm các SRT entries sau thành scenes. Mỗi scene là 1 đoạn nội dung liên quan.
+
+ENTRIES:
+{entries_text}
+
+CHARACTERS: {chars_list}
+LOCATIONS: {locs_list}
+
+QUY TẮC:
+- Nhóm entries có nội dung liên quan thành 1 scene
+- Mỗi scene tối đa 3-5 entries (để duration không quá 20s)
+- Khi nội dung chuyển chủ đề/thời gian/địa điểm → scene mới
+- Flashback (nhắc về quá khứ) = scene riêng
+- Hiện tại (đang xảy ra) = scene riêng
+
+OUTPUT FORMAT (JSON only, không markdown):
+{{
+  "groups": [
+    {{
+      "entries": [1, 2, 3],
+      "scene_type": "FRAME_PRESENT",
+      "main_character": "nvc",
+      "location": "loc_courthouse",
+      "emotion": "sad",
+      "summary": "Đứng trước tòa án, đau khổ"
+    }},
+    {{
+      "entries": [4, 5],
+      "scene_type": "CHILDHOOD_FLASHBACK",
+      "main_character": "nv1_young",
+      "location": "loc_apartment",
+      "emotion": "nostalgic",
+      "summary": "Nhớ về tuổi thơ với mẹ"
+    }}
+  ]
+}}"""
+
+            # Gọi API
+            try:
+                response = self._generate_content(prompt, temperature=0.3, max_tokens=2000)
+                json_data = self._extract_json(response)
+
+                if json_data and "groups" in json_data:
+                    groups = json_data["groups"]
+                    self.logger.info(f"[V2] API trả về {len(groups)} groups")
+
+                    # Chuyển đổi groups thành scenes với timestamps từ SRT
+                    for group in groups:
+                        entry_indices = group.get("entries", [])
+                        if not entry_indices:
+                            continue
+
+                        # Lấy các entries trong group (chuyển từ 1-indexed sang 0-indexed)
+                        group_entries = []
+                        for idx in entry_indices:
+                            actual_idx = idx - 1  # API trả về 1-indexed
+                            if 0 <= actual_idx < len(chunk_entries):
+                                group_entries.append(chunk_entries[actual_idx])
+
+                        if not group_entries:
+                            continue
+
+                        # TIMESTAMPS TỪ SRT - KHÔNG SAI!
+                        first_entry = group_entries[0]
+                        last_entry = group_entries[-1]
+
+                        scene = {
+                            "scene_id": scene_id,
+                            "srt_start": self._format_timedelta(first_entry.start_time),
+                            "srt_end": self._format_timedelta(last_entry.end_time),
+                            "duration_seconds": (last_entry.end_time - first_entry.start_time).total_seconds(),
+                            "srt_text": " ".join([e.text for e in group_entries])[:500],
+                            "scene_type": group.get("scene_type", "FRAME_PRESENT"),
+                            "main_character": group.get("main_character", "nvc"),
+                            "location": group.get("location", ""),
+                            "emotion": group.get("emotion", "neutral"),
+                            "summary": group.get("summary", ""),
+                            "entry_indices": [chunk_start + (idx - 1) for idx in entry_indices]  # Global indices
+                        }
+
+                        all_scenes.append(scene)
+                        scene_id += 1
+
+                else:
+                    self.logger.warning(f"[V2] API không trả về groups, dùng fallback")
+                    # Fallback: mỗi entry = 1 scene
+                    for entry in chunk_entries:
+                        scene = self._create_fallback_scene_v2(entry, scene_id, characters, locations)
+                        all_scenes.append(scene)
+                        scene_id += 1
+
+            except Exception as e:
+                self.logger.error(f"[V2] API error: {e}, dùng fallback")
+                # Fallback: mỗi entry = 1 scene
+                for entry in chunk_entries:
+                    scene = self._create_fallback_scene_v2(entry, scene_id, characters, locations)
+                    all_scenes.append(scene)
+                    scene_id += 1
+
+        self.logger.info(f"[V2] Tạo được {len(all_scenes)} scenes từ {len(srt_entries)} entries")
+        return all_scenes
+
+    def _create_fallback_scene_v2(self, entry, scene_id: int, characters: list, locations: list) -> dict:
+        """Tạo scene fallback từ 1 SRT entry."""
+        text_lower = entry.text.lower() if entry.text else ""
+
+        # Detect scene type từ keywords
+        scene_type = "FRAME_PRESENT"
+        main_char = "nvc"
+
+        if any(kw in text_lower for kw in ['ngày xưa', 'hồi nhỏ', 'khi tôi còn', 'tuổi thơ', 'childhood']):
+            scene_type = "CHILDHOOD_FLASHBACK"
+            main_char = "nv1_young"
+        elif any(kw in text_lower for kw in ['mẹ tôi', 'bà ấy', 'mother', 'she worked']):
+            scene_type = "CHILDHOOD_FLASHBACK"
+            main_char = "nv1_young"
+        elif any(kw in text_lower for kw in ['tôi xây', 'tôi làm', 'i built', 'carpenter']):
+            scene_type = "ADULT_FLASHBACK"
+            main_char = "nvc_young"
+
+        # Detect emotion
+        emotion = "neutral"
+        if any(kw in text_lower for kw in ['buồn', 'sad', 'cry', 'khóc', 'đau']):
+            emotion = "sad"
+        elif any(kw in text_lower for kw in ['vui', 'happy', 'smile', 'cười']):
+            emotion = "happy"
+        elif any(kw in text_lower for kw in ['giận', 'angry', 'tức']):
+            emotion = "angry"
+
+        return {
+            "scene_id": scene_id,
+            "srt_start": self._format_timedelta(entry.start_time),
+            "srt_end": self._format_timedelta(entry.end_time),
+            "duration_seconds": (entry.end_time - entry.start_time).total_seconds(),
+            "srt_text": entry.text[:500] if entry.text else "",
+            "scene_type": scene_type,
+            "main_character": main_char,
+            "location": "",
+            "emotion": emotion,
+            "summary": entry.text[:100] if entry.text else ""
+        }
+
+    def _create_shots_for_scene_v2(
+        self,
+        scene: dict,
+        characters: list,
+        locations: list,
+        global_style: str
+    ) -> list:
+        """
+        BƯỚC 3 (V2): Tạo shots cho 1 scene.
+
+        Mỗi shot tối đa 8 giây.
+        Timestamps được CHIA ĐỀU từ scene duration.
+
+        Args:
+            scene: Scene dict từ bước 2
+            characters: List characters
+            locations: List locations
+            global_style: Style string
+
+        Returns:
+            List shots với timestamps chính xác
+        """
+        scene_id = scene["scene_id"]
+        duration = scene.get("duration_seconds", 5)
+        srt_text = scene.get("srt_text", "")
+        scene_type = scene.get("scene_type", "FRAME_PRESENT")
+        main_char = scene.get("main_character", "nvc")
+        location = scene.get("location", "")
+        emotion = scene.get("emotion", "neutral")
+
+        # Parse timestamps
+        try:
+            start_parts = scene["srt_start"].replace(",", ".").split(":")
+            start_seconds = int(start_parts[0]) * 3600 + int(start_parts[1]) * 60 + float(start_parts[2])
+        except:
+            start_seconds = 0
+
+        # Tính số shots cần thiết (mỗi shot max 8s)
+        max_shot_duration = 8
+        num_shots = max(1, int(duration / max_shot_duration) + (1 if duration % max_shot_duration > 2 else 0))
+        shot_duration = duration / num_shots if num_shots > 0 else duration
+
+        # Tạo prompt cho API
+        char_info = ""
+        for c in characters:
+            if c.id == main_char:
+                char_info = f"{c.id}: {c.character_lock or c.name}"
+                break
+        if not char_info:
+            char_info = f"{main_char}: main character"
+
+        loc_info = ""
+        for l in locations:
+            if l.id == location:
+                loc_info = f"{l.id}: {l.location_lock or l.name}"
+                break
+
+        prompt = f"""Tạo {num_shots} shot(s) cho scene sau:
+
+SCENE INFO:
+- Nội dung: "{srt_text[:200]}"
+- Scene type: {scene_type}
+- Emotion: {emotion}
+- Duration: {duration:.1f}s → {num_shots} shots, mỗi shot ~{shot_duration:.1f}s
+- Character: {char_info}
+- Location: {loc_info}
+- Style: {global_style}
+
+QUY TẮC:
+- KHÔNG đưa text/dialogue vào prompt (tránh AI vẽ chữ)
+- Mỗi shot có shot_type khác nhau (WIDE, CLOSE-UP, MEDIUM, EXTREME CLOSE-UP)
+- Emotion phải match với nội dung
+- Thêm "Illustrating: [nội dung]" ở cuối mỗi prompt
+
+OUTPUT FORMAT (JSON only):
+{{
+  "shots": [
+    {{
+      "shot_type": "WIDE",
+      "img_prompt": "Wide shot, 24mm lens, [visual description], {global_style}. Illustrating: [tóm tắt nội dung]",
+      "reference_files": ["{main_char}.png"]
+    }},
+    {{
+      "shot_type": "CLOSE-UP",
+      "img_prompt": "Close-up, 85mm lens, [visual description], {global_style}. Illustrating: [tóm tắt nội dung]",
+      "reference_files": ["{main_char}.png"]
+    }}
+  ]
+}}"""
+
+        shots = []
+
+        try:
+            response = self._generate_content(prompt, temperature=0.5, max_tokens=2000)
+            json_data = self._extract_json(response)
+
+            if json_data and "shots" in json_data:
+                api_shots = json_data["shots"]
+
+                # Tính timestamps cho mỗi shot
+                current_time = start_seconds
+                for i, api_shot in enumerate(api_shots):
+                    shot_end = current_time + shot_duration
+
+                    shot = {
+                        "scene_id": scene_id,
+                        "shot_number": i + 1,
+                        "srt_start": self._seconds_to_timestamp(current_time),
+                        "srt_end": self._seconds_to_timestamp(shot_end),
+                        "duration": shot_duration,
+                        "shot_type": api_shot.get("shot_type", "MEDIUM"),
+                        "img_prompt": api_shot.get("img_prompt", ""),
+                        "reference_files": api_shot.get("reference_files", [f"{main_char}.png"]),
+                        "srt_text": srt_text[:200]
+                    }
+                    shots.append(shot)
+                    current_time = shot_end
+
+            else:
+                # Fallback: tạo shots đơn giản
+                shots = self._create_fallback_shots_v2(scene, num_shots, shot_duration, start_seconds, global_style)
+
+        except Exception as e:
+            self.logger.warning(f"[V2] Shot API error: {e}, dùng fallback")
+            shots = self._create_fallback_shots_v2(scene, num_shots, shot_duration, start_seconds, global_style)
+
+        return shots
+
+    def _create_fallback_shots_v2(
+        self,
+        scene: dict,
+        num_shots: int,
+        shot_duration: float,
+        start_seconds: float,
+        global_style: str
+    ) -> list:
+        """Tạo shots fallback không cần API."""
+        shots = []
+        main_char = scene.get("main_character", "nvc")
+        srt_text = scene.get("srt_text", "")
+        emotion = scene.get("emotion", "neutral")
+
+        # Shot types để rotate
+        shot_types = ["WIDE", "CLOSE-UP", "MEDIUM", "EXTREME CLOSE-UP"]
+
+        # Emotion → visual cue
+        emotion_map = {
+            "sad": "melancholic expression, tears, emotional",
+            "happy": "warm smile, joyful atmosphere",
+            "angry": "intense expression, dramatic lighting",
+            "neutral": "natural expression, contemplative"
+        }
+        visual_cue = emotion_map.get(emotion, emotion_map["neutral"])
+
+        current_time = start_seconds
+        for i in range(num_shots):
+            shot_type = shot_types[i % len(shot_types)]
+            shot_end = current_time + shot_duration
+
+            # Tạo prompt đơn giản
+            img_prompt = f"{global_style}, {shot_type.lower()}, {visual_cue}, cinematic lighting. Illustrating: [{srt_text[:100]}] (reference: {main_char}.png)"
+
+            shot = {
+                "scene_id": scene["scene_id"],
+                "shot_number": i + 1,
+                "srt_start": self._seconds_to_timestamp(current_time),
+                "srt_end": self._seconds_to_timestamp(shot_end),
+                "duration": shot_duration,
+                "shot_type": shot_type,
+                "img_prompt": img_prompt,
+                "reference_files": [f"{main_char}.png"],
+                "srt_text": srt_text[:200]
+            }
+            shots.append(shot)
+            current_time = shot_end
+
+        return shots
+
+    def _seconds_to_timestamp(self, seconds: float) -> str:
+        """Chuyển seconds thành timestamp HH:MM:SS,mmm"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{secs:06.3f}".replace(".", ",")
+
+    def generate_prompts_v2(
+        self,
+        srt_entries: list,
+        characters: list,
+        locations: list,
+        global_style: str,
+        excel_path: str,
+        project_dir: str
+    ) -> bool:
+        """
+        FLOW V2: Tạo prompts với timestamps CHÍNH XÁC từ SRT.
+
+        Bước 1: Phân tích story (đã có sẵn characters, locations)
+        Bước 2: Nhóm SRT entries thành scenes
+        Bước 3: Tạo shots cho mỗi scene
+        Bước 4: Lưu vào Excel
+
+        Args:
+            srt_entries: List SRT entries
+            characters: List characters từ bước 1
+            locations: List locations từ bước 1
+            global_style: Style string
+            excel_path: Path to Excel file
+            project_dir: Project directory
+
+        Returns:
+            True nếu thành công
+        """
+        self.logger.info("=" * 60)
+        self.logger.info("[V2 FLOW] BẮT ĐẦU TẠO PROMPTS VỚI TIMESTAMPS CHÍNH XÁC")
+        self.logger.info("=" * 60)
+
+        try:
+            # BƯỚC 2: Nhóm SRT entries thành scenes
+            self.logger.info("\n[V2 BƯỚC 2] Nhóm SRT entries thành scenes...")
+            scenes = self._group_srt_entries_v2(srt_entries, characters, locations)
+            self.logger.info(f"[V2 BƯỚC 2] ✓ Tạo được {len(scenes)} scenes")
+
+            # BƯỚC 3: Tạo shots cho mỗi scene
+            self.logger.info("\n[V2 BƯỚC 3] Tạo shots cho mỗi scene...")
+            all_shots = []
+            for scene in scenes:
+                shots = self._create_shots_for_scene_v2(scene, characters, locations, global_style)
+                all_shots.extend(shots)
+                self.logger.info(f"  Scene {scene['scene_id']}: {len(shots)} shots ({scene['srt_start']} - {scene['srt_end']})")
+
+            self.logger.info(f"[V2 BƯỚC 3] ✓ Tạo được {len(all_shots)} shots tổng cộng")
+
+            # BƯỚC 4: Lưu vào Excel
+            self.logger.info("\n[V2 BƯỚC 4] Lưu vào Excel...")
+            from .excel_manager import ExcelManager, Scene
+
+            workbook = ExcelManager(excel_path)
+            workbook.load_or_create()
+
+            for shot in all_shots:
+                # Chuyển reference_files thành JSON string
+                ref_files = shot.get("reference_files", [])
+                if isinstance(ref_files, list):
+                    ref_files_str = json.dumps(ref_files)
+                else:
+                    ref_files_str = str(ref_files)
+
+                scene_obj = Scene(
+                    scene_id=shot["scene_id"],
+                    srt_start=shot["srt_start"],
+                    srt_end=shot["srt_end"],
+                    duration=shot.get("duration", 5),
+                    planned_duration=shot.get("duration", 5),
+                    srt_text=shot.get("srt_text", "")[:500],
+                    img_prompt=shot.get("img_prompt", ""),
+                    video_prompt=shot.get("img_prompt", ""),  # Dùng chung
+                    status_img="pending",
+                    status_vid="pending",
+                    characters_used=shot.get("main_character", "nvc"),
+                    location_used=shot.get("location", ""),
+                    reference_files=ref_files_str
+                )
+                workbook.add_scene(scene_obj)
+
+            workbook.save()
+            self.logger.info(f"[V2 BƯỚC 4] ✓ Đã lưu {len(all_shots)} shots vào Excel")
+
+            self.logger.info("\n" + "=" * 60)
+            self.logger.info("[V2 FLOW] HOÀN THÀNH!")
+            self.logger.info("=" * 60)
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"[V2 FLOW] Lỗi: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return False
