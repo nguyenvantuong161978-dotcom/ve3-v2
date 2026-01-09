@@ -369,9 +369,10 @@ def login_google_chrome(account_info: dict) -> bool:
             log(f"Password step error: {e}", "WARN")
 
         # === BƯỚC 3: CHỌN CHẾ ĐỘ LOGIN (Tab Tab Enter) ===
-        log("Selecting login mode (Tab Tab Enter)...")
+        log("Waiting for login mode selection screen...")
         try:
-            time.sleep(3)  # Đợi trang load
+            time.sleep(6)  # Đợi trang load lâu hơn
+            log("Selecting login mode (Tab Tab Enter)...")
             from DrissionPage.common import Actions
             actions = Actions(driver)
 
