@@ -641,15 +641,17 @@ JS_SELECT_VIDEO_MODE_STEP2 = '''
 })();
 '''
 
-# Bước 3: Tìm và click option
+# Bước 3: Tìm và click option (hỗ trợ cả tiếng Việt và Anh)
 JS_SELECT_VIDEO_MODE_STEP3 = '''
 (function() {
     var allSpans = document.querySelectorAll('span');
     for (var el of allSpans) {
-        var text = (el.textContent || '').trim();
-        if (text === 'Tạo video từ các thành phần') {
+        var text = (el.textContent || '').trim().toLowerCase();
+        // Vietnamese: "Tạo video từ các thành phần"
+        // English: "Create video from assets" / "Generate video from assets"
+        if (text.includes('video') && (text.includes('thành phần') || text.includes('assets') || text.includes('elements'))) {
             el.click();
-            console.log('[VIDEO] Clicked: Tao video tu cac thanh phan');
+            console.log('[VIDEO] Clicked: ' + text);
             return 'CLICKED';
         }
     }
@@ -689,15 +691,17 @@ JS_SELECT_T2V_MODE_STEP2 = '''
 })();
 '''
 
-# T2V Mode - Bước 3: Tìm và click option "Từ văn bản sang video"
-# Dùng điều kiện: chứa "video" + length 22 (vì Unicode khác nên không dùng ===)
+# T2V Mode - Bước 3: Tìm và click option "Từ văn bản sang video" / "Text to video"
+# Hỗ trợ cả tiếng Việt và Anh
 JS_SELECT_T2V_MODE_STEP3 = '''
 (function() {
     var allSpans = document.querySelectorAll('span');
     for (var el of allSpans) {
-        var text = (el.textContent || '').trim();
-        // "Từ văn bản sang video" có length 22, các option khác length 27
-        if (text.includes('video') && text.length === 22) {
+        var text = (el.textContent || '').trim().toLowerCase();
+        // Vietnamese: "Từ văn bản sang video"
+        // English: "Text to video"
+        if ((text.includes('văn bản') && text.includes('video')) ||
+            (text.includes('text') && text.includes('video') && !text.includes('assets'))) {
             el.click();
             console.log('[T2V] Clicked: ' + text);
             return 'CLICKED';
