@@ -240,3 +240,26 @@ browser_delay_between_prompts: 2000
 
 # Timeout cho moi anh (giay)
 browser_generate_timeout: 120
+
+# ============================================================================
+# IPv6 ROTATION Settings (Đổi IPv6 khi bị 403)
+# ============================================================================
+# Khi Chrome bị 403 liên tục, tự động đổi IPv6 để bypass
+
+ipv6_rotation:
+  enabled: false              # Bật/tắt tính năng đổi IPv6
+
+  # Interface name (tên adapter mạng)
+  # Chạy "netsh interface ipv6 show addresses" để xem tên
+  interface_name: "Ethernet"  # Hoặc "Wi-Fi", "vEthernet (WSL)"...
+
+  # IPv6 Subnet prefix (VD: 2001:db8::/56)
+  # Chỉ cần prefix, tool sẽ tự random phần còn lại
+  subnet_prefix: ""           # VD: "2001:db8:1234:5600"
+  prefix_length: 56           # /56 = 256 subnets
+
+  # Số lần 403 liên tiếp trước khi đổi IPv6
+  max_403_before_rotate: 3
+
+  # Gateway IPv6 (nếu cần)
+  gateway: ""                 # Để trống nếu không cần
