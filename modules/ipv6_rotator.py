@@ -102,6 +102,7 @@ class IPv6Rotator:
         self.interface_name = ipv6_cfg.get('interface_name', 'Ethernet')
         self.max_403 = ipv6_cfg.get('max_403_before_rotate', 3)
         self.gateway = ipv6_cfg.get('gateway', '')
+        self.disable_ipv4 = ipv6_cfg.get('disable_ipv4', True)  # Tắt IPv4 để ép dùng IPv6
 
         # Load IPv6 list from file
         self.ipv6_list: List[str] = []
@@ -112,6 +113,7 @@ class IPv6Rotator:
         self.consecutive_403 = 0
         self.current_ipv6 = None
         self.last_rotated = None
+        self._ipv4_disabled = False  # Track trạng thái IPv4
 
         # Log function (có thể override)
         self.log = print
@@ -228,9 +230,10 @@ class IPv6Rotator:
         Đặt IPv6 mới cho interface (Windows).
 
         Steps:
-        1. Xóa tất cả IPv6 cũ (trong danh sách) khỏi interface
-        2. Thêm IPv6 mới
-        3. Đợi network adapter cập nhật
+        1. Tắt IPv4 để ép dùng IPv6 (nếu bật disable_ipv4)
+        2. Xóa tất cả IPv6 cũ (trong danh sách) khỏi interface
+        3. Thêm IPv6 mới
+        4. Đợi network adapter cập nhật
 
         Tự động yêu cầu quyền Admin nếu cần.
 
@@ -245,6 +248,11 @@ class IPv6Rotator:
 
             # Collect all netsh commands
             commands = []
+
+            # Bước 0: Tắt IPv4 để Chrome phải dùng IPv6
+            if self.disable_ipv4 and not self._ipv4_disabled:
+                self.log("[IPv6] 🔌 Disabling IPv4 to force IPv6...")
+                commands.append(f'netsh interface ipv4 set interface "{self.interface_name}" admin=disabled')
 
             # Bước 1: Xóa tất cả IPv6 cũ trong danh sách khỏi interface
             for old_ip in self.ipv6_list:
@@ -272,12 +280,18 @@ class IPv6Rotator:
                     return False
 
             # Đợi adapter cập nhật
-            time.sleep(2)
+            time.sleep(3)
+
+            # Track IPv4 disabled status
+            if self.disable_ipv4:
+                self._ipv4_disabled = True
 
             # Verify
             current = self.get_current_ipv6()
             if current:
                 self.log(f"[IPv6] ✓ Now using: {current}")
+                if self.disable_ipv4:
+                    self.log("[IPv6] ✓ IPv4 disabled - Chrome sẽ dùng IPv6")
                 self.current_ipv6 = current
                 return True
             else:
@@ -286,6 +300,27 @@ class IPv6Rotator:
 
         except Exception as e:
             self.log(f"[IPv6] Error setting IP: {e}")
+            return False
+
+    def enable_ipv4(self) -> bool:
+        """Bật lại IPv4 (khi không cần ép IPv6 nữa)."""
+        if not self._ipv4_disabled:
+            return True
+
+        try:
+            self.log("[IPv6] 🔌 Re-enabling IPv4...")
+            cmd = f'netsh interface ipv4 set interface "{self.interface_name}" admin=enabled'
+
+            if _is_admin():
+                subprocess.run(cmd, shell=True, capture_output=True, timeout=5)
+            else:
+                _run_netsh_admin([cmd], self.log)
+
+            self._ipv4_disabled = False
+            self.log("[IPv6] ✓ IPv4 re-enabled")
+            return True
+        except Exception as e:
+            self.log(f"[IPv6] Error enabling IPv4: {e}")
             return False
 
     def rotate(self) -> Optional[str]:

@@ -261,5 +261,9 @@ ipv6_rotation:
   # Số lần 403 liên tiếp trước khi đổi IPv6
   max_403_before_rotate: 3
 
+  # Tắt IPv4 để ép Chrome dùng IPv6 (QUAN TRỌNG!)
+  # Nếu không tắt, Windows sẽ ưu tiên IPv4 và Chrome không dùng IPv6
+  disable_ipv4: true          # true = tắt IPv4 khi đổi IPv6
+
   # Gateway IPv6 (nếu cần)
   gateway: ""                 # Để trống nếu không cần
