@@ -70,6 +70,23 @@ SCENES_COLUMNS = [
     "media_id",         # Media ID từ Google Flow API (dùng cho I2V - Image to Video)
 ]
 
+# Cột cho sheet Backup Characters (nhân vật narrator cố định cho fallback)
+BACKUP_CHARACTERS_COLUMNS = [
+    "id",               # ID nhân vật (nvc)
+    "name",             # Tên nhân vật
+    "character_lock",   # Mô tả cố định nhân vật (tuổi, tóc, mặt...)
+    "costume_lock",     # Mô tả cố định trang phục
+    "image_file",       # File ảnh tham chiếu (nvc.png)
+]
+
+# Cột cho sheet Backup Locations (location kể chuyện cố định cho fallback)
+BACKUP_LOCATIONS_COLUMNS = [
+    "id",               # ID location (loc)
+    "name",             # Tên location
+    "location_lock",    # Mô tả cố định location (phòng, ánh sáng, đồ vật...)
+    "image_file",       # File ảnh tham chiếu (loc.png)
+]
+
 
 # ============================================================================
 # CHARACTER DATA CLASS
@@ -338,6 +355,8 @@ class PromptWorkbook:
     CHARACTERS_SHEET = "characters"
     SCENES_SHEET = "scenes"
     DIRECTOR_PLAN_SHEET = "director_plan"
+    BACKUP_CHARACTERS_SHEET = "backup_characters"
+    BACKUP_LOCATIONS_SHEET = "backup_locations"
     
     def __init__(self, path: Union[str, Path]):
         """
@@ -865,6 +884,152 @@ class PromptWorkbook:
                 return True
 
         return False
+
+    # ========== BACKUP CHARACTERS SHEET ==========
+
+    def _ensure_backup_characters_sheet(self) -> None:
+        """Đảm bảo sheet backup_characters tồn tại."""
+        if self.workbook is None:
+            self.load_or_create()
+
+        if self.BACKUP_CHARACTERS_SHEET not in self.workbook.sheetnames:
+            self._create_backup_characters_sheet()
+            self.save()
+
+    def _create_backup_characters_sheet(self) -> None:
+        """Tạo sheet backup_characters với header."""
+        ws = self.workbook.create_sheet(self.BACKUP_CHARACTERS_SHEET)
+
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center")
+
+        for col, column_name in enumerate(BACKUP_CHARACTERS_COLUMNS, start=1):
+            cell = ws.cell(row=1, column=col, value=column_name)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+
+        # Điều chỉnh độ rộng cột
+        column_widths = {"id": 10, "name": 20, "character_lock": 80, "costume_lock": 60, "image_file": 15}
+        for col, column_name in enumerate(BACKUP_CHARACTERS_COLUMNS, start=1):
+            ws.column_dimensions[get_column_letter(col)].width = column_widths.get(column_name, 15)
+
+    def save_backup_characters(self, characters: List[Dict]) -> None:
+        """
+        Lưu nhân vật dự phòng (narrator) vào backup_characters sheet.
+
+        Args:
+            characters: List dict với keys: id, name, character_lock, costume_lock, image_file
+        """
+        self._ensure_backup_characters_sheet()
+        ws = self.workbook[self.BACKUP_CHARACTERS_SHEET]
+
+        # Xóa dữ liệu cũ (giữ header)
+        if ws.max_row > 1:
+            ws.delete_rows(2, ws.max_row)
+
+        for char in characters:
+            next_row = ws.max_row + 1
+            ws.cell(row=next_row, column=1, value=char.get("id", "nvc"))
+            ws.cell(row=next_row, column=2, value=char.get("name", "Narrator"))
+            ws.cell(row=next_row, column=3, value=char.get("character_lock", ""))
+            ws.cell(row=next_row, column=4, value=char.get("costume_lock", ""))
+            ws.cell(row=next_row, column=5, value=char.get("image_file", "nvc.png"))
+
+        self.save()
+        self.logger.info(f"Saved {len(characters)} backup characters")
+
+    def get_backup_characters(self) -> List[Dict]:
+        """Lấy danh sách nhân vật dự phòng từ backup_characters sheet."""
+        self._ensure_backup_characters_sheet()
+        ws = self.workbook[self.BACKUP_CHARACTERS_SHEET]
+        characters = []
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row[0] is None:
+                continue
+            characters.append({
+                "id": row[0],
+                "name": row[1] or "",
+                "character_lock": row[2] or "",
+                "costume_lock": row[3] or "",
+                "image_file": row[4] or "nvc.png",
+            })
+
+        return characters
+
+    # ========== BACKUP LOCATIONS SHEET ==========
+
+    def _ensure_backup_locations_sheet(self) -> None:
+        """Đảm bảo sheet backup_locations tồn tại."""
+        if self.workbook is None:
+            self.load_or_create()
+
+        if self.BACKUP_LOCATIONS_SHEET not in self.workbook.sheetnames:
+            self._create_backup_locations_sheet()
+            self.save()
+
+    def _create_backup_locations_sheet(self) -> None:
+        """Tạo sheet backup_locations với header."""
+        ws = self.workbook.create_sheet(self.BACKUP_LOCATIONS_SHEET)
+
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="ED7D31", end_color="ED7D31", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center")
+
+        for col, column_name in enumerate(BACKUP_LOCATIONS_COLUMNS, start=1):
+            cell = ws.cell(row=1, column=col, value=column_name)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+
+        # Điều chỉnh độ rộng cột
+        column_widths = {"id": 10, "name": 25, "location_lock": 80, "image_file": 15}
+        for col, column_name in enumerate(BACKUP_LOCATIONS_COLUMNS, start=1):
+            ws.column_dimensions[get_column_letter(col)].width = column_widths.get(column_name, 15)
+
+    def save_backup_locations(self, locations: List[Dict]) -> None:
+        """
+        Lưu location dự phòng (nơi kể chuyện) vào backup_locations sheet.
+
+        Args:
+            locations: List dict với keys: id, name, location_lock, image_file
+        """
+        self._ensure_backup_locations_sheet()
+        ws = self.workbook[self.BACKUP_LOCATIONS_SHEET]
+
+        # Xóa dữ liệu cũ (giữ header)
+        if ws.max_row > 1:
+            ws.delete_rows(2, ws.max_row)
+
+        for loc in locations:
+            next_row = ws.max_row + 1
+            ws.cell(row=next_row, column=1, value=loc.get("id", "loc"))
+            ws.cell(row=next_row, column=2, value=loc.get("name", "Storytelling Location"))
+            ws.cell(row=next_row, column=3, value=loc.get("location_lock", ""))
+            ws.cell(row=next_row, column=4, value=loc.get("image_file", "loc.png"))
+
+        self.save()
+        self.logger.info(f"Saved {len(locations)} backup locations")
+
+    def get_backup_locations(self) -> List[Dict]:
+        """Lấy danh sách location dự phòng từ backup_locations sheet."""
+        self._ensure_backup_locations_sheet()
+        ws = self.workbook[self.BACKUP_LOCATIONS_SHEET]
+        locations = []
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row[0] is None:
+                continue
+            locations.append({
+                "id": row[0],
+                "name": row[1] or "",
+                "location_lock": row[2] or "",
+                "image_file": row[3] or "loc.png",
+            })
+
+        return locations
 
     def detect_scene_gaps(self) -> List[Dict]:
         """

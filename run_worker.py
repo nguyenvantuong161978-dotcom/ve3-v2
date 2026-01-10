@@ -301,6 +301,7 @@ def _restore_scenes_from_director_plan(excel_path: Path, director_plan: list) ->
     """
     Khôi phục scenes từ director_plan backup.
     Tạo lại Excel với scenes từ backup prompts.
+    Sử dụng backup_characters và backup_locations nếu có.
     """
     from modules.excel_manager import PromptWorkbook, Scene, Character
 
@@ -316,19 +317,58 @@ def _restore_scenes_from_director_plan(excel_path: Path, director_plan: list) ->
     except:
         pass
 
-    # Add default character if not exists
+    # === Lấy thông tin từ backup_characters nếu có ===
+    backup_chars = []
+    try:
+        backup_chars = wb.get_backup_characters()
+        if backup_chars:
+            print(f"  📋 Found {len(backup_chars)} backup characters with locks")
+    except:
+        pass
+
+    # === Lấy thông tin từ backup_locations nếu có ===
+    backup_locs = []
+    try:
+        backup_locs = wb.get_backup_locations()
+        if backup_locs:
+            print(f"  📋 Found {len(backup_locs)} backup locations with locks")
+    except:
+        pass
+
+    # === Tạo character từ backup_characters (có đầy đủ locks) ===
     chars = wb.get_characters()
     if not chars:
-        default_char = Character(
-            id="nvc",
-            name="Narrator",
-            role="narrator",
-            vietnamese_prompt="Người kể chuyện",
-            english_prompt="A storyteller narrating the video",
-            image_file="nvc.png",
-            status="pending"
-        )
-        wb.add_character(default_char)
+        if backup_chars:
+            # Dùng thông tin từ backup_characters (có character_lock + costume_lock)
+            for bc in backup_chars:
+                char_lock = bc.get("character_lock", "")
+                costume_lock = bc.get("costume_lock", "")
+                full_prompt = f"{char_lock}, {costume_lock}" if costume_lock else char_lock
+
+                default_char = Character(
+                    id=bc.get("id", "nvc"),
+                    name=bc.get("name", "Narrator"),
+                    role="narrator",
+                    vietnamese_prompt="Người kể chuyện hồi tưởng",
+                    english_prompt=full_prompt,
+                    character_lock=char_lock,
+                    image_file=bc.get("image_file", "nvc.png"),
+                    status="pending"
+                )
+                wb.add_character(default_char)
+                print(f"  ✓ Restored character '{bc.get('id')}' with character_lock")
+        else:
+            # Fallback: tạo character mặc định
+            default_char = Character(
+                id="nvc",
+                name="Narrator",
+                role="narrator",
+                vietnamese_prompt="Người kể chuyện",
+                english_prompt="A storyteller narrating the video",
+                image_file="nvc.png",
+                status="pending"
+            )
+            wb.add_character(default_char)
 
     # Restore scenes from backup
     for plan in director_plan:
@@ -353,7 +393,16 @@ def _restore_scenes_from_director_plan(excel_path: Path, director_plan: list) ->
     wb.save_director_plan(director_plan)
 
     wb.save()
-    print(f"  ✅ Restored Excel with {len(director_plan)} backup scenes")
+
+    # Thống kê
+    narrator_count = len([p for p in director_plan if "[FALLBACK-NARRATOR]" in p.get("img_prompt", "")])
+    flashback_count = len([p for p in director_plan if "[FALLBACK-FLASHBACK]" in p.get("img_prompt", "")])
+
+    if narrator_count > 0 or flashback_count > 0:
+        print(f"  ✅ Restored: {narrator_count} narrator + {flashback_count} flashback scenes")
+    else:
+        print(f"  ✅ Restored Excel with {len(director_plan)} backup scenes")
+
     return True
 
 

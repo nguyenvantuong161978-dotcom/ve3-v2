@@ -5626,60 +5626,160 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
         workbook
     ) -> bool:
         """
-        Tạo Excel với fallback prompts cơ bản (không gọi API).
-        Workers sẽ gọi API sau để hoàn thiện.
+        Tạo Excel với fallback prompts kiểu "Narrator Flashback Style".
+        Nếu API hết tiền, vẫn có thể tạo video chất lượng với style:
+        - Narrator scenes: Nhân vật kể chuyện tại location cố định (chỉ đổi góc máy)
+        - Flashback scenes: Minh họa nội dung đang kể
 
-        Fallback mode:
-        - Tạo nhân vật mặc định (nvc - narrator)
-        - Tạo scenes từ SRT với timestamps chính xác
-        - Prompts cơ bản dựa trên SRT text (có đánh dấu FALLBACK)
+        Structure:
+        - Scene lẻ (1,3,5...): Narrator tại location cố định
+        - Scene chẵn (2,4,6...): Flashback minh họa câu chuyện
         """
         from .excel_manager import Scene, Character as CharObj
         from .utils import group_srt_into_scenes
 
-        self.logger.info("[FALLBACK-ONLY] Bắt đầu tạo Excel cơ bản...")
+        self.logger.info("[FALLBACK] Bắt đầu tạo Excel với Narrator Flashback Style...")
 
-        # === BƯỚC 1: Tạo nhân vật mặc định ===
-        # Chỉ tạo nvc (narrator) - Workers sẽ phân tích lại sau
+        # === BƯỚC 1: Định nghĩa LOCK cố định cho Narrator ===
+        # Character Lock - mô tả chi tiết nhân vật (KHÔNG ĐỔI giữa các scene narrator)
+        CHARACTER_LOCK = (
+            "35-year-old Asian man with short black hair, gentle tired eyes, "
+            "slight stubble on chin, warm complexion, expressive face showing life experience"
+        )
+
+        # Costume Lock - trang phục cố định
+        COSTUME_LOCK = (
+            "wearing a comfortable dark blue knit sweater over white collared shirt, "
+            "sleeves slightly rolled up, casual but neat appearance"
+        )
+
+        # Location Lock - bối cảnh kể chuyện cố định
+        LOCATION_LOCK = (
+            "cozy living room corner, warm soft lamp light from beside, "
+            "wooden bookshelf with old books in background, comfortable armchair, "
+            "evening atmosphere with soft shadows, intimate storytelling setting"
+        )
+
+        # === BƯỚC 2: Tạo nhân vật trong characters sheet ===
         default_char = Character(
             id="nvc",
             name="Narrator",
             role="narrator",
-            vietnamese_prompt="Người kể chuyện",
-            english_prompt="A storyteller narrating the video",
-            character_lock="A 35-year-old narrator with expressive face",
+            vietnamese_prompt="Người kể chuyện hồi tưởng",
+            english_prompt=f"{CHARACTER_LOCK}, {COSTUME_LOCK}",
+            character_lock=CHARACTER_LOCK,
             image_file="nvc.png",
             status="pending"
         )
         workbook.add_character(default_char)
-        self.logger.info("[FALLBACK-ONLY] ✓ Đã thêm nhân vật mặc định: nvc")
+        self.logger.info("[FALLBACK] ✓ Đã tạo nhân vật narrator với character_lock")
 
-        # === BƯỚC 2: Nhóm SRT thành scenes ===
+        # === BƯỚC 3: Lưu vào backup_characters sheet ===
+        backup_chars = [{
+            "id": "nvc",
+            "name": "Narrator",
+            "character_lock": CHARACTER_LOCK,
+            "costume_lock": COSTUME_LOCK,
+            "image_file": "nvc.png"
+        }]
+        workbook.save_backup_characters(backup_chars)
+        self.logger.info("[FALLBACK] ✓ Đã lưu backup_characters với character_lock + costume_lock")
+
+        # === BƯỚC 4: Lưu vào backup_locations sheet ===
+        backup_locs = [{
+            "id": "loc",
+            "name": "Storytelling Room",
+            "location_lock": LOCATION_LOCK,
+            "image_file": "loc.png"
+        }]
+        workbook.save_backup_locations(backup_locs)
+        self.logger.info("[FALLBACK] ✓ Đã lưu backup_locations với location_lock")
+
+        # === BƯỚC 5: Nhóm SRT thành scenes ===
         scenes_data = group_srt_into_scenes(
             srt_entries,
             min_duration=self.min_scene_duration,
             max_duration=self.max_scene_duration
         )
-        self.logger.info(f"[FALLBACK-ONLY] ✓ Chia thành {len(scenes_data)} scenes từ SRT")
+        self.logger.info(f"[FALLBACK] ✓ Chia thành {len(scenes_data)} scenes từ SRT")
 
-        # === BƯỚC 3: Tạo fallback prompts cho mỗi scene ===
-        shot_types = ["WIDE", "CLOSE-UP", "MEDIUM", "EXTREME CLOSE-UP", "LOW ANGLE"]
+        # === BƯỚC 6: Định nghĩa góc máy cho Narrator (CHỈ ĐỔI GÓC MÁY) ===
+        narrator_camera_angles = [
+            ("Close-up shot", "85mm portrait lens", "face filling frame, shallow depth of field, bokeh background"),
+            ("Medium shot", "50mm lens", "upper body and hands visible, seated posture"),
+            ("Wide shot", "35mm lens", "full setting visible, character in environment context"),
+            ("Extreme close-up", "100mm macro lens", "eyes and expression detail, emotional intensity"),
+            ("Over-shoulder shot", "50mm lens", "looking at something off-frame, contemplative angle"),
+            ("Low angle medium shot", "35mm lens from below", "slight empowering perspective, thoughtful gaze"),
+        ]
+
+        # Biểu cảm narrator theo emotion (nhưng vẫn giữ nguyên character_lock + costume_lock + location_lock)
+        narrator_expressions = {
+            "sad": "eyes glistening with unshed tears, slight downturn of lips, nostalgic distant gaze",
+            "happy": "warm genuine smile, eyes crinkling at corners, relaxed joyful expression",
+            "neutral": "thoughtful contemplative expression, gentle knowing look, slight smile",
+            "tense": "furrowed brow, intense focused gaze, lips pressed together",
+            "nostalgic": "wistful distant gaze, bittersweet half-smile, eyes reflecting memories",
+        }
+
+        # === BƯỚC 7: Tạo scenes xen kẽ Narrator/Flashback ===
+        director_plan_data = []
 
         for idx, scene in enumerate(scenes_data):
             scene_id = idx + 1
-
-            # Lấy thông tin từ SRT
             srt_text = scene.get("text", "")[:300]
             srt_start = scene.get("srt_start", "00:00:00,000")
             srt_end = scene.get("srt_end", "00:00:05,000")
             duration = scene.get("duration_seconds", 5)
 
-            # Tạo shot type đa dạng
-            shot_type = shot_types[idx % len(shot_types)]
+            # Xác định loại scene: lẻ = Narrator, chẵn = Flashback
+            is_narrator_scene = (scene_id % 2 == 1)
 
-            # === FALLBACK PROMPT ===
-            # Đánh dấu [FALLBACK] để workers biết cần gọi API hoàn thiện
-            fallback_prompt = f"[FALLBACK] {shot_type}. Narrator (nvc.png). Illustrating: {srt_text[:150]}. Cinematic lighting, 4K photorealistic"
+            if is_narrator_scene:
+                # === NARRATOR SCENE ===
+                # Chỉ đổi góc máy, giữ nguyên character_lock + costume_lock + location_lock
+                angle_idx = (scene_id // 2) % len(narrator_camera_angles)
+                shot_type, lens, framing = narrator_camera_angles[angle_idx]
+
+                # Chọn expression dựa trên nội dung (đơn giản hóa)
+                expression = narrator_expressions["nostalgic"]  # Default nostalgic cho storytelling
+
+                # Prompt NARRATOR: Cố định mọi thứ, chỉ đổi góc máy
+                fallback_prompt = (
+                    f"[FALLBACK-NARRATOR] {shot_type}, {lens}, {framing}. "
+                    f"{CHARACTER_LOCK}, {COSTUME_LOCK}, {expression}. "
+                    f"{LOCATION_LOCK}. "
+                    f"Photorealistic, 4K cinematic quality. (nvc.png, loc.png)"
+                )
+
+                characters_used = '["nvc"]'
+                location_used = "loc"
+                reference_files = '["nvc.png", "loc.png"]'
+
+            else:
+                # === FLASHBACK SCENE ===
+                # Minh họa nội dung câu chuyện đang kể
+                flashback_shots = [
+                    ("Wide establishing shot", "24mm cinematic lens"),
+                    ("Medium shot", "50mm lens"),
+                    ("Close-up detail", "85mm lens"),
+                    ("Dramatic low angle", "35mm wide lens"),
+                    ("Atmospheric wide", "35mm anamorphic lens"),
+                ]
+                shot_idx = (scene_id // 2) % len(flashback_shots)
+                shot_type, lens = flashback_shots[shot_idx]
+
+                # Prompt FLASHBACK: Minh họa nội dung SRT
+                fallback_prompt = (
+                    f"[FALLBACK-FLASHBACK] {shot_type}, {lens}. "
+                    f"Visual illustration of: {srt_text[:150]}. "
+                    f"Cinematic lighting, dramatic atmosphere, storytelling imagery. "
+                    f"Photorealistic, 4K cinematic quality, film grain texture."
+                )
+
+                characters_used = '[]'
+                location_used = ""
+                reference_files = '[]'
 
             # Tạo Scene object
             scene_obj = Scene(
@@ -5693,48 +5793,39 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
                 video_prompt=fallback_prompt,
                 status_img="pending",
                 status_vid="pending",
-                characters_used='["nvc"]',  # JSON list format
-                location_used="",
-                reference_files='["nvc.png"]'
+                characters_used=characters_used,
+                location_used=location_used,
+                reference_files=reference_files
             )
             workbook.add_scene(scene_obj)
 
-        # === BƯỚC 4: Lưu BACKUP vào director_plan sheet ===
-        # QUAN TRỌNG: Worker VMs sẽ clear scenes sheet khi gọi API
-        # Backup prompts ở director_plan giúp recover nếu API fails
-        director_plan_data = []
-        for idx, scene in enumerate(scenes_data):
-            scene_id = idx + 1
-            srt_text = scene.get("text", "")[:300]
-            srt_start = scene.get("srt_start", "00:00:00,000")
-            srt_end = scene.get("srt_end", "00:00:05,000")
-            duration = scene.get("duration_seconds", 5)
-
-            # Tạo fallback prompt giống như ở scenes
-            shot_type = shot_types[scene_id % len(shot_types)]
-            fallback_prompt = f"[FALLBACK] {shot_type}. Narrator (nvc.png). Illustrating: {srt_text[:150]}. Cinematic lighting, 4K photorealistic"
-
+            # Thêm vào director_plan (backup)
             director_plan_data.append({
                 "scene_id": scene_id,
                 "srt_start": srt_start,
                 "srt_end": srt_end,
                 "duration": duration,
                 "text": srt_text,
-                "characters_used": '["nvc"]',
-                "location_used": "",
-                "reference_files": '["nvc.png"]',
+                "characters_used": characters_used,
+                "location_used": location_used,
+                "reference_files": reference_files,
                 "img_prompt": fallback_prompt,
                 "status": "backup"
             })
 
-        # Lưu vào director_plan sheet
+        # === BƯỚC 8: Lưu vào director_plan sheet ===
         workbook.save_director_plan(director_plan_data)
-        self.logger.info(f"[FALLBACK-ONLY] ✓ Đã lưu backup vào director_plan sheet")
+        self.logger.info(f"[FALLBACK] ✓ Đã lưu {len(director_plan_data)} scenes vào director_plan")
 
         # Lưu Excel
         workbook.save()
-        self.logger.info(f"[FALLBACK-ONLY] ✓ Đã lưu {len(scenes_data)} scenes vào Excel")
-        self.logger.info("[FALLBACK-ONLY] ✓ Excel cơ bản hoàn thành - Workers sẽ gọi API hoàn thiện")
-        self.logger.info("[FALLBACK-ONLY] ✓ Backup prompts saved to director_plan (sẽ dùng nếu API fail)")
+
+        narrator_count = len([s for s in director_plan_data if "[FALLBACK-NARRATOR]" in s.get("img_prompt", "")])
+        flashback_count = len(director_plan_data) - narrator_count
+
+        self.logger.info(f"[FALLBACK] ✓ Excel hoàn thành: {narrator_count} narrator + {flashback_count} flashback scenes")
+        self.logger.info("[FALLBACK] ✓ Narrator scenes: CHỈ ĐỔI GÓC MÁY, giữ nguyên character/costume/location lock")
+        self.logger.info("[FALLBACK] ✓ Flashback scenes: Minh họa nội dung câu chuyện")
+        self.logger.info("[FALLBACK] ✓ Backup sheets: backup_characters + backup_locations đã lưu")
 
         return True
