@@ -265,10 +265,10 @@ ipv6_rotation:
   # CẢNH BÁO: Nếu dùng Remote Desktop qua IPv4, để FALSE!
   disable_ipv4: false         # false = giữ IPv4 cho RDP
 
-  # Local SOCKS5 Proxy - Ép Chrome dùng IPv6 mà không tắt IPv4
-  # Tool sẽ tạo proxy tại localhost:1088 bind đến IPv6
-  use_local_proxy: true       # true = dùng local proxy cho Chrome
-  local_proxy_port: 1088      # Port cho local SOCKS5 proxy
+  # KHÔNG CẦN proxy nữa - Tool set Windows prefix policy để ưu tiên IPv6
+  # Chrome sẽ tự động dùng IPv6 cho outgoing connections
+  use_local_proxy: false      # false = Chrome chạy trực tiếp, không qua proxy
+  local_proxy_port: 1088      # (không dùng nếu use_local_proxy=false)
 
   # Gateway IPv6 (nếu cần)
   gateway: ""                 # Để trống nếu không cần
