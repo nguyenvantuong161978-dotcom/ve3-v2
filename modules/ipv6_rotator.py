@@ -166,6 +166,49 @@ class IPv6Rotator:
         except Exception as e:
             print(f"[IPv6] Error loading IPv6 list: {e}")
 
+    def _remove_dead_ipv6(self, dead_ip: str):
+        """
+        Xóa IPv6 chết khỏi danh sách và file config/ipv6_list.txt.
+
+        Args:
+            dead_ip: IPv6 không hoạt động cần xóa
+        """
+        try:
+            # 1. Xóa khỏi memory
+            if dead_ip in self.ipv6_list:
+                self.ipv6_list.remove(dead_ip)
+                self.log(f"[IPv6] 🗑️ Removed dead IP from list: {dead_ip}")
+                self.log(f"[IPv6] Remaining: {len(self.ipv6_list)} IPs")
+
+            # 2. Xóa khỏi file
+            base_dir = Path(__file__).parent.parent
+            ipv6_file = base_dir / "config" / "ipv6_list.txt"
+
+            if ipv6_file.exists():
+                with open(ipv6_file, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+
+                # Lọc bỏ dòng chứa IP chết
+                new_lines = []
+                for line in lines:
+                    stripped = line.strip()
+                    # Giữ lại comment và IP khác
+                    if stripped.startswith('#') or stripped.lower() != dead_ip.lower():
+                        new_lines.append(line)
+
+                # Ghi lại file
+                with open(ipv6_file, 'w', encoding='utf-8') as f:
+                    f.writelines(new_lines)
+
+                self.log(f"[IPv6] ✓ Updated {ipv6_file.name}")
+
+            # 3. Điều chỉnh current_index nếu cần
+            if self.current_index >= len(self.ipv6_list):
+                self.current_index = 0
+
+        except Exception as e:
+            self.log(f"[IPv6] Error removing dead IP: {e}")
+
     def set_logger(self, log_func):
         """Set custom log function."""
         self.log = log_func
@@ -194,6 +237,7 @@ class IPv6Rotator:
         """
         Khởi tạo với một IPv6 hoạt động.
         Thử TẤT CẢ IP trong danh sách cho đến khi tìm được IP có connectivity.
+        IP không hoạt động sẽ bị XÓA khỏi danh sách và file.
 
         Returns:
             IPv6 hoạt động hoặc None
@@ -205,19 +249,36 @@ class IPv6Rotator:
         total = len(self.ipv6_list)
         self.log(f"[IPv6] Finding working IPv6 (total: {total} IPs)...")
 
-        for i, ipv6 in enumerate(self.ipv6_list):
+        # Copy list để iterate vì sẽ xóa phần tử trong quá trình loop
+        ipv6_list_copy = self.ipv6_list.copy()
+        dead_ips = []  # Thu thập IP chết để xóa sau
+
+        for i, ipv6 in enumerate(ipv6_list_copy):
             self.log(f"[IPv6] Trying {i+1}/{total}: {ipv6}")
 
             if self.set_ipv6(ipv6):
                 # Test connectivity
                 if self.test_ipv6_connectivity():
                     self.log(f"[IPv6] ✓ Found working IP: {ipv6}")
-                    self.current_index = i
+                    # Xóa tất cả dead IPs đã thu thập
+                    for dead_ip in dead_ips:
+                        self._remove_dead_ipv6(dead_ip)
+                    # Cập nhật current_index sau khi xóa
+                    try:
+                        self.current_index = self.ipv6_list.index(ipv6)
+                    except ValueError:
+                        self.current_index = 0
                     return ipv6
                 else:
-                    self.log(f"[IPv6] ✗ No connectivity: {ipv6}")
+                    self.log(f"[IPv6] ✗ No connectivity: {ipv6} → REMOVING")
+                    dead_ips.append(ipv6)
             else:
-                self.log(f"[IPv6] ✗ Failed to set: {ipv6}")
+                self.log(f"[IPv6] ✗ Failed to set: {ipv6} → REMOVING")
+                dead_ips.append(ipv6)
+
+        # Xóa tất cả dead IPs nếu không tìm thấy IP nào hoạt động
+        for dead_ip in dead_ips:
+            self._remove_dead_ipv6(dead_ip)
 
         self.log("[IPv6] ✗ No working IPv6 found in entire list!")
         return None
@@ -417,7 +478,7 @@ class IPv6Rotator:
 
         1. Lấy IPv6 tiếp theo từ danh sách
         2. Set IPv6 mới
-        3. Test connectivity - nếu fail thì thử IP tiếp theo
+        3. Test connectivity - nếu fail thì XÓA IP chết và thử IP tiếp theo
         4. Start/update local proxy (nếu bật)
         5. Reset 403 counter
 
@@ -436,9 +497,13 @@ class IPv6Rotator:
             return None
 
         tried_ips = set()
+        dead_ips = []  # Thu thập IP chết để xóa
         current = self.get_current_ipv6()
 
-        for attempt in range(max_retries):
+        # Thử tất cả IP trong danh sách
+        max_attempts = len(self.ipv6_list) + max_retries
+
+        for attempt in range(max_attempts):
             try:
                 new_ipv6 = self.get_next_ipv6()
 
@@ -447,12 +512,16 @@ class IPv6Rotator:
                     break
 
                 tried_ips.add(new_ipv6)
-                self.log(f"[IPv6] Rotating: {current} → {new_ipv6} (attempt {attempt + 1}/{max_retries})")
+                self.log(f"[IPv6] Rotating: {current} → {new_ipv6} (attempt {attempt + 1})")
 
                 if self.set_ipv6(new_ipv6):
                     # Test connectivity
                     if self.test_ipv6_connectivity():
                         self.log(f"[IPv6] ✓ Connectivity OK: {new_ipv6}")
+
+                        # Xóa tất cả dead IPs đã thu thập
+                        for dead_ip in dead_ips:
+                            self._remove_dead_ipv6(dead_ip)
 
                         # Start/update local proxy nếu bật
                         if self.use_local_proxy:
@@ -462,12 +531,21 @@ class IPv6Rotator:
                         self.last_rotated = time.time()
                         return new_ipv6
                     else:
-                        self.log(f"[IPv6] ✗ No connectivity, trying next IP...")
+                        self.log(f"[IPv6] ✗ No connectivity: {new_ipv6} → REMOVING")
+                        dead_ips.append(new_ipv6)
                         continue
+                else:
+                    self.log(f"[IPv6] ✗ Failed to set: {new_ipv6} → REMOVING")
+                    dead_ips.append(new_ipv6)
+                    continue
 
             except Exception as e:
                 self.log(f"[IPv6] Rotation error: {e}")
                 continue
+
+        # Xóa tất cả dead IPs nếu không tìm thấy IP nào hoạt động
+        for dead_ip in dead_ips:
+            self._remove_dead_ipv6(dead_ip)
 
         self.log("[IPv6] ✗ All rotation attempts failed")
         return None

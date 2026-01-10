@@ -25,8 +25,10 @@ from datetime import datetime
 
 # Optional DrissionPage import
 DRISSION_AVAILABLE = False
+ContextLostError = None
 try:
     from DrissionPage import ChromiumPage, ChromiumOptions
+    from DrissionPage.errors import ContextLostError
     DRISSION_AVAILABLE = True
 except ImportError:
     ChromiumPage = None
@@ -880,6 +882,7 @@ class DrissionFlowAPI:
         # IPv6 rotation: đếm 403 liên tiếp, sau 3 lần thì đổi IPv6
         self._consecutive_403 = 0
         self._max_403_before_ipv6 = 3  # Số lần 403 liên tiếp trước khi đổi IPv6
+        self._ipv6_activated = False  # True = đã bật IPv6 proxy (chỉ bật sau khi 403 đủ lần)
 
     def log(self, msg: str, level: str = "INFO"):
         """Log message - chỉ dùng 1 trong 2: callback hoặc print."""
@@ -906,6 +909,55 @@ class DrissionFlowAPI:
     def get_current_model(self) -> str:
         """Trả về model đang dùng."""
         return "GEM_PIX" if self._use_fallback_model else "GEM_PIX_2"
+
+    def _activate_ipv6(self) -> bool:
+        """
+        Bật IPv6 mode khi bị 403 đủ lần.
+        Restart Chrome với IPv6 proxy.
+
+        Returns:
+            True nếu activate thành công
+        """
+        if self._ipv6_activated:
+            self.log("[IPv6] Đã activated trước đó, rotate IP...")
+            try:
+                from modules.ipv6_rotator import get_ipv6_rotator
+                rotator = get_ipv6_rotator()
+                if rotator:
+                    new_ip = rotator.rotate()
+                    if new_ip:
+                        self.log(f"[IPv6] ✓ Rotated to: {new_ip}")
+                        return True
+            except Exception as e:
+                self.log(f"[IPv6] Rotate error: {e}", "WARN")
+            return False
+
+        self.log("🌐 [IPv6] ACTIVATING IPv6 MODE...")
+
+        try:
+            from modules.ipv6_rotator import get_ipv6_rotator
+            rotator = get_ipv6_rotator()
+
+            if not rotator or not rotator.ipv6_list:
+                self.log("[IPv6] ✗ Không có IPv6 list!", "ERROR")
+                return False
+
+            # Tìm IPv6 hoạt động
+            working_ipv6 = rotator.init_with_working_ipv6()
+            if not working_ipv6:
+                self.log("[IPv6] ✗ Không tìm được IPv6 hoạt động!", "ERROR")
+                return False
+
+            # Set flag activated
+            self._ipv6_activated = True
+            self.log(f"[IPv6] ✓ Activated với IP: {working_ipv6}")
+            self.log("[IPv6] → Restart Chrome với IPv6 proxy...")
+
+            return True
+
+        except Exception as e:
+            self.log(f"[IPv6] Activate error: {e}", "ERROR")
+            return False
 
     def _auto_setup_project(self, timeout: int = 60) -> bool:
         """
@@ -1250,34 +1302,34 @@ class DrissionFlowAPI:
             else:
                 self.log("👁️ Headless mode: OFF (Chrome hiển thị)")
 
-            # === IPv6 MODE - ÉP CHROME DÙNG IPv6 QUA LOCAL PROXY ===
-            # Proxy CHỈ kết nối IPv6, KHÔNG fallback IPv4
+            # === IPv6 MODE - CHỈ BẬT SAU KHI 403 ĐỦ LẦN ===
+            # Ban đầu KHÔNG dùng IPv6, chỉ bật khi bị 403 liên tiếp
             _using_ipv6_proxy = False
             try:
                 from modules.ipv6_rotator import get_ipv6_rotator
                 rotator = get_ipv6_rotator()
-                if rotator and rotator.enabled:
-                    # Tìm IPv6 hoạt động (test connectivity trước khi dùng)
-                    self.log(f"🌐 IPv6 MODE: Finding working IPv6...")
-                    working_ipv6 = rotator.init_with_working_ipv6()  # Thử hết danh sách
-
-                    if working_ipv6:
-                        # Start local proxy (CHỈ kết nối IPv6, không fallback)
-                        from modules.ipv6_proxy import start_ipv6_proxy
-                        proxy = start_ipv6_proxy(
-                            ipv6_address=working_ipv6,
-                            port=1088,
-                            log_func=self.log
-                        )
-                        if proxy:
-                            options.set_argument('--proxy-server=socks5://127.0.0.1:1088')
-                            self.log(f"🌐 IPv6 MODE: Chrome → SOCKS5 → IPv6 ONLY")
-                            self.log(f"   IPv6: {working_ipv6}")
-                            _using_ipv6_proxy = True
-                    else:
-                        self.log(f"⚠️ No working IPv6 found, continuing without IPv6", "WARN")
+                if rotator and rotator.enabled and rotator.ipv6_list:
+                    # KHÔNG bật IPv6 ngay - chỉ log là sẵn sàng
+                    self.log(f"🌐 IPv6 STANDBY: {len(rotator.ipv6_list)} IPs sẵn sàng")
+                    self.log(f"   → Sẽ bật sau {self._max_403_before_ipv6} lần 403 liên tiếp")
+                    # Nếu đã activated trước đó (restart Chrome) → bật lại
+                    if self._ipv6_activated:
+                        self.log(f"🌐 IPv6 đã activated trước đó, bật lại...")
+                        working_ipv6 = rotator.init_with_working_ipv6()
+                        if working_ipv6:
+                            from modules.ipv6_proxy import start_ipv6_proxy
+                            proxy = start_ipv6_proxy(
+                                ipv6_address=working_ipv6,
+                                port=1088,
+                                log_func=self.log
+                            )
+                            if proxy:
+                                options.set_argument('--proxy-server=socks5://127.0.0.1:1088')
+                                self.log(f"🌐 IPv6 MODE: Chrome → SOCKS5 → IPv6 ONLY")
+                                self.log(f"   IPv6: {working_ipv6}")
+                                _using_ipv6_proxy = True
             except Exception as e:
-                self.log(f"⚠️ IPv6 init error: {e}", "WARN")
+                self.log(f"⚠️ IPv6 check error: {e}", "WARN")
 
             if not _using_ipv6_proxy and self._use_webshare and self._webshare_proxy:
                 from webshare_proxy import get_proxy_manager
@@ -1578,25 +1630,60 @@ class DrissionFlowAPI:
                         self.log(f"  → New project URL saved")
             else:
                 self.log("✓ Đã ở trong project!")
-                # Chọn "Tạo hình ảnh" từ dropdown
+                # Chọn "Tạo hình ảnh" từ dropdown - với retry khi page refresh
                 time.sleep(1)
-                for j in range(10):
-                    result = self.driver.run_js(JS_SELECT_IMAGE_MODE)
-                    if result == 'CLICKED':
-                        self.log("✓ Chọn 'Tạo hình ảnh'")
-                        time.sleep(1)
-                        break
-                    time.sleep(0.5)
+                select_success = False
+                for retry_count in range(3):  # Retry tối đa 3 lần nếu page refresh
+                    try:
+                        for j in range(10):
+                            result = self.driver.run_js(JS_SELECT_IMAGE_MODE)
+                            if result == 'CLICKED':
+                                self.log("✓ Chọn 'Tạo hình ảnh'")
+                                time.sleep(1)
+                                select_success = True
+                                break
+                            time.sleep(0.5)
+                        if select_success:
+                            break
+                    except Exception as e:
+                        if ContextLostError and isinstance(e, ContextLostError):
+                            self.log(f"[PAGE] ⚠️ Page bị refresh, đợi load lại... (retry {retry_count + 1}/3)")
+                            if self._wait_for_page_ready(timeout=30):
+                                continue  # Retry sau khi page load xong
+                            else:
+                                self.log("[PAGE] ✗ Timeout đợi page, thử lại...", "WARN")
+                                continue
+                        else:
+                            self.log(f"[PAGE] ⚠️ Lỗi: {e}", "WARN")
+                            break
 
-        # 5. Đợi textarea sẵn sàng
+        # 5. Đợi textarea sẵn sàng - với xử lý ContextLostError
         self.log("Đợi project load...")
-        for i in range(30):
-            if self._find_textarea():
-                self.log("✓ Project đã sẵn sàng!")
-                break
-            time.sleep(1)
-        else:
-            self.log("✗ Timeout - không tìm thấy textarea", "ERROR")
+        textarea_ready = False
+        for retry_count in range(3):  # Retry tối đa 3 lần nếu page refresh
+            try:
+                for i in range(30):
+                    if self._find_textarea():
+                        self.log("✓ Project đã sẵn sàng!")
+                        textarea_ready = True
+                        break
+                    time.sleep(1)
+                if textarea_ready:
+                    break
+                else:
+                    self.log("✗ Timeout - không tìm thấy textarea", "ERROR")
+                    return False
+            except Exception as e:
+                if ContextLostError and isinstance(e, ContextLostError):
+                    self.log(f"[PAGE] ⚠️ Page bị refresh khi đợi textarea (retry {retry_count + 1}/3)")
+                    if self._wait_for_page_ready(timeout=30):
+                        continue
+                else:
+                    self.log(f"[PAGE] Lỗi: {e}", "WARN")
+                    break
+
+        if not textarea_ready:
+            self.log("✗ Không thể tìm textarea sau khi retry", "ERROR")
             return False
 
         # 6. Warm up session (tạo 1 ảnh trong Chrome để activate)
@@ -1604,11 +1691,22 @@ class DrissionFlowAPI:
             if not self._warm_up_session():
                 self.log("⚠️ Warm up không thành công, tiếp tục...", "WARN")
 
-        # 7. Inject interceptor (SAU khi warm up)
+        # 7. Inject interceptor (SAU khi warm up) - với xử lý ContextLostError
         self.log("Inject interceptor...")
         self._reset_tokens()
-        result = self.driver.run_js(JS_INTERCEPTOR)
-        self.log(f"✓ Interceptor: {result}")
+        for retry_count in range(3):
+            try:
+                result = self.driver.run_js(JS_INTERCEPTOR)
+                self.log(f"✓ Interceptor: {result}")
+                break
+            except Exception as e:
+                if ContextLostError and isinstance(e, ContextLostError):
+                    self.log(f"[PAGE] ⚠️ Page bị refresh khi inject interceptor (retry {retry_count + 1}/3)")
+                    if self._wait_for_page_ready(timeout=30):
+                        continue
+                else:
+                    self.log(f"[PAGE] Lỗi inject: {e}", "WARN")
+                    break
 
         self._ready = True
         return True
@@ -1624,10 +1722,148 @@ class DrissionFlowAPI:
                 pass
         return None
 
+    def _wait_for_textarea_visible(self, timeout: int = 10, max_refresh: int = 2) -> bool:
+        """
+        Đợi textarea xuất hiện VÀ visible trước khi click.
+        Nếu đợi quá lâu → F5 refresh page và thử lại.
+
+        Args:
+            timeout: Timeout mỗi lần đợi (giây)
+            max_refresh: Số lần F5 refresh tối đa
+
+        Returns:
+            True nếu textarea visible, False nếu timeout
+        """
+        for refresh_count in range(max_refresh + 1):
+            self.log(f"[TEXTAREA] Đợi textarea visible... (lần {refresh_count + 1})")
+
+            for i in range(timeout):
+                try:
+                    # Kiểm tra textarea tồn tại VÀ visible
+                    result = self.driver.run_js("""
+                        (function() {
+                            var textarea = document.querySelector('textarea');
+                            if (!textarea) return 'not_found';
+
+                            // Kiểm tra visible
+                            var rect = textarea.getBoundingClientRect();
+                            var style = window.getComputedStyle(textarea);
+
+                            // Element phải có kích thước > 0 và không bị hidden
+                            if (rect.width <= 0 || rect.height <= 0) return 'no_size';
+                            if (style.display === 'none') return 'display_none';
+                            if (style.visibility === 'hidden') return 'visibility_hidden';
+                            if (style.opacity === '0') return 'opacity_0';
+
+                            // Kiểm tra có trong viewport không
+                            var inViewport = (
+                                rect.top >= 0 &&
+                                rect.left >= 0 &&
+                                rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+                                rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+                            );
+
+                            if (!inViewport) {
+                                // Scroll vào view
+                                textarea.scrollIntoView({block: 'center', behavior: 'instant'});
+                                return 'scrolled';
+                            }
+
+                            return 'visible';
+                        })();
+                    """)
+
+                    if result == 'visible':
+                        self.log(f"[TEXTAREA] ✓ Textarea visible sau {i+1}s")
+                        return True
+                    elif result == 'scrolled':
+                        self.log("[TEXTAREA] Scrolled vào view, đợi thêm...")
+                        time.sleep(0.5)
+                        continue
+                    elif result == 'not_found':
+                        # Chưa có textarea, đợi tiếp
+                        pass
+                    else:
+                        self.log(f"[TEXTAREA] Chưa visible: {result}")
+
+                except Exception as e:
+                    self.log(f"[TEXTAREA] Check error: {e}")
+
+                time.sleep(1)
+
+            # Timeout - thử F5 refresh nếu còn lượt
+            if refresh_count < max_refresh:
+                self.log(f"[TEXTAREA] ⚠️ Timeout {timeout}s, F5 refresh page...")
+                try:
+                    self.driver.refresh()
+                    time.sleep(3)  # Đợi page load
+                except Exception as e:
+                    self.log(f"[TEXTAREA] Refresh error: {e}")
+
+        self.log("[TEXTAREA] ✗ Không thể tìm thấy textarea sau khi refresh", "ERROR")
+        return False
+
+    def _wait_for_page_ready(self, timeout: int = 30) -> bool:
+        """
+        Đợi page load xong sau khi bị refresh.
+        Kiểm tra document.readyState và có thể truy cập DOM.
+
+        Args:
+            timeout: Timeout tối đa (giây)
+
+        Returns:
+            True nếu page đã sẵn sàng
+        """
+        self.log("[PAGE] Đợi page load sau refresh...")
+        for i in range(timeout):
+            try:
+                # Kiểm tra page ready state
+                ready_state = self.driver.run_js("return document.readyState")
+                if ready_state == "complete":
+                    # Thử tìm element cơ bản để đảm bảo DOM sẵn sàng
+                    if self._find_textarea():
+                        self.log("[PAGE] ✓ Page đã sẵn sàng!")
+                        return True
+                    # Nếu không có textarea, đợi thêm
+                    time.sleep(1)
+            except Exception as e:
+                # Page vẫn đang load, đợi tiếp
+                time.sleep(1)
+        self.log("[PAGE] ⚠️ Timeout đợi page load", "WARN")
+        return False
+
+    def _safe_run_js(self, script: str, max_retries: int = 3, default=None):
+        """
+        Wrapper an toàn cho run_js() với retry khi page bị refresh.
+
+        Args:
+            script: JavaScript code cần chạy
+            max_retries: Số lần retry tối đa khi gặp ContextLostError
+            default: Giá trị trả về mặc định nếu thất bại
+
+        Returns:
+            Kết quả từ JavaScript hoặc default nếu lỗi
+        """
+        for attempt in range(max_retries):
+            try:
+                return self.driver.run_js(script)
+            except Exception as e:
+                if ContextLostError and isinstance(e, ContextLostError):
+                    if attempt < max_retries - 1:
+                        self.log(f"[JS] Page refresh, đợi load... (retry {attempt + 1}/{max_retries})")
+                        if self._wait_for_page_ready(timeout=15):
+                            continue
+                    self.log(f"[JS] ContextLostError sau {max_retries} lần retry", "WARN")
+                else:
+                    self.log(f"[JS] Lỗi: {e}", "WARN")
+                return default
+        return default
+
     def _paste_prompt_ctrlv(self, textarea, prompt: str) -> bool:
         """
         Paste prompt bằng Ctrl+V thay vì JS input.
         Tránh bị 403 do bot detection.
+        Đợi textarea visible trước khi click.
 
         Args:
             textarea: Element textarea đã tìm thấy
@@ -1639,22 +1875,47 @@ class DrissionFlowAPI:
         import pyperclip
 
         try:
+            # 0. QUAN TRỌNG: Đợi textarea visible trước khi click
+            if not self._wait_for_textarea_visible(timeout=10, max_refresh=2):
+                self.log("⚠️ Textarea không visible, fallback to JS", "WARN")
+                raise Exception("Textarea not visible")
+
             # 1. Copy prompt vào clipboard
             pyperclip.copy(prompt)
             self.log(f"→ Copied to clipboard ({len(prompt)} chars)")
 
-            # 2. Click vào textarea
-            textarea.click()
+            # 2. Dùng JavaScript để focus và clear textarea (an toàn hơn Ctrl+A)
+            result = self.driver.run_js("""
+                (function() {
+                    var textarea = document.querySelector('textarea');
+                    if (!textarea) return 'not_found';
+
+                    // Scroll vào view
+                    textarea.scrollIntoView({block: 'center', behavior: 'instant'});
+
+                    // Focus vào textarea
+                    textarea.focus();
+
+                    // Clear nội dung
+                    textarea.value = '';
+                    textarea.dispatchEvent(new Event('input', {bubbles: true}));
+
+                    return 'ready';
+                })();
+            """)
+
+            if result != 'ready':
+                self.log(f"⚠️ JS focus failed: {result}, fallback", "WARN")
+                raise Exception("JS focus failed")
+
             time.sleep(0.3)
 
-            # 3. Clear textarea (Ctrl+A rồi Delete)
-            from DrissionPage.common import Keys
-            textarea.input(Keys.CTRL_A)
-            time.sleep(0.1)
-            textarea.input(Keys.DELETE)
-            time.sleep(0.1)
+            # 3. Tìm lại textarea và paste bằng Ctrl+V
+            textarea = self._find_textarea()
+            if not textarea:
+                raise Exception("Textarea not found after focus")
 
-            # 4. Paste bằng Ctrl+V
+            from DrissionPage.common import Keys
             textarea.input(Keys.CTRL_V)
             time.sleep(0.3)
 
@@ -1664,17 +1925,36 @@ class DrissionFlowAPI:
         except ImportError as e:
             # pyperclip not installed, fallback to JS
             self.log(f"⚠️ Import error: {e}, fallback to JS input", "WARN")
-            textarea.clear()
-            time.sleep(0.2)
-            textarea.input(prompt)
-            return True
+            return self._paste_prompt_js(prompt)
 
         except Exception as e:
             self.log(f"⚠️ Ctrl+V failed: {e}, fallback to JS", "WARN")
-            textarea.clear()
-            time.sleep(0.2)
-            textarea.input(prompt)
-            return True
+            return self._paste_prompt_js(prompt)
+
+    def _paste_prompt_js(self, prompt: str) -> bool:
+        """Fallback: Paste prompt bằng JavaScript."""
+        try:
+            time.sleep(1)
+            result = self.driver.run_js(f"""
+                (function() {{
+                    var textarea = document.querySelector('textarea');
+                    if (!textarea) return 'not_found';
+
+                    textarea.scrollIntoView({{block: 'center'}});
+                    textarea.focus();
+                    textarea.value = {repr(prompt)};
+                    textarea.dispatchEvent(new Event('input', {{bubbles: true}}));
+
+                    return 'ok';
+                }})();
+            """)
+            if result == 'ok':
+                self.log("→ Pasted with JS ✓")
+                return True
+            return False
+        except Exception as e:
+            self.log(f"⚠️ JS paste failed: {e}", "WARN")
+            return False
 
     def _setup_window_layout(self):
         """
@@ -1766,22 +2046,35 @@ class DrissionFlowAPI:
             except:
                 pass
 
-    def _click_textarea(self):
+    def _click_textarea(self, wait_visible: bool = True):
         """
         Click vào textarea để focus - QUAN TRỌNG để nhập prompt.
-        Dùng JavaScript với MouseEvent để đảm bảo click chính xác.
+        Đợi textarea visible trước khi click, nếu không thấy sẽ F5 refresh.
+
+        Args:
+            wait_visible: True = đợi textarea visible trước khi click
         """
         try:
+            # QUAN TRỌNG: Đợi textarea visible trước khi click
+            if wait_visible:
+                if not self._wait_for_textarea_visible(timeout=10, max_refresh=2):
+                    self.log("✗ Textarea không visible sau khi refresh", "ERROR")
+                    return False
+
             result = self.driver.run_js("""
                 (function() {
                     var textarea = document.querySelector('textarea');
                     if (!textarea) return 'not_found';
 
+                    // Kiểm tra visible lần cuối trước khi click
+                    var rect = textarea.getBoundingClientRect();
+                    if (rect.width <= 0 || rect.height <= 0) return 'not_visible';
+
                     // Scroll vào view
                     textarea.scrollIntoView({block: 'center', behavior: 'instant'});
 
                     // Lấy vị trí giữa textarea
-                    var rect = textarea.getBoundingClientRect();
+                    rect = textarea.getBoundingClientRect();
                     var centerX = rect.left + rect.width / 2;
                     var centerY = rect.top + rect.height / 2;
 
@@ -1819,6 +2112,8 @@ class DrissionFlowAPI:
                 return True
             elif result == 'not_found':
                 self.log("✗ Textarea not found", "ERROR")
+            elif result == 'not_visible':
+                self.log("✗ Textarea not visible", "ERROR")
             return False
         except Exception as e:
             self.log(f"⚠️ Click textarea error: {e}", "WARN")
@@ -2333,12 +2628,19 @@ class DrissionFlowAPI:
                         success, msg = self._webshare_proxy.rotate_ip(self.worker_id, "403 reCAPTCHA")
                         self.log(f"  → Webshare rotate: {msg}", "WARN")
 
-                    # === IPv6 ROTATION: Sau 3 lần 403 liên tiếp, đổi IPv6 ===
+                    # === IPv6: Sau N lần 403 liên tiếp, ACTIVATE hoặc ROTATE IPv6 ===
                     rotate_ipv6 = False
                     if self._consecutive_403 >= self._max_403_before_ipv6:
-                        self.log(f"  → 🔄 Đã 403 {self._consecutive_403} lần liên tiếp - Đổi IPv6...")
-                        rotate_ipv6 = True
                         self._consecutive_403 = 0  # Reset counter
+
+                        if not self._ipv6_activated:
+                            # Lần đầu: Activate IPv6
+                            self.log(f"  → 🌐 ACTIVATE IPv6 MODE (lần đầu)...")
+                            self._activate_ipv6()
+                        else:
+                            # Đã activate: Rotate sang IP khác
+                            self.log(f"  → 🔄 Rotate sang IPv6 khác...")
+                            rotate_ipv6 = True
 
                     # Restart Chrome (có thể kèm IPv6 rotation)
                     project_url = getattr(self, '_current_project_url', None)
@@ -2702,12 +3004,19 @@ class DrissionFlowAPI:
                             success, msg = self._webshare_proxy.rotate_ip(self.worker_id, "I2V 403")
                             self.log(f"[I2V] → Webshare rotate: {msg}", "WARN")
 
-                        # === IPv6 ROTATION: Sau 3 lần 403 liên tiếp, đổi IPv6 ===
+                        # === IPv6: Sau N lần 403 liên tiếp, ACTIVATE hoặc ROTATE IPv6 ===
                         rotate_ipv6 = False
                         if self._consecutive_403 >= self._max_403_before_ipv6:
-                            self.log(f"[I2V] → 🔄 Đã 403 {self._consecutive_403} lần liên tiếp - Đổi IPv6...")
-                            rotate_ipv6 = True
                             self._consecutive_403 = 0  # Reset counter
+
+                            if not self._ipv6_activated:
+                                # Lần đầu: Activate IPv6
+                                self.log(f"[I2V] → 🌐 ACTIVATE IPv6 MODE (lần đầu)...")
+                                self._activate_ipv6()
+                            else:
+                                # Đã activate: Rotate sang IP khác
+                                self.log(f"[I2V] → 🔄 Rotate sang IPv6 khác...")
+                                rotate_ipv6 = True
 
                         # Restart Chrome (có thể kèm IPv6 rotation)
                         if self.restart_chrome(rotate_ipv6=rotate_ipv6):
