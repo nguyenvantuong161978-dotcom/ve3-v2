@@ -238,6 +238,26 @@ class SmartEngine:
             except:
                 pass
 
+        # === AUTO-DETECT CHROME PORTABLE (nếu chưa có từ settings) ===
+        if not self.chrome_portable:
+            import platform
+            if platform.system() == 'Windows':
+                chrome_locations = [
+                    # Ưu tiên 1: Thư mục tool/GoogleChromePortable/
+                    root_dir / "GoogleChromePortable" / "GoogleChromePortable.exe",
+                    # Ưu tiên 2: Documents/GoogleChromePortable/
+                    Path.home() / "Documents" / "GoogleChromePortable" / "GoogleChromePortable.exe",
+                    # Legacy: ve3
+                    Path.home() / "Documents" / "ve3" / "ve3.exe",
+                    Path.home() / "Documents" / "ve3" / "chrome.exe",
+                ]
+                for chrome_path in chrome_locations:
+                    if chrome_path.exists():
+                        self.chrome_portable = str(chrome_path)
+                        self.chrome_path = str(chrome_path)  # Cập nhật cả chrome_path
+                        self.log(f"[AUTO] Phát hiện Chrome Portable: {chrome_path}", "INFO")
+                        break
+
         # === LOAD TỪ chrome_profiles/ DIRECTORY (ƯU TIÊN) ===
         # GUI tạo profiles ở đây, không phải accounts.json
         profiles_dir = root_dir / "chrome_profiles"
@@ -469,7 +489,17 @@ class SmartEngine:
         if has_voice and not self.deepseek_keys and not self.groq_keys and not self.gemini_keys:
             missing.append("AI API keys cho voice (DeepSeek RE: platform.deepseek.com/api_keys)")
 
-        if not Path(self.chrome_path).exists():
+        # Check Chrome: ưu tiên chrome_portable, fallback chrome_path
+        chrome_found = False
+        if self.chrome_portable and Path(self.chrome_portable).exists():
+            chrome_found = True
+        elif Path(self.chrome_path).exists():
+            chrome_found = True
+
+        if not chrome_found:
+            # Hiển thị cả 2 đường dẫn đã check
+            if self.chrome_portable:
+                missing.append(f"Chrome Portable: {self.chrome_portable}")
             missing.append(f"Chrome: {self.chrome_path}")
 
         return len(missing) == 0, missing

@@ -168,12 +168,39 @@ def complete_excel_with_api(project_dir: Path, name: str) -> bool:
     """
     Complete Excel prompts using API (V2 flow).
     Called when Excel has [FALLBACK] prompts from run_srt.py.
+
+    QUAN TRỌNG: Nếu API fails, sẽ dùng backup prompts từ director_plan sheet.
     """
     import yaml
 
     print(f"  🤖 Completing Excel with API (V2 flow)...")
 
+    excel_path = project_dir / f"{name}_prompts.xlsx"
+    director_plan_backup = []
+    original_excel_backup = None  # Backup toàn bộ Excel để khôi phục khi fail
+
     try:
+        # === BƯỚC 1: Backup director_plan VÀ toàn bộ Excel trước khi làm gì ===
+        if excel_path.exists():
+            # Backup toàn bộ file Excel
+            import shutil
+            backup_path = excel_path.with_suffix('.xlsx.backup')
+            shutil.copy2(excel_path, backup_path)
+            original_excel_backup = backup_path
+            print(f"  📋 Backed up Excel to {backup_path.name}")
+
+            from modules.excel_manager import PromptWorkbook
+            try:
+                wb = PromptWorkbook(str(excel_path))
+                wb.load_or_create()
+                director_plan_backup = wb.get_director_plan()
+                if director_plan_backup:
+                    print(f"  📋 Backed up {len(director_plan_backup)} scenes from director_plan")
+                else:
+                    print(f"  ⚠️ director_plan is empty!")
+            except Exception as e:
+                print(f"  ⚠️ Could not backup director_plan: {e}")
+
         # Load config
         cfg = {}
         cfg_file = TOOL_DIR / "config" / "settings.yaml"
@@ -188,9 +215,14 @@ def complete_excel_with_api(project_dir: Path, name: str) -> bool:
 
         if deepseek_key:
             cfg['deepseek_api_keys'] = [deepseek_key]
+
+        # === KIỂM TRA: Nếu không có API keys → dùng fallback ngay ===
         if not groq_keys and not gemini_keys and not deepseek_key:
-            print(f"  ⚠️ No API keys configured, using fallback prompts")
-            return True  # Continue with fallback
+            print(f"  ⚠️ No API keys configured, using existing fallback prompts")
+            # KHÔNG xóa Excel, giữ nguyên fallback prompts
+            if original_excel_backup and original_excel_backup.exists():
+                original_excel_backup.unlink()  # Xóa backup vì không cần
+            return True  # Continue with existing fallback
 
         # Prefer DeepSeek for prompts
         cfg['preferred_provider'] = 'deepseek' if deepseek_key else ('groq' if groq_keys else 'gemini')
@@ -198,8 +230,8 @@ def complete_excel_with_api(project_dir: Path, name: str) -> bool:
         # Force V2 flow
         cfg['use_v2_flow'] = True
 
-        # Delete existing Excel to regenerate
-        excel_path = project_dir / f"{name}_prompts.xlsx"
+        # === THẬN TRỌNG: Xóa Excel để regenerate ===
+        # Chỉ xóa sau khi đã backup
         if excel_path.exists():
             excel_path.unlink()
             print(f"  🗑️ Deleted fallback Excel, regenerating with API...")
@@ -208,18 +240,170 @@ def complete_excel_with_api(project_dir: Path, name: str) -> bool:
         from modules.prompts_generator import PromptGenerator
         gen = PromptGenerator(cfg)
 
-        if gen.generate_for_project(project_dir, name, overwrite=True):
+        api_success = False
+        try:
+            api_success = gen.generate_for_project(project_dir, name, overwrite=True)
+        except Exception as api_err:
+            print(f"  ❌ API error: {api_err}")
+            api_success = False
+
+        if api_success:
             print(f"  ✅ Excel completed with API prompts")
+            # Xóa backup vì không cần nữa
+            if original_excel_backup and original_excel_backup.exists():
+                original_excel_backup.unlink()
             return True
         else:
-            print(f"  ❌ Failed to generate API prompts")
-            return False
+            print(f"  ❌ API failed (có thể hết tiền), restoring backup...")
+            # === API FAILED: Khôi phục từ backup ===
+            return _restore_from_backup(excel_path, original_excel_backup, director_plan_backup)
 
     except Exception as e:
         print(f"  ❌ API completion error: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        # === ERROR: Khôi phục từ backup ===
+        return _restore_from_backup(excel_path, original_excel_backup, director_plan_backup)
+
+
+def _restore_from_backup(excel_path: Path, original_excel_backup: Path, director_plan_backup: list) -> bool:
+    """
+    Khôi phục Excel từ backup khi API fail.
+    Ưu tiên: 1. Original Excel backup → 2. director_plan backup → 3. Fail
+    """
+    import shutil
+
+    # Ưu tiên 1: Khôi phục từ file backup gốc
+    if original_excel_backup and original_excel_backup.exists():
+        try:
+            shutil.copy2(original_excel_backup, excel_path)
+            original_excel_backup.unlink()  # Xóa backup
+            print(f"  ✅ Restored original Excel with fallback prompts")
+            return True
+        except Exception as e:
+            print(f"  ⚠️ Could not restore from file backup: {e}")
+
+    # Ưu tiên 2: Rebuild từ director_plan
+    if director_plan_backup:
+        print(f"  🔄 Rebuilding from director_plan backup ({len(director_plan_backup)} scenes)...")
+        try:
+            _restore_scenes_from_director_plan(excel_path, director_plan_backup)
+            print(f"  ✅ Restored {len(director_plan_backup)} scenes from director_plan")
+            return True
+        except Exception as restore_err:
+            print(f"  ❌ Failed to restore from director_plan: {restore_err}")
+
+    print(f"  ❌ No backup available!")
+    return False
+
+
+def _restore_scenes_from_director_plan(excel_path: Path, director_plan: list) -> bool:
+    """
+    Khôi phục scenes từ director_plan backup.
+    Tạo lại Excel với scenes từ backup prompts.
+    Sử dụng backup_characters và backup_locations nếu có.
+    """
+    from modules.excel_manager import PromptWorkbook, Scene, Character
+
+    print(f"  🔄 Restoring {len(director_plan)} scenes from director_plan backup...")
+
+    # Create new workbook
+    wb = PromptWorkbook(str(excel_path))
+    wb.load_or_create()
+
+    # Clear existing scenes if any
+    try:
+        wb.clear_scenes()
+    except:
+        pass
+
+    # === Lấy thông tin từ backup_characters nếu có ===
+    backup_chars = []
+    try:
+        backup_chars = wb.get_backup_characters()
+        if backup_chars:
+            print(f"  📋 Found {len(backup_chars)} backup characters with locks")
+    except:
+        pass
+
+    # === Lấy thông tin từ backup_locations nếu có ===
+    backup_locs = []
+    try:
+        backup_locs = wb.get_backup_locations()
+        if backup_locs:
+            print(f"  📋 Found {len(backup_locs)} backup locations with locks")
+    except:
+        pass
+
+    # === Tạo character từ backup_characters (có đầy đủ locks) ===
+    chars = wb.get_characters()
+    if not chars:
+        if backup_chars:
+            # Dùng thông tin từ backup_characters (có character_lock + costume_lock)
+            for bc in backup_chars:
+                char_lock = bc.get("character_lock", "")
+                costume_lock = bc.get("costume_lock", "")
+                full_prompt = f"{char_lock}, {costume_lock}" if costume_lock else char_lock
+
+                default_char = Character(
+                    id=bc.get("id", "nvc"),
+                    name=bc.get("name", "Narrator"),
+                    role="narrator",
+                    vietnamese_prompt="Người kể chuyện hồi tưởng",
+                    english_prompt=full_prompt,
+                    character_lock=char_lock,
+                    image_file=bc.get("image_file", "nvc.png"),
+                    status="pending"
+                )
+                wb.add_character(default_char)
+                print(f"  ✓ Restored character '{bc.get('id')}' with character_lock")
+        else:
+            # Fallback: tạo character mặc định
+            default_char = Character(
+                id="nvc",
+                name="Narrator",
+                role="narrator",
+                vietnamese_prompt="Người kể chuyện",
+                english_prompt="A storyteller narrating the video",
+                image_file="nvc.png",
+                status="pending"
+            )
+            wb.add_character(default_char)
+
+    # Restore scenes from backup
+    for plan in director_plan:
+        scene = Scene(
+            scene_id=plan.get("plan_id", 0),
+            srt_start=plan.get("srt_start", ""),
+            srt_end=plan.get("srt_end", ""),
+            duration=plan.get("duration", 0),
+            planned_duration=plan.get("duration", 0),
+            srt_text=plan.get("srt_text", ""),
+            img_prompt=plan.get("img_prompt", ""),
+            video_prompt=plan.get("img_prompt", ""),  # Use same for video
+            status_img="pending",
+            status_vid="pending",
+            characters_used=plan.get("characters_used", ""),
+            location_used=plan.get("location_used", ""),
+            reference_files=plan.get("reference_files", "")
+        )
+        wb.add_scene(scene)
+
+    # Restore director_plan data
+    wb.save_director_plan(director_plan)
+
+    wb.save()
+
+    # Thống kê
+    narrator_count = len([p for p in director_plan if "[FALLBACK-NARRATOR]" in p.get("img_prompt", "")])
+    flashback_count = len([p for p in director_plan if "[FALLBACK-FLASHBACK]" in p.get("img_prompt", "")])
+
+    if narrator_count > 0 or flashback_count > 0:
+        print(f"  ✅ Restored: {narrator_count} narrator + {flashback_count} flashback scenes")
+    else:
+        print(f"  ✅ Restored Excel with {len(director_plan)} backup scenes")
+
+    return True
 
 
 def delete_master_source(code: str):

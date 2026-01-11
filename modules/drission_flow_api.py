@@ -693,17 +693,15 @@ JS_SELECT_T2V_MODE_STEP2 = '''
 })();
 '''
 
-# T2V Mode - Bước 3: Tìm và click option "Từ văn bản sang video" / "Text to video"
-# Hỗ trợ cả tiếng Việt và Anh
+# T2V Mode - Bước 3: Tìm và click option
+# Vietnamese: "Từ văn bản sang video" = 22 ký tự
+# English: "Text to video" = 13 ký tự
 JS_SELECT_T2V_MODE_STEP3 = '''
 (function() {
-    var allSpans = document.querySelectorAll('span');
-    for (var el of allSpans) {
-        var text = (el.textContent || '').trim().toLowerCase();
-        // Vietnamese: "Từ văn bản sang video"
-        // English: "Text to video"
-        if ((text.includes('văn bản') && text.includes('video')) ||
-            (text.includes('text') && text.includes('video') && !text.includes('assets'))) {
+    var spans = document.querySelectorAll('span');
+    for (var el of spans) {
+        var text = (el.textContent || '').trim();
+        if (text.includes('video') && (text.length === 22 || text.length === 13)) {
             el.click();
             console.log('[T2V] Clicked: ' + text);
             return 'CLICKED';
@@ -879,10 +877,10 @@ class DrissionFlowAPI:
         # Model fallback: khi quota exceeded (429), chuyển từ GEM_PIX_2 (Pro) sang GEM_PIX
         self._use_fallback_model = False  # True = dùng nano banana (GEM_PIX) thay vì pro (GEM_PIX_2)
 
-        # IPv6 rotation: đếm 403 liên tiếp, sau 3 lần thì đổi IPv6
+        # IPv6 rotation: đếm số lần reset Chrome do 403, sau 5 lần mới đổi IPv6
         self._consecutive_403 = 0
-        self._max_403_before_ipv6 = 3  # Số lần 403 liên tiếp trước khi đổi IPv6
-        self._ipv6_activated = False  # True = đã bật IPv6 proxy (chỉ bật sau khi 403 đủ lần)
+        self._max_403_before_ipv6 = 5  # Số lần reset Chrome liên tiếp trước khi đổi IPv6
+        self._ipv6_activated = False  # True = đã bật IPv6 proxy (chỉ bật sau khi reset Chrome đủ 5 lần)
 
     def log(self, msg: str, level: str = "INFO"):
         """Log message - chỉ dùng 1 trong 2: callback hoặc print."""
@@ -1133,6 +1131,93 @@ class DrissionFlowAPI:
 
         self.log("⚠️ Không phát hiện được ảnh, tiếp tục...", "WARN")
         return True  # Vẫn return True để tiếp tục
+
+    def _is_logged_out(self) -> bool:
+        """
+        Kiểm tra xem Chrome có bị logout khỏi Google không.
+        Dựa vào URL: nếu là accounts.google.com thì đã logout.
+        """
+        try:
+            current_url = self.driver.url
+            if current_url:
+                # Bị logout nếu URL là trang đăng nhập Google
+                logout_indicators = [
+                    "accounts.google.com/signin",
+                    "accounts.google.com/v3/signin",
+                    "accounts.google.com/ServiceLogin",
+                ]
+                for indicator in logout_indicators:
+                    if indicator in current_url:
+                        return True
+        except:
+            pass
+        return False
+
+    def _auto_login_google(self) -> bool:
+        """
+        Tự động đăng nhập Google khi bị logout.
+        Gọi hàm login từ google_login.py.
+
+        Returns:
+            True nếu login thành công
+        """
+        self.log("=" * 50)
+        self.log("⚠️ PHÁT HIỆN BỊ LOGOUT - TỰ ĐỘNG ĐĂNG NHẬP LẠI")
+        self.log("=" * 50)
+
+        try:
+            # Import hàm login từ google_login.py
+            import sys
+            tool_dir = Path(__file__).parent.parent
+            if str(tool_dir) not in sys.path:
+                sys.path.insert(0, str(tool_dir))
+
+            from google_login import detect_machine_code, get_account_info, login_google_chrome
+
+            # 1. Detect mã máy
+            machine_code = detect_machine_code()
+            if not machine_code:
+                self.log("✗ Không detect được mã máy", "ERROR")
+                return False
+
+            self.log(f"Mã máy: {machine_code}")
+
+            # 2. Lấy thông tin tài khoản từ Google Sheet
+            self.log("Đọc thông tin tài khoản từ Google Sheet...")
+            account_info = get_account_info(machine_code)
+            if not account_info:
+                self.log("✗ Không lấy được thông tin tài khoản", "ERROR")
+                return False
+
+            self.log(f"Tài khoản: {account_info['id']}")
+
+            # 3. Đóng Chrome hiện tại
+            self.log("Đóng Chrome để login lại...")
+            self._kill_chrome()
+            self.close()
+            time.sleep(2)
+
+            # 4. Chạy login
+            self.log("Bắt đầu đăng nhập Google...")
+            success = login_google_chrome(account_info)
+
+            if success:
+                self.log("✓ Đăng nhập thành công!")
+                # Đóng Chrome login để setup lại từ đầu
+                time.sleep(2)
+                return True
+            else:
+                self.log("✗ Đăng nhập thất bại", "ERROR")
+                return False
+
+        except ImportError as e:
+            self.log(f"✗ Không import được google_login: {e}", "ERROR")
+            return False
+        except Exception as e:
+            self.log(f"✗ Lỗi auto-login: {e}", "ERROR")
+            import traceback
+            traceback.print_exc()
+            return False
 
     def _kill_chrome(self):
         """
@@ -1495,6 +1580,27 @@ class DrissionFlowAPI:
 
                 self.log(f"✓ URL: {current_url}")
 
+                # === KIỂM TRA BỊ LOGOUT ===
+                if self._is_logged_out():
+                    self.log("⚠️ Phát hiện bị LOGOUT khỏi Google!", "WARN")
+
+                    # Thử auto-login
+                    if self._auto_login_google():
+                        self.log("✓ Auto-login thành công!")
+                        self.log("🔄 Restart setup từ đầu...")
+                        time.sleep(3)
+
+                        # Gọi lại setup() từ đầu (đệ quy)
+                        return self.setup(
+                            wait_for_project=wait_for_project,
+                            timeout=timeout,
+                            warm_up=warm_up,
+                            project_url=project_url
+                        )
+                    else:
+                        self.log("✗ Auto-login thất bại", "ERROR")
+                        return False
+
                 # Lưu project_url để dùng khi retry
                 if "/project/" in current_url:
                     self._current_project_url = current_url
@@ -1657,12 +1763,26 @@ class DrissionFlowAPI:
                             self.log(f"[PAGE] ⚠️ Lỗi: {e}", "WARN")
                             break
 
-        # 5. Đợi textarea sẵn sàng - với xử lý ContextLostError
+        # 5. Đợi textarea sẵn sàng - với xử lý ContextLostError và LOGOUT
         self.log("Đợi project load...")
         textarea_ready = False
         for retry_count in range(3):  # Retry tối đa 3 lần nếu page refresh
             try:
                 for i in range(30):
+                    # === KIỂM TRA LOGOUT MỖI 5 GIÂY ===
+                    if i % 5 == 0 and i > 0:
+                        if self._is_logged_out():
+                            self.log("[PROJECT] ⚠️ Phát hiện bị LOGOUT khi đợi project!")
+                            if self._auto_login_google():
+                                self.log("[PROJECT] ✓ Đã login lại, quay lại project...")
+                                # Navigate lại project
+                                self.driver.get(f"https://labs.google/fx/tools/video-fx/projects/{self.project_id}")
+                                time.sleep(3)
+                                continue
+                            else:
+                                self.log("[PROJECT] ✗ Login lại thất bại", "ERROR")
+                                return False
+
                     if self._find_textarea():
                         self.log("✓ Project đã sẵn sàng!")
                         textarea_ready = True
@@ -1671,6 +1791,14 @@ class DrissionFlowAPI:
                 if textarea_ready:
                     break
                 else:
+                    # Timeout: check logout lần cuối
+                    if self._is_logged_out():
+                        self.log("[PROJECT] ⚠️ Timeout do bị LOGOUT!")
+                        if self._auto_login_google():
+                            self.log("[PROJECT] ✓ Đã login lại, thử lại...")
+                            self.driver.get(f"https://labs.google/fx/tools/video-fx/projects/{self.project_id}")
+                            time.sleep(3)
+                            continue
                     self.log("✗ Timeout - không tìm thấy textarea", "ERROR")
                     return False
             except Exception as e:
@@ -1724,89 +1852,39 @@ class DrissionFlowAPI:
 
     def _wait_for_textarea_visible(self, timeout: int = 10, max_refresh: int = 2) -> bool:
         """
-        Đợi textarea xuất hiện VÀ visible trước khi click.
-        Nếu đợi quá lâu → F5 refresh page và thử lại.
-
-        Args:
-            timeout: Timeout mỗi lần đợi (giây)
-            max_refresh: Số lần F5 refresh tối đa
-
-        Returns:
-            True nếu textarea visible, False nếu timeout
+        Đợi textarea xuất hiện trước khi click.
+        Cách đơn giản: dùng DrissionPage ele() với timeout.
         """
         for refresh_count in range(max_refresh + 1):
-            self.log(f"[TEXTAREA] Đợi textarea visible... (lần {refresh_count + 1})")
+            self.log(f"[TEXTAREA] Đợi textarea... (lần {refresh_count + 1})")
 
-            for i in range(timeout):
-                try:
-                    # Kiểm tra textarea tồn tại VÀ visible
-                    result = self.driver.run_js("""
-                        (function() {
-                            var textarea = document.querySelector('textarea');
-                            if (!textarea) return 'not_found';
-
-                            // Kiểm tra visible
-                            var rect = textarea.getBoundingClientRect();
-                            var style = window.getComputedStyle(textarea);
-
-                            // Element phải có kích thước > 0 và không bị hidden
-                            if (rect.width <= 0 || rect.height <= 0) return 'no_size';
-                            if (style.display === 'none') return 'display_none';
-                            if (style.visibility === 'hidden') return 'visibility_hidden';
-                            if (style.opacity === '0') return 'opacity_0';
-
-                            // Kiểm tra có trong viewport không
-                            var inViewport = (
-                                rect.top >= 0 &&
-                                rect.left >= 0 &&
-                                rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
-                                rect.right <= (window.innerWidth || document.documentElement.clientWidth)
-                            );
-
-                            if (!inViewport) {
-                                // Scroll vào view
-                                textarea.scrollIntoView({block: 'center', behavior: 'instant'});
-                                return 'scrolled';
-                            }
-
-                            return 'visible';
-                        })();
-                    """)
-
-                    if result == 'visible':
-                        self.log(f"[TEXTAREA] ✓ Textarea visible sau {i+1}s")
-                        return True
-                    elif result == 'scrolled':
-                        self.log("[TEXTAREA] Scrolled vào view, đợi thêm...")
-                        time.sleep(0.5)
-                        continue
-                    elif result == 'not_found':
-                        # Chưa có textarea, đợi tiếp
-                        pass
-                    else:
-                        self.log(f"[TEXTAREA] Chưa visible: {result}")
-
-                except Exception as e:
-                    self.log(f"[TEXTAREA] Check error: {e}")
-
-                time.sleep(1)
+            try:
+                # Cách đơn giản: dùng DrissionPage tìm textarea
+                textarea = self.driver.ele('tag:textarea', timeout=timeout)
+                if textarea:
+                    self.log(f"[TEXTAREA] ✓ Tìm thấy textarea")
+                    time.sleep(0.5)  # Đợi thêm để chắc chắn ready
+                    return True
+            except Exception as e:
+                self.log(f"[TEXTAREA] Chưa thấy: {e}")
 
             # Timeout - thử F5 refresh nếu còn lượt
             if refresh_count < max_refresh:
-                self.log(f"[TEXTAREA] ⚠️ Timeout {timeout}s, F5 refresh page...")
+                self.log(f"[TEXTAREA] ⚠️ Không thấy textarea, F5 refresh...")
                 try:
                     self.driver.refresh()
-                    time.sleep(3)  # Đợi page load
+                    time.sleep(3)
                 except Exception as e:
                     self.log(f"[TEXTAREA] Refresh error: {e}")
 
-        self.log("[TEXTAREA] ✗ Không thể tìm thấy textarea sau khi refresh", "ERROR")
+        self.log("[TEXTAREA] ✗ Không tìm thấy textarea", "ERROR")
         return False
 
     def _wait_for_page_ready(self, timeout: int = 30) -> bool:
         """
         Đợi page load xong sau khi bị refresh.
         Kiểm tra document.readyState và có thể truy cập DOM.
+        Nếu phát hiện logout → tự động login lại.
 
         Args:
             timeout: Timeout tối đa (giây)
@@ -1817,6 +1895,17 @@ class DrissionFlowAPI:
         self.log("[PAGE] Đợi page load sau refresh...")
         for i in range(timeout):
             try:
+                # === KIỂM TRA LOGOUT TRƯỚC ===
+                if self._is_logged_out():
+                    self.log("[PAGE] ⚠️ Phát hiện bị LOGOUT!")
+                    if self._auto_login_google():
+                        self.log("[PAGE] ✓ Đã login lại thành công!")
+                        # Sau khi login, cần navigate lại trang project
+                        return False  # Return False để trigger retry từ setup()
+                    else:
+                        self.log("[PAGE] ✗ Login lại thất bại", "ERROR")
+                        return False
+
                 # Kiểm tra page ready state
                 ready_state = self.driver.run_js("return document.readyState")
                 if ready_state == "complete":
@@ -1829,6 +1918,16 @@ class DrissionFlowAPI:
             except Exception as e:
                 # Page vẫn đang load, đợi tiếp
                 time.sleep(1)
+
+        # === TIMEOUT: Kiểm tra logout lần cuối ===
+        if self._is_logged_out():
+            self.log("[PAGE] ⚠️ Timeout do bị LOGOUT!")
+            if self._auto_login_google():
+                self.log("[PAGE] ✓ Đã login lại!")
+                return False  # Return False để trigger retry
+            else:
+                self.log("[PAGE] ✗ Login lại thất bại", "ERROR")
+
         self.log("[PAGE] ⚠️ Timeout đợi page load", "WARN")
         return False
 
@@ -1863,7 +1962,6 @@ class DrissionFlowAPI:
         """
         Paste prompt bằng Ctrl+V thay vì JS input.
         Tránh bị 403 do bot detection.
-        Đợi textarea visible trước khi click.
 
         Args:
             textarea: Element textarea đã tìm thấy
@@ -1875,61 +1973,43 @@ class DrissionFlowAPI:
         import pyperclip
 
         try:
-            # 0. QUAN TRỌNG: Đợi textarea visible trước khi click
-            if not self._wait_for_textarea_visible(timeout=10, max_refresh=2):
-                self.log("⚠️ Textarea không visible, fallback to JS", "WARN")
-                raise Exception("Textarea not visible")
-
             # 1. Copy prompt vào clipboard
             pyperclip.copy(prompt)
             self.log(f"→ Copied to clipboard ({len(prompt)} chars)")
 
-            # 2. Dùng JavaScript để focus và clear textarea (an toàn hơn Ctrl+A)
-            result = self.driver.run_js("""
-                (function() {
-                    var textarea = document.querySelector('textarea');
-                    if (!textarea) return 'not_found';
-
-                    // Scroll vào view
-                    textarea.scrollIntoView({block: 'center', behavior: 'instant'});
-
-                    // Focus vào textarea
-                    textarea.focus();
-
-                    // Clear nội dung
-                    textarea.value = '';
-                    textarea.dispatchEvent(new Event('input', {bubbles: true}));
-
-                    return 'ready';
-                })();
-            """)
-
-            if result != 'ready':
-                self.log(f"⚠️ JS focus failed: {result}, fallback", "WARN")
-                raise Exception("JS focus failed")
-
-            time.sleep(0.3)
-
-            # 3. Tìm lại textarea và paste bằng Ctrl+V
-            textarea = self._find_textarea()
+            # 2. Tìm textarea bằng DrissionPage
+            textarea = self.driver.ele('tag:textarea', timeout=10)
             if not textarea:
-                raise Exception("Textarea not found after focus")
+                self.log("⚠️ Không tìm thấy textarea", "WARN")
+                return False
 
+            # 3. Click vào textarea để focus
+            try:
+                textarea.click()
+                time.sleep(0.3)
+            except:
+                pass
+
+            # 4. Clear nội dung cũ bằng Ctrl+A + Delete
             from DrissionPage.common import Keys
+            try:
+                textarea.input(Keys.CTRL_A)
+                time.sleep(0.1)
+                textarea.input(Keys.DELETE)
+                time.sleep(0.1)
+            except:
+                pass
+
+            # 5. Paste bằng Ctrl+V
             textarea.input(Keys.CTRL_V)
             time.sleep(0.3)
 
             self.log("→ Pasted with Ctrl+V ✓")
             return True
 
-        except ImportError as e:
-            # pyperclip not installed, fallback to JS
-            self.log(f"⚠️ Import error: {e}, fallback to JS input", "WARN")
-            return self._paste_prompt_js(prompt)
-
         except Exception as e:
-            self.log(f"⚠️ Ctrl+V failed: {e}, fallback to JS", "WARN")
-            return self._paste_prompt_js(prompt)
+            self.log(f"⚠️ Ctrl+V failed: {e}", "WARN")
+            return False
 
     def _paste_prompt_js(self, prompt: str) -> bool:
         """Fallback: Paste prompt bằng JavaScript."""
@@ -3328,33 +3408,44 @@ class DrissionFlowAPI:
             return False
 
     def switch_to_video_mode(self) -> bool:
-        """Chuyển Chrome sang mode tạo video từ ảnh (3 bước với delay)."""
+        """Chuyển Chrome sang mode tạo video từ ảnh. Dùng cách cũ: click dropdown 2 lần với delay."""
         if not self._ready:
             return False
-        try:
-            # Bước 1: Click dropdown lần 1 (đóng nếu đang mở)
-            r1 = self.driver.run_js(JS_SELECT_VIDEO_MODE_STEP1)
-            if r1 == 'NO_DROPDOWN':
-                self.log("[Mode] Dropdown not found", "WARN")
-                return False
-            time.sleep(0.1)
 
-            # Bước 2: Click dropdown lần 2 (mở lại)
-            r2 = self.driver.run_js(JS_SELECT_VIDEO_MODE_STEP2)
-            time.sleep(0.3)
+        MAX_RETRIES = 3
 
-            # Bước 3: Tìm và click option
-            result = self.driver.run_js(JS_SELECT_VIDEO_MODE_STEP3)
-            if result == 'CLICKED':
-                self.log("[Mode] ✓ Đã chuyển sang Video mode")
+        for attempt in range(MAX_RETRIES):
+            try:
+                self.log(f"[Mode] Chuyển sang Video mode (attempt {attempt + 1}/{MAX_RETRIES})...")
+
+                # Bước 1: Click dropdown lần 1
+                self.driver.run_js(JS_SELECT_VIDEO_MODE_STEP1)
                 time.sleep(0.5)
-                return True
-            else:
-                self.log(f"[Mode] Không tìm thấy Video option: {result}", "WARN")
-                return False
-        except Exception as e:
-            self.log(f"[Mode] Error: {e}", "ERROR")
-            return False
+
+                # Bước 2: Click dropdown lần 2 để mở menu
+                self.driver.run_js(JS_SELECT_VIDEO_MODE_STEP2)
+                time.sleep(0.5)
+
+                # Bước 3: Tìm và click option "Tạo video từ các thành phần"
+                option_clicked = self.driver.run_js(JS_SELECT_VIDEO_MODE_STEP3)
+
+                if option_clicked == 'CLICKED':
+                    self.log("[Mode] ✓ Đã chuyển sang Video mode")
+                    time.sleep(0.5)
+                    return True
+                else:
+                    self.log(f"[Mode] Không tìm thấy Video option: {option_clicked}", "WARN")
+                    # Click ra ngoài để đóng menu
+                    self.driver.run_js('document.body.click();')
+                    time.sleep(0.5)
+                    continue
+
+            except Exception as e:
+                self.log(f"[Mode] Error: {e}", "ERROR")
+                time.sleep(0.5)
+
+        self.log("[Mode] ✗ Không thể chuyển sang Video mode sau nhiều lần thử", "ERROR")
+        return False
 
     def generate_video_force_mode(
         self,
@@ -3561,19 +3652,10 @@ class DrissionFlowAPI:
         self.log(f"[T2V→I2V] Tạo video từ media: {media_id[:50]}...")
         self.log(f"[T2V→I2V] Prompt: {prompt[:60]}...")
 
-        # 1. Chuyển sang T2V mode ("Từ văn bản sang video")
-        # Giống hệt switch_to_video_mode() đang hoạt động
+        # 1. Chuyển sang T2V mode ("Từ văn bản sang video") - dùng function có retry
         self.log("[T2V→I2V] Chuyển sang mode 'Từ văn bản sang video'...")
-        self.driver.run_js(JS_SELECT_T2V_MODE_STEP1)  # Click dropdown lần 1
-        time.sleep(0.1)
-        self.driver.run_js(JS_SELECT_T2V_MODE_STEP2)  # Click dropdown lần 2
-        time.sleep(0.3)
-        result = self.driver.run_js(JS_SELECT_T2V_MODE_STEP3)  # Click option
-        if result == 'CLICKED':
-            self.log("[T2V→I2V] ✓ Đã chuyển sang T2V mode")
-            time.sleep(0.5)
-        else:
-            self.log(f"[T2V→I2V] ⚠️ Không thể chuyển sang T2V mode: {result}", "WARN")
+        if not self.switch_to_t2v_mode():
+            self.log("[T2V→I2V] ⚠️ Không chuyển được T2V mode, thử tiếp...", "WARN")
 
         # 2. Reset video state
         self.driver.run_js("""
@@ -3688,36 +3770,48 @@ class DrissionFlowAPI:
     def switch_to_t2v_mode(self) -> bool:
         """
         Chuyển Chrome sang mode "Từ văn bản sang video" (Text-to-Video).
+        Dùng cách cũ đã hoạt động: click dropdown 2 lần với delay, rồi tìm span.
 
         Returns:
             True nếu thành công
         """
         if not self._ready:
             return False
-        try:
-            # Bước 1: Click dropdown lần 1
-            r1 = self.driver.run_js(JS_SELECT_T2V_MODE_STEP1)
-            if r1 == 'NO_DROPDOWN':
-                self.log("[Mode] Dropdown not found", "WARN")
-                return False
-            time.sleep(0.1)
 
-            # Bước 2: Click dropdown lần 2
-            r2 = self.driver.run_js(JS_SELECT_T2V_MODE_STEP2)
-            time.sleep(0.3)
+        MAX_RETRIES = 3
 
-            # Bước 3: Tìm và click option
-            result = self.driver.run_js(JS_SELECT_T2V_MODE_STEP3)
-            if result == 'CLICKED':
-                self.log("[Mode] ✓ Đã chuyển sang T2V mode (Từ văn bản sang video)")
+        for attempt in range(MAX_RETRIES):
+            try:
+                self.log(f"[Mode] Chuyển sang T2V mode (attempt {attempt + 1}/{MAX_RETRIES})...")
+
+                # Bước 1: Click dropdown lần 1
+                self.driver.run_js(JS_SELECT_T2V_MODE_STEP1)
                 time.sleep(0.5)
-                return True
-            else:
-                self.log(f"[Mode] Không tìm thấy T2V option: {result}", "WARN")
-                return False
-        except Exception as e:
-            self.log(f"[Mode] Error: {e}", "ERROR")
-            return False
+
+                # Bước 2: Click dropdown lần 2 để mở menu
+                self.driver.run_js(JS_SELECT_T2V_MODE_STEP2)
+                time.sleep(0.5)
+
+                # Bước 3: Tìm và click option "Từ văn bản sang video"
+                option_clicked = self.driver.run_js(JS_SELECT_T2V_MODE_STEP3)
+
+                if option_clicked == 'CLICKED':
+                    self.log("[Mode] ✓ Đã chuyển sang T2V mode")
+                    time.sleep(0.5)
+                    return True
+                else:
+                    self.log(f"[Mode] Không tìm thấy T2V option: {option_clicked}", "WARN")
+                    # Click ra ngoài để đóng menu
+                    self.driver.run_js('document.body.click();')
+                    time.sleep(0.5)
+                    continue
+
+            except Exception as e:
+                self.log(f"[Mode] Error: {e}", "ERROR")
+                time.sleep(0.5)
+
+        self.log("[Mode] ✗ Không thể chuyển sang T2V mode sau nhiều lần thử", "ERROR")
+        return False
 
     def generate_video_pure_t2v(
         self,
@@ -3752,19 +3846,10 @@ class DrissionFlowAPI:
         self.log(f"[T2V-PURE] Tạo video từ text prompt...")
         self.log(f"[T2V-PURE] Prompt: {prompt[:80]}...")
 
-        # 1. Chuyển sang T2V mode ("Từ văn bản sang video")
+        # 1. Chuyển sang T2V mode ("Từ văn bản sang video") - dùng function có retry
         self.log("[T2V-PURE] Chuyển sang mode 'Từ văn bản sang video'...")
-        self.driver.run_js(JS_SELECT_T2V_MODE_STEP1)  # Click dropdown lần 1
-        time.sleep(0.1)
-        self.driver.run_js(JS_SELECT_T2V_MODE_STEP2)  # Click dropdown lần 2
-        time.sleep(0.3)
-        result = self.driver.run_js(JS_SELECT_T2V_MODE_STEP3)  # Click option
-        if result == 'CLICKED':
-            self.log("[T2V-PURE] ✓ Đã chuyển sang T2V mode")
-            time.sleep(1)  # Đợi UI update
-        else:
-            self.log(f"[T2V-PURE] ⚠️ Không thể chuyển sang T2V mode: {result}", "WARN")
-            # Vẫn tiếp tục vì có thể đã ở T2V mode
+        if not self.switch_to_t2v_mode():
+            self.log("[T2V-PURE] ⚠️ Không chuyển được T2V mode, thử tiếp...", "WARN")
 
         # 2. Reset video state - KHÔNG set _t2vToI2vConfig để giữ T2V thuần
         self.driver.run_js("""
@@ -3903,18 +3988,9 @@ class DrissionFlowAPI:
         self.log(f"[I2V] Tạo video từ media: {media_id[:50]}...")
         self.log(f"[I2V] Prompt: {prompt[:60]}...")
 
-        # 1. Chuyển sang video mode (3 bước với delay)
-        self.log("[I2V] Chuyển sang mode 'Tạo video từ các thành phần'...")
-        self.driver.run_js(JS_SELECT_VIDEO_MODE_STEP1)  # Click 1
-        time.sleep(0.1)
-        self.driver.run_js(JS_SELECT_VIDEO_MODE_STEP2)  # Click 2
-        time.sleep(0.3)
-        result = self.driver.run_js(JS_SELECT_VIDEO_MODE_STEP3)  # Click option
-        if result == 'CLICKED':
-            self.log("[I2V] ✓ Đã chuyển sang video mode")
-            time.sleep(1)
-        else:
-            self.log(f"[I2V] Không thể chuyển sang video mode: {result}", "WARN")
+        # 1. Chuyển sang video mode (dùng function có retry)
+        if not self.switch_to_video_mode():
+            self.log("[I2V] ⚠️ Không chuyển được video mode, thử tiếp...", "WARN")
 
         # 2. Reset video state
         self.driver.run_js("""
@@ -4146,11 +4222,17 @@ class DrissionFlowAPI:
                             if parts:
                                 pid = parts[-1]
                                 if pid.isdigit():
+                                    # QUAN TRỌNG: Dùng graceful shutdown (không /F)
+                                    # Để Chrome có thời gian lưu cookies/session
+                                    subprocess.run(['taskkill', '/PID', pid],
+                                                 capture_output=True, timeout=5)
+                                    time.sleep(2)  # Đợi Chrome lưu dữ liệu
+                                    # Nếu vẫn chưa tắt, mới force kill
                                     subprocess.run(['taskkill', '/F', '/PID', pid],
                                                  capture_output=True, timeout=5)
                                     self.log(f"  Đã tắt Chrome cũ (PID: {pid})")
             else:
-                # Linux/Mac: dùng pkill
+                # Linux/Mac: dùng SIGTERM trước (graceful), sau đó mới SIGKILL
                 result = subprocess.run(
                     ['pgrep', '-f', profile_path],
                     capture_output=True, text=True, timeout=10
@@ -4159,6 +4241,10 @@ class DrissionFlowAPI:
                     pids = result.stdout.strip().split('\n')
                     for pid in pids:
                         if pid.isdigit():
+                            # Graceful shutdown trước
+                            subprocess.run(['kill', '-15', pid], capture_output=True, timeout=5)
+                            time.sleep(2)  # Đợi Chrome lưu dữ liệu
+                            # Force kill nếu cần
                             subprocess.run(['kill', '-9', pid], capture_output=True, timeout=5)
                             self.log(f"  Đã tắt Chrome cũ (PID: {pid})")
 

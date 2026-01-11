@@ -40,16 +40,18 @@ def detect_machine_code() -> str:
 
     Ví dụ:
     - C:\\Users\\Admin\\Documents\\AR57-T1\\ve3-tool-simple → AR57-T1
-    - D:\\VMs\\AR57-T1\\ve3-tool-simple → AR57-T1
+    - D:\\VMs\\AR4-T1\\ve3-tool-simple → AR4-T1
+    - C:\\Users\\hoangmai\\Documents\\AR4-T1\\ve3-tool-simple → AR4-T1
     """
     tool_path = TOOL_DIR.resolve()
 
     # Lấy thư mục cha của ve3-tool-simple
     parent = tool_path.parent
 
-    # Mã máy thường có dạng: XX##-T# hoặc XX##-####
-    # Ví dụ: AR57-T1, AR47-0028
-    code_pattern = re.compile(r'^[A-Z]{2}\d{2}-[A-Z0-9]+$', re.IGNORECASE)
+    # Mã máy thường có dạng: XX#-T# hoặc XX##-T# hoặc XX##-####
+    # Ví dụ: AR4-T1, AR57-T1, AR47-0028
+    # Pattern linh hoạt: 2 chữ cái + 1-3 số + dash + alphanumeric
+    code_pattern = re.compile(r'^[A-Z]{2}\d{1,3}-[A-Z0-9]+$', re.IGNORECASE)
 
     # Kiểm tra parent folder
     if code_pattern.match(parent.name):
@@ -415,8 +417,13 @@ def login_google_chrome(account_info: dict) -> bool:
         # Kiểm tra kết quả
         time.sleep(3)
         log("Setup completed!", "OK")
-        log("Press Enter to close...")
-        input()
+
+        # Đóng Chrome (không đợi user nhấn Enter khi chạy tự động)
+        try:
+            driver.quit()
+            log("Chrome closed")
+        except:
+            pass
 
         return True
 
@@ -438,7 +445,7 @@ def main():
     if not machine_code:
         log("Cannot detect machine code from path", "ERROR")
         log(f"Current path: {TOOL_DIR}")
-        log("Expected: Documents\\AR57-T1\\ve3-tool-simple")
+        log("Expected pattern: XX#-T# hoặc XX##-T# (ví dụ: AR4-T1, AR57-T1)")
 
         # Cho user nhập manual
         machine_code = input("\nEnter machine code (e.g., AR57-T1): ").strip().upper()

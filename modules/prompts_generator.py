@@ -5231,58 +5231,98 @@ OUTPUT FORMAT (JSON only, không markdown):
         num_shots = max(1, int(duration / max_shot_duration) + (1 if duration % max_shot_duration > 2 else 0))
         shot_duration = duration / num_shots if num_shots > 0 else duration
 
-        # Tạo prompt cho API
-        char_info = ""
+        # Build character description chi tiết
+        char_desc = ""
+        char_lock = ""
         for c in characters:
             if c.id == main_char:
-                char_info = f"{c.id}: {c.character_lock or c.name}"
+                char_lock = c.character_lock or ""
+                char_desc = f"{c.name}: {char_lock}" if char_lock else f"{c.name}"
                 break
-        if not char_info:
-            char_info = f"{main_char}: main character"
+        if not char_desc:
+            char_desc = f"main character ({main_char})"
 
-        loc_info = ""
+        # Build location description chi tiết
+        loc_desc = ""
+        loc_lock = ""
         for l in locations:
             if l.id == location:
-                loc_info = f"{l.id}: {l.location_lock or l.name}"
+                loc_lock = l.location_lock or ""
+                loc_desc = f"{l.name}: {loc_lock}" if loc_lock else f"{l.name}"
                 break
 
-        prompt = f"""Tạo {num_shots} shot(s) cho scene sau:
+        # Emotion to cinematic lighting/mood
+        emotion_cinematics = {
+            "sad": "soft diffused lighting, muted colors, melancholic atmosphere, shallow depth of field",
+            "happy": "warm golden hour lighting, vibrant colors, uplifting atmosphere",
+            "angry": "harsh dramatic lighting, high contrast, intense shadows, red undertones",
+            "fear": "low-key lighting, deep shadows, cold blue tones, unsettling atmosphere",
+            "love": "soft romantic lighting, warm tones, bokeh background, intimate framing",
+            "neutral": "natural balanced lighting, cinematic color grading"
+        }
+        cinematic_mood = emotion_cinematics.get(emotion, emotion_cinematics["neutral"])
 
-SCENE INFO:
-- Nội dung: "{srt_text[:200]}"
-- Scene type: {scene_type}
-- Emotion: {emotion}
-- Duration: {duration:.1f}s → {num_shots} shots, mỗi shot ~{shot_duration:.1f}s
-- Character: {char_info}
-- Location: {loc_info}
-- Style: {global_style}
+        # Scene summary từ bước phân tích
+        scene_summary = scene.get("summary", "")
 
-QUY TẮC:
-- KHÔNG đưa text/dialogue vào prompt (tránh AI vẽ chữ)
-- Mỗi shot có shot_type khác nhau (WIDE, CLOSE-UP, MEDIUM, EXTREME CLOSE-UP)
-- Emotion phải match với nội dung
-- Thêm "Illustrating: [nội dung]" ở cuối mỗi prompt
+        prompt = f"""You are a professional film director creating VISUAL shot descriptions for a dramatic video.
 
-OUTPUT FORMAT (JSON only):
+=== STORY MOMENT ===
+NARRATION TEXT: "{srt_text}"
+SCENE SUMMARY: {scene_summary if scene_summary else "Visualize the narration above"}
+SCENE TYPE: {scene_type}
+EMOTIONAL TONE: {emotion}
+
+=== CHARACTER IN THIS SCENE ===
+CHARACTER ID: {main_char}
+APPEARANCE: {char_desc}
+{f"CHARACTER LOCK (exact look): {char_lock}" if char_lock else ""}
+
+=== SETTING ===
+LOCATION: {loc_desc if loc_desc else "Setting based on narration context"}
+{f"LOCATION LOCK: {loc_lock}" if loc_lock else ""}
+
+=== CINEMATIC REQUIREMENTS ===
+VISUAL STYLE: {global_style}
+MOOD LIGHTING: {cinematic_mood}
+DURATION: {duration:.1f}s → {num_shots} shot(s)
+
+=== CRITICAL RULES ===
+1. ILLUSTRATE THE STORY - Each shot must VISUALLY show what's happening in the narration
+2. CHARACTER ACTIONS - Show the character DOING something relevant to the narration (not just standing)
+3. EMOTIONAL EXPRESSION - Face must show {emotion} emotion with specific micro-expressions
+4. NO TEXT/WORDS in the image - describe visually, don't include dialogue
+5. DETAILED DESCRIPTION - Include specific details: clothing wrinkles, lighting direction, background elements
+6. REFERENCE FORMAT - End with: ({main_char}.png){f", ({location}.png)" if location else ""}
+
+=== SHOT VARIETY ===
+- ESTABLISHING WIDE (24mm): Full environment + character, context setting
+- MEDIUM (50mm): Upper body, gestures, interaction with environment
+- CLOSE-UP (85mm): Face emotions, tears, expressions, shallow DOF
+- EXTREME CLOSE-UP (100mm): Eyes reflecting emotion, hands trembling, details
+- LOW ANGLE: Empowering, dramatic, larger than life
+- HIGH ANGLE: Vulnerable, small, overwhelmed
+
+=== OUTPUT FORMAT (JSON only) ===
 {{
   "shots": [
     {{
-      "shot_type": "WIDE",
-      "img_prompt": "Wide shot, 24mm lens, [visual description], {global_style}. Illustrating: [tóm tắt nội dung]",
-      "reference_files": ["{main_char}.png"]
-    }},
-    {{
       "shot_type": "CLOSE-UP",
-      "img_prompt": "Close-up, 85mm lens, [visual description], {global_style}. Illustrating: [tóm tắt nội dung]",
-      "reference_files": ["{main_char}.png"]
+      "img_prompt": "[Shot type], [lens mm], [CHARACTER DESCRIPTION: age, ethnicity, hair, clothing], [SPECIFIC ACTION the character is doing], [FACIAL EXPRESSION matching {emotion}], [LIGHTING: {cinematic_mood}], [BACKGROUND/ENVIRONMENT], {global_style}, 4K cinematic. ({main_char}.png)"
     }}
   ]
-}}"""
+}}
+
+=== EXAMPLE HIGH-QUALITY PROMPT ===
+"Close-up shot, 85mm portrait lens, 35-year-old Asian man with salt-and-pepper hair and tired eyes, wearing a faded blue work shirt, his weathered hands gripping an old photograph, tears welling in his eyes as memories flood back, soft diffused window light casting gentle shadows on his face, bokeh background of a modest living room, photorealistic, 4K cinematic quality. (nvc.png)"
+
+NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summary if scene_summary else srt_text[:100]}"
+"""
 
         shots = []
 
         try:
-            response = self._generate_content(prompt, temperature=0.5, max_tokens=2000)
+            response = self._generate_content(prompt, temperature=0.7, max_tokens=3000)
             json_data = self._extract_json(response)
 
             if json_data and "shots" in json_data:
@@ -5293,6 +5333,24 @@ OUTPUT FORMAT (JSON only):
                 for i, api_shot in enumerate(api_shots):
                     shot_end = current_time + shot_duration
 
+                    # Build reference_files list
+                    ref_files = api_shot.get("reference_files", [f"{main_char}.png"])
+                    # Đảm bảo location cũng có trong reference_files nếu có
+                    if location and f"{location}.png" not in ref_files:
+                        ref_files.append(f"{location}.png")
+
+                    # Lấy img_prompt từ API
+                    img_prompt = api_shot.get("img_prompt", "")
+
+                    # QUAN TRỌNG: Thêm annotations (nvc.png) vào prompt nếu chưa có
+                    if img_prompt and ref_files:
+                        img_prompt = self._add_filename_annotations_to_prompt(
+                            img_prompt,
+                            ref_files,
+                            characters,
+                            locations
+                        )
+
                     shot = {
                         "scene_id": scene_id,
                         "shot_number": i + 1,
@@ -5300,9 +5358,12 @@ OUTPUT FORMAT (JSON only):
                         "srt_end": self._seconds_to_timestamp(shot_end),
                         "duration": shot_duration,
                         "shot_type": api_shot.get("shot_type", "MEDIUM"),
-                        "img_prompt": api_shot.get("img_prompt", ""),
-                        "reference_files": api_shot.get("reference_files", [f"{main_char}.png"]),
-                        "srt_text": srt_text[:200]
+                        "img_prompt": img_prompt,
+                        "reference_files": ref_files,
+                        "srt_text": srt_text[:200],
+                        # QUAN TRỌNG: Thêm main_character và location để lưu vào Excel
+                        "main_character": main_char,
+                        "location": location
                     }
                     shots.append(shot)
                     current_time = shot_end
@@ -5325,31 +5386,91 @@ OUTPUT FORMAT (JSON only):
         start_seconds: float,
         global_style: str
     ) -> list:
-        """Tạo shots fallback không cần API."""
+        """Tạo shots fallback không cần API - chất lượng cao, minh họa câu chuyện."""
         shots = []
         main_char = scene.get("main_character", "nvc")
+        location = scene.get("location", "")
         srt_text = scene.get("srt_text", "")
         emotion = scene.get("emotion", "neutral")
+        summary = scene.get("summary", "")
+        scene_type = scene.get("scene_type", "FRAME_PRESENT")
 
-        # Shot types để rotate
-        shot_types = ["WIDE", "CLOSE-UP", "MEDIUM", "EXTREME CLOSE-UP"]
+        # Shot types với lens info và purpose
+        shot_configs = [
+            ("Close-up shot", "85mm portrait lens", "face and emotional expression, shallow depth of field, bokeh background"),
+            ("Medium shot", "50mm lens", "upper body showing gestures and body language, environmental context"),
+            ("Wide establishing shot", "24mm wide-angle lens", "full body in complete environment, context and atmosphere"),
+            ("Extreme close-up", "100mm macro lens", "eyes or hands detail, intense emotional focus, cinematic intimacy"),
+            ("Low angle shot", "35mm lens from below", "dramatic empowering perspective, character prominence"),
+            ("Over-the-shoulder shot", "50mm lens", "perspective view, connection to environment or memory")
+        ]
 
-        # Emotion → visual cue
+        # Emotion → detailed cinematic description
         emotion_map = {
-            "sad": "melancholic expression, tears, emotional",
-            "happy": "warm smile, joyful atmosphere",
-            "angry": "intense expression, dramatic lighting",
-            "neutral": "natural expression, contemplative"
+            "sad": {
+                "lighting": "soft diffused lighting from window, muted blue-grey color grading",
+                "expression": "tears welling in eyes, downturned lips, furrowed brow, looking down",
+                "atmosphere": "melancholic, heavy, contemplative silence"
+            },
+            "happy": {
+                "lighting": "warm golden hour sunlight, vibrant natural colors",
+                "expression": "genuine bright smile reaching the eyes, relaxed features, joyful gaze",
+                "atmosphere": "uplifting, warm, peaceful contentment"
+            },
+            "angry": {
+                "lighting": "harsh dramatic side-lighting, high contrast shadows, red undertones",
+                "expression": "intense furrowed brow, clenched jaw, fierce piercing gaze, flared nostrils",
+                "atmosphere": "tense, confrontational, explosive tension"
+            },
+            "fear": {
+                "lighting": "low-key lighting, cold blue tones, deep unsettling shadows",
+                "expression": "wide anxious eyes, pale complexion, tense shoulders, trembling",
+                "atmosphere": "dread, vulnerability, impending danger"
+            },
+            "love": {
+                "lighting": "soft romantic backlighting, warm pink tones, gentle lens flare",
+                "expression": "tender loving gaze, soft gentle smile, eyes full of affection",
+                "atmosphere": "intimate, warm, emotional connection"
+            },
+            "nostalgic": {
+                "lighting": "soft dreamy haze, warm sepia undertones, gentle diffusion",
+                "expression": "distant wistful gaze, slight melancholic smile, remembering",
+                "atmosphere": "bittersweet memory, passage of time, reflection"
+            },
+            "neutral": {
+                "lighting": "natural balanced lighting, cinematic color grading",
+                "expression": "contemplative thoughtful expression, observant gaze",
+                "atmosphere": "calm, observational, everyday moment"
+            }
         }
-        visual_cue = emotion_map.get(emotion, emotion_map["neutral"])
+        mood = emotion_map.get(emotion, emotion_map["neutral"])
+
+        # Build reference_files
+        ref_files = [f"{main_char}.png"]
+        if location:
+            ref_files.append(f"{location}.png")
+
+        # Location reference
+        loc_ref = f", ({location}.png)" if location else ""
+
+        # Story context để minh họa
+        story_context = summary if summary else srt_text[:100]
 
         current_time = start_seconds
         for i in range(num_shots):
-            shot_type = shot_types[i % len(shot_types)]
+            config = shot_configs[i % len(shot_configs)]
+            shot_type, lens_desc, framing_desc = config
             shot_end = current_time + shot_duration
 
-            # Tạo prompt đơn giản
-            img_prompt = f"{global_style}, {shot_type.lower()}, {visual_cue}, cinematic lighting. Illustrating: [{srt_text[:100]}] (reference: {main_char}.png)"
+            # Tạo prompt chi tiết minh họa câu chuyện
+            img_prompt = (
+                f"{shot_type}, {lens_desc}, {framing_desc}. "
+                f"Character ({main_char}.png) {mood['expression']}. "
+                f"{mood['lighting']}. "
+                f"{mood['atmosphere']}. "
+                f"{global_style}, photorealistic, 4K cinematic quality{loc_ref}. "
+                f"Visualizing: {story_context}"
+            )
 
             shot = {
                 "scene_id": scene["scene_id"],
@@ -5359,8 +5480,10 @@ OUTPUT FORMAT (JSON only):
                 "duration": shot_duration,
                 "shot_type": shot_type,
                 "img_prompt": img_prompt,
-                "reference_files": [f"{main_char}.png"],
-                "srt_text": srt_text[:200]
+                "reference_files": ref_files,
+                "srt_text": srt_text[:200],
+                "main_character": main_char,
+                "location": location
             }
             shots.append(shot)
             current_time = shot_end
@@ -5373,6 +5496,19 @@ OUTPUT FORMAT (JSON only):
         minutes = int((seconds % 3600) // 60)
         secs = seconds % 60
         return f"{hours:02d}:{minutes:02d}:{secs:06.3f}".replace(".", ",")
+
+    def _timestamp_to_seconds_v2(self, timestamp: str) -> float:
+        """Chuyển timestamp HH:MM:SS,mmm thành seconds"""
+        try:
+            ts = timestamp.replace(",", ".")
+            parts = ts.split(":")
+            if len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+            elif len(parts) == 2:
+                return int(parts[0]) * 60 + float(parts[1])
+            return float(ts)
+        except:
+            return 0
 
     def generate_prompts_v2(
         self,
@@ -5412,18 +5548,78 @@ OUTPUT FORMAT (JSON only):
             scenes = self._group_srt_entries_v2(srt_entries, characters, locations)
             self.logger.info(f"[V2 BƯỚC 2] ✓ Tạo được {len(scenes)} scenes")
 
-            # BƯỚC 3: Tạo shots cho mỗi scene
-            self.logger.info("\n[V2 BƯỚC 3] Tạo shots cho mỗi scene...")
+            # BƯỚC 3: Tạo shots cho mỗi scene - XỬ LÝ THEO BATCH ĐỂ TRÁNH LỖI TOKEN
+            self.logger.info("\n[V2 BƯỚC 3] Tạo shots cho mỗi scene (batch mode)...")
             all_shots = []
-            for scene in scenes:
-                shots = self._create_shots_for_scene_v2(scene, characters, locations, global_style)
-                all_shots.extend(shots)
-                self.logger.info(f"  Scene {scene['scene_id']}: {len(shots)} shots ({scene['srt_start']} - {scene['srt_end']})")
+            BATCH_SIZE = 5  # Xử lý 5 scenes mỗi batch để tránh lỗi token
+            total_batches = (len(scenes) + BATCH_SIZE - 1) // BATCH_SIZE
 
-            self.logger.info(f"[V2 BƯỚC 3] ✓ Tạo được {len(all_shots)} shots tổng cộng")
+            for batch_idx in range(total_batches):
+                batch_start = batch_idx * BATCH_SIZE
+                batch_end = min(batch_start + BATCH_SIZE, len(scenes))
+                batch_scenes = scenes[batch_start:batch_end]
 
-            # === SẮP XẾP SHOTS THEO TIMESTAMP ===
-            # Đảm bảo thứ tự đúng trước khi lưu
+                self.logger.info(f"\n  [Batch {batch_idx + 1}/{total_batches}] Scenes {batch_start + 1}-{batch_end}...")
+
+                for scene in batch_scenes:
+                    try:
+                        shots = self._create_shots_for_scene_v2(scene, characters, locations, global_style)
+
+                        # === VALIDATE MỖI SHOT ===
+                        validated_shots = []
+                        for shot in shots:
+                            # Validate timestamp
+                            if not shot.get("srt_start") or not shot.get("srt_end"):
+                                self.logger.warning(f"    ⚠️ Shot thiếu timestamp, dùng fallback")
+                                continue
+
+                            # Validate prompt
+                            if not shot.get("img_prompt") or len(shot.get("img_prompt", "")) < 20:
+                                self.logger.warning(f"    ⚠️ Shot thiếu prompt, dùng fallback")
+                                continue
+
+                            # Validate references - đảm bảo luôn có
+                            main_char = shot.get("main_character", "nvc")
+                            if not shot.get("reference_files"):
+                                shot["reference_files"] = [f"{main_char}.png"]
+                                if shot.get("location"):
+                                    shot["reference_files"].append(f"{shot['location']}.png")
+
+                            validated_shots.append(shot)
+
+                        # Nếu không có shot valid, dùng fallback cho scene
+                        if not validated_shots:
+                            self.logger.warning(f"    ⚠️ Scene {scene['scene_id']} không có shot valid, tạo fallback...")
+                            num_shots = max(1, int(scene.get("duration_seconds", 5) / 8) + 1)
+                            start_secs = self._timestamp_to_seconds_v2(scene.get("srt_start", "00:00:00,000"))
+                            validated_shots = self._create_fallback_shots_v2(
+                                scene, num_shots, scene.get("duration_seconds", 5) / num_shots,
+                                start_secs, global_style
+                            )
+
+                        all_shots.extend(validated_shots)
+                        self.logger.info(f"    Scene {scene['scene_id']}: {len(validated_shots)} shots ({scene['srt_start']} - {scene['srt_end']})")
+
+                    except Exception as scene_err:
+                        self.logger.error(f"    ❌ Scene {scene['scene_id']} lỗi: {scene_err}, tạo fallback...")
+                        # Tạo fallback cho scene lỗi
+                        num_shots = max(1, int(scene.get("duration_seconds", 5) / 8) + 1)
+                        start_secs = self._timestamp_to_seconds_v2(scene.get("srt_start", "00:00:00,000"))
+                        fallback_shots = self._create_fallback_shots_v2(
+                            scene, num_shots, scene.get("duration_seconds", 5) / num_shots,
+                            start_secs, global_style
+                        )
+                        all_shots.extend(fallback_shots)
+
+                # Nghỉ giữa các batch để tránh rate limit
+                if batch_idx < total_batches - 1:
+                    import time
+                    time.sleep(1)
+
+            self.logger.info(f"\n[V2 BƯỚC 3] ✓ Tạo được {len(all_shots)} shots tổng cộng")
+
+            # === SẮP XẾP VÀ VALIDATE TIMESTAMPS ===
+            # Đảm bảo thứ tự đúng và không có timestamp nhảy bất thường
             def get_start_seconds(shot):
                 try:
                     parts = shot["srt_start"].replace(",", ".").split(":")
@@ -5433,6 +5629,37 @@ OUTPUT FORMAT (JSON only):
 
             all_shots.sort(key=get_start_seconds)
             self.logger.info("[V2] ✓ Đã sắp xếp shots theo timestamp")
+
+            # === VALIDATE: Kiểm tra timestamp không nhảy bất thường ===
+            # Nếu shot N có start_time > shot N-1 end_time + 10s → cảnh báo
+            validated_shots = []
+            prev_end_seconds = 0
+            MAX_GAP_SECONDS = 15  # Cho phép gap tối đa 15 giây
+
+            for shot in all_shots:
+                shot_start = get_start_seconds(shot)
+                shot_end_str = shot.get("srt_end", "")
+                try:
+                    end_parts = shot_end_str.replace(",", ".").split(":")
+                    shot_end = int(end_parts[0]) * 3600 + int(end_parts[1]) * 60 + float(end_parts[2])
+                except:
+                    shot_end = shot_start + 5
+
+                # Kiểm tra gap bất thường
+                gap = shot_start - prev_end_seconds
+                if prev_end_seconds > 0 and gap > MAX_GAP_SECONDS:
+                    self.logger.warning(f"  ⚠️ Gap bất thường {gap:.1f}s tại {shot['srt_start']}, điều chỉnh...")
+                    # Điều chỉnh timestamp để liên tục
+                    duration = shot_end - shot_start
+                    shot["srt_start"] = self._seconds_to_timestamp(prev_end_seconds)
+                    shot["srt_end"] = self._seconds_to_timestamp(prev_end_seconds + duration)
+                    shot_end = prev_end_seconds + duration
+
+                validated_shots.append(shot)
+                prev_end_seconds = shot_end
+
+            all_shots = validated_shots
+            self.logger.info(f"[V2] ✓ Validated {len(all_shots)} shots với timestamps liên tục")
 
             # BƯỚC 4: Lưu vào Excel
             self.logger.info("\n[V2 BƯỚC 4] Lưu vào Excel...")
@@ -5447,12 +5674,34 @@ OUTPUT FORMAT (JSON only):
 
             # Đánh số scene_id mới theo thứ tự
             for idx, shot in enumerate(all_shots):
-                # Chuyển reference_files thành JSON string
+                # === VALIDATE VÀ ĐẢM BẢO REFERENCE ĐẦY ĐỦ ===
+                main_char = shot.get("main_character", "nvc") or "nvc"
+                location = shot.get("location", "")
+
+                # Đảm bảo reference_files luôn có ít nhất character
                 ref_files = shot.get("reference_files", [])
-                if isinstance(ref_files, list):
-                    ref_files_str = json.dumps(ref_files)
+                if not ref_files or not isinstance(ref_files, list):
+                    ref_files = []
+
+                # Đảm bảo character file trong reference
+                char_file = f"{main_char}.png"
+                if char_file not in ref_files:
+                    ref_files.insert(0, char_file)
+
+                # Đảm bảo location file trong reference nếu có location
+                if location:
+                    loc_file = f"{location}.png"
+                    if loc_file not in ref_files:
+                        ref_files.append(loc_file)
+
+                # Chuyển reference_files thành JSON string
+                ref_files_str = json.dumps(ref_files)
+
+                # Chuyển characters_used thành JSON list
+                if isinstance(main_char, list):
+                    chars_used_str = json.dumps(main_char)
                 else:
-                    ref_files_str = str(ref_files)
+                    chars_used_str = json.dumps([main_char]) if main_char else '["nvc"]'
 
                 scene_obj = Scene(
                     scene_id=idx + 1,  # Đánh số lại theo thứ tự
@@ -5465,7 +5714,7 @@ OUTPUT FORMAT (JSON only):
                     video_prompt=shot.get("img_prompt", ""),  # Dùng chung
                     status_img="pending",
                     status_vid="pending",
-                    characters_used=shot.get("main_character", "nvc"),
+                    characters_used=chars_used_str,
                     location_used=shot.get("location", ""),
                     reference_files=ref_files_str
                 )
@@ -5495,60 +5744,160 @@ OUTPUT FORMAT (JSON only):
         workbook
     ) -> bool:
         """
-        Tạo Excel với fallback prompts cơ bản (không gọi API).
-        Workers sẽ gọi API sau để hoàn thiện.
+        Tạo Excel với fallback prompts kiểu "Narrator Flashback Style".
+        Nếu API hết tiền, vẫn có thể tạo video chất lượng với style:
+        - Narrator scenes: Nhân vật kể chuyện tại location cố định (chỉ đổi góc máy)
+        - Flashback scenes: Minh họa nội dung đang kể
 
-        Fallback mode:
-        - Tạo nhân vật mặc định (nvc - narrator)
-        - Tạo scenes từ SRT với timestamps chính xác
-        - Prompts cơ bản dựa trên SRT text (có đánh dấu FALLBACK)
+        Structure:
+        - Scene lẻ (1,3,5...): Narrator tại location cố định
+        - Scene chẵn (2,4,6...): Flashback minh họa câu chuyện
         """
         from .excel_manager import Scene, Character as CharObj
         from .utils import group_srt_into_scenes
 
-        self.logger.info("[FALLBACK-ONLY] Bắt đầu tạo Excel cơ bản...")
+        self.logger.info("[FALLBACK] Bắt đầu tạo Excel với Narrator Flashback Style...")
 
-        # === BƯỚC 1: Tạo nhân vật mặc định ===
-        # Chỉ tạo nvc (narrator) - Workers sẽ phân tích lại sau
+        # === BƯỚC 1: Định nghĩa LOCK cố định cho Narrator ===
+        # Character Lock - mô tả chi tiết nhân vật (KHÔNG ĐỔI giữa các scene narrator)
+        CHARACTER_LOCK = (
+            "35-year-old Asian man with short black hair, gentle tired eyes, "
+            "slight stubble on chin, warm complexion, expressive face showing life experience"
+        )
+
+        # Costume Lock - trang phục cố định
+        COSTUME_LOCK = (
+            "wearing a comfortable dark blue knit sweater over white collared shirt, "
+            "sleeves slightly rolled up, casual but neat appearance"
+        )
+
+        # Location Lock - bối cảnh kể chuyện cố định
+        LOCATION_LOCK = (
+            "cozy living room corner, warm soft lamp light from beside, "
+            "wooden bookshelf with old books in background, comfortable armchair, "
+            "evening atmosphere with soft shadows, intimate storytelling setting"
+        )
+
+        # === BƯỚC 2: Tạo nhân vật trong characters sheet ===
         default_char = Character(
             id="nvc",
             name="Narrator",
             role="narrator",
-            vietnamese_prompt="Người kể chuyện",
-            english_prompt="A storyteller narrating the video",
-            character_lock="A 35-year-old narrator with expressive face",
+            vietnamese_prompt="Người kể chuyện hồi tưởng",
+            english_prompt=f"{CHARACTER_LOCK}, {COSTUME_LOCK}",
+            character_lock=CHARACTER_LOCK,
             image_file="nvc.png",
             status="pending"
         )
         workbook.add_character(default_char)
-        self.logger.info("[FALLBACK-ONLY] ✓ Đã thêm nhân vật mặc định: nvc")
+        self.logger.info("[FALLBACK] ✓ Đã tạo nhân vật narrator với character_lock")
 
-        # === BƯỚC 2: Nhóm SRT thành scenes ===
+        # === BƯỚC 3: Lưu vào backup_characters sheet ===
+        backup_chars = [{
+            "id": "nvc",
+            "name": "Narrator",
+            "character_lock": CHARACTER_LOCK,
+            "costume_lock": COSTUME_LOCK,
+            "image_file": "nvc.png"
+        }]
+        workbook.save_backup_characters(backup_chars)
+        self.logger.info("[FALLBACK] ✓ Đã lưu backup_characters với character_lock + costume_lock")
+
+        # === BƯỚC 4: Lưu vào backup_locations sheet ===
+        backup_locs = [{
+            "id": "loc",
+            "name": "Storytelling Room",
+            "location_lock": LOCATION_LOCK,
+            "image_file": "loc.png"
+        }]
+        workbook.save_backup_locations(backup_locs)
+        self.logger.info("[FALLBACK] ✓ Đã lưu backup_locations với location_lock")
+
+        # === BƯỚC 5: Nhóm SRT thành scenes ===
         scenes_data = group_srt_into_scenes(
             srt_entries,
             min_duration=self.min_scene_duration,
             max_duration=self.max_scene_duration
         )
-        self.logger.info(f"[FALLBACK-ONLY] ✓ Chia thành {len(scenes_data)} scenes từ SRT")
+        self.logger.info(f"[FALLBACK] ✓ Chia thành {len(scenes_data)} scenes từ SRT")
 
-        # === BƯỚC 3: Tạo fallback prompts cho mỗi scene ===
-        shot_types = ["WIDE", "CLOSE-UP", "MEDIUM", "EXTREME CLOSE-UP", "LOW ANGLE"]
+        # === BƯỚC 6: Định nghĩa góc máy cho Narrator (CHỈ ĐỔI GÓC MÁY) ===
+        narrator_camera_angles = [
+            ("Close-up shot", "85mm portrait lens", "face filling frame, shallow depth of field, bokeh background"),
+            ("Medium shot", "50mm lens", "upper body and hands visible, seated posture"),
+            ("Wide shot", "35mm lens", "full setting visible, character in environment context"),
+            ("Extreme close-up", "100mm macro lens", "eyes and expression detail, emotional intensity"),
+            ("Over-shoulder shot", "50mm lens", "looking at something off-frame, contemplative angle"),
+            ("Low angle medium shot", "35mm lens from below", "slight empowering perspective, thoughtful gaze"),
+        ]
+
+        # Biểu cảm narrator theo emotion (nhưng vẫn giữ nguyên character_lock + costume_lock + location_lock)
+        narrator_expressions = {
+            "sad": "eyes glistening with unshed tears, slight downturn of lips, nostalgic distant gaze",
+            "happy": "warm genuine smile, eyes crinkling at corners, relaxed joyful expression",
+            "neutral": "thoughtful contemplative expression, gentle knowing look, slight smile",
+            "tense": "furrowed brow, intense focused gaze, lips pressed together",
+            "nostalgic": "wistful distant gaze, bittersweet half-smile, eyes reflecting memories",
+        }
+
+        # === BƯỚC 7: Tạo scenes xen kẽ Narrator/Flashback ===
+        director_plan_data = []
 
         for idx, scene in enumerate(scenes_data):
             scene_id = idx + 1
-
-            # Lấy thông tin từ SRT
             srt_text = scene.get("text", "")[:300]
             srt_start = scene.get("srt_start", "00:00:00,000")
             srt_end = scene.get("srt_end", "00:00:05,000")
             duration = scene.get("duration_seconds", 5)
 
-            # Tạo shot type đa dạng
-            shot_type = shot_types[idx % len(shot_types)]
+            # Xác định loại scene: lẻ = Narrator, chẵn = Flashback
+            is_narrator_scene = (scene_id % 2 == 1)
 
-            # === FALLBACK PROMPT ===
-            # Đánh dấu [FALLBACK] để workers biết cần gọi API hoàn thiện
-            fallback_prompt = f"[FALLBACK] {shot_type}. Narrator (nvc.png). Illustrating: {srt_text[:150]}. Cinematic lighting, 4K photorealistic"
+            if is_narrator_scene:
+                # === NARRATOR SCENE ===
+                # Chỉ đổi góc máy, giữ nguyên character_lock + costume_lock + location_lock
+                angle_idx = (scene_id // 2) % len(narrator_camera_angles)
+                shot_type, lens, framing = narrator_camera_angles[angle_idx]
+
+                # Chọn expression dựa trên nội dung (đơn giản hóa)
+                expression = narrator_expressions["nostalgic"]  # Default nostalgic cho storytelling
+
+                # Prompt NARRATOR: Cố định mọi thứ, chỉ đổi góc máy
+                fallback_prompt = (
+                    f"[FALLBACK-NARRATOR] {shot_type}, {lens}, {framing}. "
+                    f"{CHARACTER_LOCK}, {COSTUME_LOCK}, {expression}. "
+                    f"{LOCATION_LOCK}. "
+                    f"Photorealistic, 4K cinematic quality. (nvc.png, loc.png)"
+                )
+
+                characters_used = '["nvc"]'
+                location_used = "loc"
+                reference_files = '["nvc.png", "loc.png"]'
+
+            else:
+                # === FLASHBACK SCENE ===
+                # Minh họa nội dung câu chuyện đang kể
+                flashback_shots = [
+                    ("Wide establishing shot", "24mm cinematic lens"),
+                    ("Medium shot", "50mm lens"),
+                    ("Close-up detail", "85mm lens"),
+                    ("Dramatic low angle", "35mm wide lens"),
+                    ("Atmospheric wide", "35mm anamorphic lens"),
+                ]
+                shot_idx = (scene_id // 2) % len(flashback_shots)
+                shot_type, lens = flashback_shots[shot_idx]
+
+                # Prompt FLASHBACK: Minh họa nội dung SRT
+                fallback_prompt = (
+                    f"[FALLBACK-FLASHBACK] {shot_type}, {lens}. "
+                    f"Visual illustration of: {srt_text[:150]}. "
+                    f"Cinematic lighting, dramatic atmosphere, storytelling imagery. "
+                    f"Photorealistic, 4K cinematic quality, film grain texture."
+                )
+
+                characters_used = '[]'
+                location_used = ""
+                reference_files = '[]'
 
             # Tạo Scene object
             scene_obj = Scene(
@@ -5562,15 +5911,39 @@ OUTPUT FORMAT (JSON only):
                 video_prompt=fallback_prompt,
                 status_img="pending",
                 status_vid="pending",
-                characters_used="nvc",
-                location_used="",
-                reference_files='["nvc.png"]'
+                characters_used=characters_used,
+                location_used=location_used,
+                reference_files=reference_files
             )
             workbook.add_scene(scene_obj)
 
+            # Thêm vào director_plan (backup)
+            director_plan_data.append({
+                "scene_id": scene_id,
+                "srt_start": srt_start,
+                "srt_end": srt_end,
+                "duration": duration,
+                "text": srt_text,
+                "characters_used": characters_used,
+                "location_used": location_used,
+                "reference_files": reference_files,
+                "img_prompt": fallback_prompt,
+                "status": "backup"
+            })
+
+        # === BƯỚC 8: Lưu vào director_plan sheet ===
+        workbook.save_director_plan(director_plan_data)
+        self.logger.info(f"[FALLBACK] ✓ Đã lưu {len(director_plan_data)} scenes vào director_plan")
+
         # Lưu Excel
         workbook.save()
-        self.logger.info(f"[FALLBACK-ONLY] ✓ Đã lưu {len(scenes_data)} scenes vào Excel")
-        self.logger.info("[FALLBACK-ONLY] ✓ Excel cơ bản hoàn thành - Workers sẽ gọi API hoàn thiện")
+
+        narrator_count = len([s for s in director_plan_data if "[FALLBACK-NARRATOR]" in s.get("img_prompt", "")])
+        flashback_count = len(director_plan_data) - narrator_count
+
+        self.logger.info(f"[FALLBACK] ✓ Excel hoàn thành: {narrator_count} narrator + {flashback_count} flashback scenes")
+        self.logger.info("[FALLBACK] ✓ Narrator scenes: CHỈ ĐỔI GÓC MÁY, giữ nguyên character/costume/location lock")
+        self.logger.info("[FALLBACK] ✓ Flashback scenes: Minh họa nội dung câu chuyện")
+        self.logger.info("[FALLBACK] ✓ Backup sheets: backup_characters + backup_locations đã lưu")
 
         return True
