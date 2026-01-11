@@ -693,14 +693,15 @@ JS_SELECT_T2V_MODE_STEP2 = '''
 })();
 '''
 
-# T2V Mode - Bước 3: Tìm và click option "Từ văn bản sang video" (22 ký tự)
+# T2V Mode - Bước 3: Tìm và click option
+# Vietnamese: "Từ văn bản sang video" = 22 ký tự
+# English: "Text to video" = 13 ký tự
 JS_SELECT_T2V_MODE_STEP3 = '''
 (function() {
     var spans = document.querySelectorAll('span');
     for (var el of spans) {
         var text = (el.textContent || '').trim();
-        // "Từ văn bản sang video" = 22 ký tự
-        if (text.includes('video') && text.length === 22) {
+        if (text.includes('video') && (text.length === 22 || text.length === 13)) {
             el.click();
             console.log('[T2V] Clicked: ' + text);
             return 'CLICKED';
