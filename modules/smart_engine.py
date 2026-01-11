@@ -4608,27 +4608,55 @@ class SmartEngine:
         video_cfg = cfg.get('video_generation', {})
         video_count = video_cfg.get('count', -1)  # -1 = all (default)
 
-        # Chrome profile - dùng profile khác với Chrome 1
+        # Chrome profile - Chrome 2 cần profile RIÊNG (không dùng chung với Chrome 1)
         root_dir = Path(__file__).parent.parent
         profiles_dir = root_dir / cfg.get('browser_profiles_dir', './chrome_profiles')
 
-        profile_dir = None
-        if profiles_dir.exists():
-            # Tìm profile thứ 2 (khác profile đầu tiên)
-            available_profiles = sorted([p for p in profiles_dir.iterdir() if p.is_dir() and not p.name.startswith('.')])
-            if len(available_profiles) >= 2:
-                profile_dir = str(available_profiles[1])  # Profile thứ 2
-            elif available_profiles:
-                # Chỉ có 1 profile - tạo profile mới cho video
-                profile_dir = str(profiles_dir / "video_chrome")
-                Path(profile_dir).mkdir(exist_ok=True)
+        # Tạo profile riêng cho Chrome 2 (video)
+        video_profile_dir = profiles_dir / "video_chrome"
+        video_profile_dir.mkdir(parents=True, exist_ok=True)
 
-        if not profile_dir:
-            self.log("[PARALLEL-VIDEO] Không có Chrome profile cho video!", "WARN")
-            self._parallel_video_running = False
-            return
+        # === COPY PROFILE TỪ CHROME PORTABLE (nếu cần) ===
+        # Để Chrome 2 có sẵn Google login từ Chrome Portable
+        chrome_portable_profile = None
+        if self.chrome_portable:
+            chrome_portable_path = Path(self.chrome_portable)
+            chrome_portable_profile = chrome_portable_path.parent / "Data" / "profile"
+        else:
+            # Auto-detect Chrome Portable profile
+            chrome_portable_locations = [
+                root_dir / "GoogleChromePortable" / "Data" / "profile",
+                Path.home() / "Documents" / "GoogleChromePortable" / "Data" / "profile",
+            ]
+            for loc in chrome_portable_locations:
+                if loc.exists():
+                    chrome_portable_profile = loc
+                    break
 
-        self.log(f"[PARALLEL-VIDEO] Chrome profile: {profile_dir}")
+        # Copy profile nếu video_chrome còn trống (chưa có login)
+        if chrome_portable_profile and chrome_portable_profile.exists():
+            # Check xem video_chrome đã có data chưa
+            has_login = (video_profile_dir / "Default").exists() or (video_profile_dir / "Cookies").exists()
+            if not has_login:
+                self.log(f"[PARALLEL-VIDEO] Copy profile từ Chrome Portable...")
+                try:
+                    import shutil
+                    # Copy toàn bộ profile (Login, Cookies, etc.)
+                    for item in chrome_portable_profile.iterdir():
+                        src = chrome_portable_profile / item.name
+                        dst = video_profile_dir / item.name
+                        if src.is_dir():
+                            if dst.exists():
+                                shutil.rmtree(dst)
+                            shutil.copytree(src, dst)
+                        else:
+                            shutil.copy2(src, dst)
+                    self.log(f"[PARALLEL-VIDEO] ✓ Đã copy profile!")
+                except Exception as e:
+                    self.log(f"[PARALLEL-VIDEO] Copy profile error: {e}", "WARN")
+
+        profile_dir = str(video_profile_dir)
+        self.log(f"[PARALLEL-VIDEO] Chrome 2 profile: {profile_dir}")
 
         # === KHỞI TẠO PROXY MANAGER ===
         if use_webshare:
@@ -4680,6 +4708,7 @@ class SmartEngine:
             return
 
         # === MỞ CHROME 2 (bên phải màn hình) ===
+        # Chrome 2 dùng Chrome Portable EXE nhưng với profile RIÊNG (đã copy ở trên)
         drission_api = None
         try:
             drission_api = DrissionFlowAPI(
@@ -4691,7 +4720,8 @@ class SmartEngine:
                 total_workers=2,  # Chia đôi màn hình
                 headless=headless_mode,
                 machine_id=machine_id + 100,  # Khác machine_id với Chrome 1
-                chrome_portable=self.chrome_portable
+                chrome_portable=self.chrome_portable,
+                skip_portable_detection=True  # Dùng profile_dir riêng thay vì built-in profile
             )
 
             # Mở đúng project URL từ Excel

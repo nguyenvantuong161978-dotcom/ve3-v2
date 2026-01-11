@@ -747,6 +747,7 @@ class DrissionFlowAPI:
         machine_id: int = 1,  # Máy số mấy (1-99) - tránh trùng session giữa các máy
         # Chrome portable - dùng Chrome đã đăng nhập sẵn
         chrome_portable: str = "",  # Đường dẫn Chrome portable (VD: C:\ve3\chrome.exe)
+        skip_portable_detection: bool = False,  # Bỏ qua auto-detect Chrome Portable (dùng profile_dir)
         # Legacy params (ignored)
         proxy_port: int = 1080,
         use_proxy: bool = False,
@@ -772,6 +773,7 @@ class DrissionFlowAPI:
         self._headless = headless  # Lưu setting headless
         self._machine_id = machine_id  # Máy số mấy (1-99)
         self._chrome_portable = chrome_portable  # Chrome portable path
+        self._skip_portable_detection = skip_portable_detection  # Bỏ qua auto-detect Chrome Portable
         # Unique port cho mỗi worker (không random để tránh conflict)
         # Worker 0 → 9222, Worker 1 → 9223, ...
         if chrome_port == 0:
@@ -1293,14 +1295,20 @@ class DrissionFlowAPI:
                 chrome_exe = os.path.expandvars(self._chrome_portable)
                 chrome_dir = Path(chrome_exe).parent
                 self.log(f"[CHROME] Dùng chrome_portable: {chrome_exe}")
-                # User Data có thể ở: ve3/User Data hoặc ve3/Data/profile
-                for data_path in [chrome_dir / "Data" / "profile", chrome_dir / "User Data"]:
-                    if data_path.exists():
-                        user_data = data_path
-                        break
+                # User Data: Nếu skip_portable_detection=True, dùng profile_dir thay vì built-in profile
+                if self._skip_portable_detection:
+                    # Dùng profile_dir riêng (Chrome 2 với profile đã copy)
+                    user_data = self.profile_dir
+                    self.log(f"[CHROME] Dùng profile riêng: {user_data}")
+                else:
+                    # User Data có thể ở: ve3/User Data hoặc ve3/Data/profile
+                    for data_path in [chrome_dir / "Data" / "profile", chrome_dir / "User Data"]:
+                        if data_path.exists():
+                            user_data = data_path
+                            break
 
-            # 2. Tự động detect Chrome portable
-            if not chrome_exe and platform.system() == 'Windows':
+            # 2. Tự động detect Chrome portable (bỏ qua nếu skip_portable_detection=True)
+            if not chrome_exe and platform.system() == 'Windows' and not self._skip_portable_detection:
                 chrome_locations = []
 
                 # 2a. Ưu tiên: Thư mục tool/GoogleChromePortable/GoogleChromePortable.exe
