@@ -671,37 +671,29 @@ JS_SELECT_VIDEO_MODE = JS_SELECT_VIDEO_MODE_STEP1
 
 # T2V Mode - JS ALL-IN-ONE với setTimeout (đợi dropdown mở)
 # Vietnamese: "Từ văn bản sang video" = 22 ký tự
-# English: "Text to video" = 13 ký tự
 JS_SELECT_T2V_MODE_ALL = '''
 (function() {
     window._t2vResult = 'PENDING';
     var btn = document.querySelector('button[role="combobox"]');
     if (!btn) {
-        console.log('[T2V] No dropdown found');
         window._t2vResult = 'NO_DROPDOWN';
         return;
     }
     btn.click();
-    console.log('[T2V] Clicked dropdown first time');
-
     setTimeout(function() {
         btn.click();
-        console.log('[T2V] Clicked dropdown second time');
-
         setTimeout(function() {
             var spans = document.querySelectorAll('span');
             for (var el of spans) {
-                var text = (el.textContent || '').trim();
-                // Vietnamese: "Từ văn bản sang video" = 22 chars
-                // English: "Text to video" = 13 chars
-                if (text.includes('video') && (text.length === 22 || text.length === 13)) {
-                    console.log('[T2V] FOUND:', text);
+                var text = el.textContent.trim();
+                if (text.includes('video') && text.length === 22) {
+                    console.log('FOUND:', text);
                     el.click();
                     window._t2vResult = 'CLICKED';
                     return;
                 }
             }
-            console.log('[T2V] NOT FOUND');
+            console.log('NOT FOUND');
             window._t2vResult = 'NOT_FOUND';
         }, 300);
     }, 100);
