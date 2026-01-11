@@ -693,17 +693,14 @@ JS_SELECT_T2V_MODE_STEP2 = '''
 })();
 '''
 
-# T2V Mode - Bước 3: Tìm và click option "Từ văn bản sang video" / "Text to video"
-# Hỗ trợ cả tiếng Việt và Anh
+# T2V Mode - Bước 3: Tìm và click option "Từ văn bản sang video" (22 ký tự)
 JS_SELECT_T2V_MODE_STEP3 = '''
 (function() {
-    var allSpans = document.querySelectorAll('span');
-    for (var el of allSpans) {
-        var text = (el.textContent || '').trim().toLowerCase();
-        // Vietnamese: "Từ văn bản sang video"
-        // English: "Text to video"
-        if ((text.includes('văn bản') && text.includes('video')) ||
-            (text.includes('text') && text.includes('video') && !text.includes('assets'))) {
+    var spans = document.querySelectorAll('span');
+    for (var el of spans) {
+        var text = (el.textContent || '').trim();
+        // "Từ văn bản sang video" = 22 ký tự
+        if (text.includes('video') && text.length === 22) {
             el.click();
             console.log('[T2V] Clicked: ' + text);
             return 'CLICKED';
