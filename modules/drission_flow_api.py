@@ -3421,37 +3421,46 @@ class DrissionFlowAPI:
                 self.log(f"[Mode] Chuyển sang Video mode (attempt {attempt + 1}/{MAX_RETRIES})...")
 
                 # Click dropdown để mở menu
-                self.driver.run_js('''
+                dropdown_result = self.driver.run_js('''
                 (function() {
                     var dropdown = document.querySelector('button[role="combobox"]');
-                    if (dropdown) dropdown.click();
+                    if (!dropdown) return 'NO_DROPDOWN';
+                    dropdown.click();
+                    return 'CLICKED';
                 })();
                 ''')
+                self.log(f"[Mode] Dropdown: {dropdown_result}")
                 time.sleep(0.5)
 
                 # Tìm và click option
                 option_clicked = self.driver.run_js('''
                 (function() {
-                    var allSpans = document.querySelectorAll('span');
-                    for (var el of allSpans) {
-                        var text = (el.textContent || '').trim().toLowerCase();
-                        // Vietnamese: "Tạo video từ các thành phần"
-                        // English: "Create video from assets" / "Generate video from assets"
-                        if (text.includes('video') && (text.includes('thành phần') || text.includes('assets') || text.includes('elements') || text.includes('components'))) {
-                            el.click();
-                            console.log('[VIDEO] Clicked: ' + text);
-                            return 'CLICKED:' + text;
+                    try {
+                        var allSpans = document.querySelectorAll('span');
+                        var foundTexts = [];
+                        for (var i = 0; i < allSpans.length; i++) {
+                            var el = allSpans[i];
+                            var text = (el.textContent || '').trim().toLowerCase();
+                            // Vietnamese: "Tạo video từ các thành phần"
+                            // English: "Create video from assets"
+                            if (text.indexOf('video') >= 0 && (text.indexOf('thành phần') >= 0 || text.indexOf('assets') >= 0)) {
+                                el.click();
+                                return 'CLICKED:' + text;
+                            }
+                            if (text.length > 3 && text.length < 40) {
+                                foundTexts.push(text);
+                            }
                         }
-                    }
-                    // Log available options
-                    var found = [];
-                    for (var el of allSpans) {
-                        var text = (el.textContent || '').trim();
-                        if (text && text.length > 3 && text.length < 40) {
-                            found.push(text);
+                        var unique = [];
+                        for (var j = 0; j < foundTexts.length; j++) {
+                            if (unique.indexOf(foundTexts[j]) < 0 && unique.length < 10) {
+                                unique.push(foundTexts[j]);
+                            }
                         }
+                        return 'NOT_FOUND:' + unique.join(' | ');
+                    } catch(e) {
+                        return 'ERROR:' + e.message;
                     }
-                    return 'NOT_FOUND:' + [...new Set(found)].slice(0, 10).join(' | ');
                 })();
                 ''')
 
@@ -3811,38 +3820,49 @@ class DrissionFlowAPI:
                 self.log(f"[Mode] Chuyển sang T2V mode (attempt {attempt + 1}/{MAX_RETRIES})...")
 
                 # Click dropdown để mở menu
-                self.driver.run_js('''
+                dropdown_result = self.driver.run_js('''
                 (function() {
                     var dropdown = document.querySelector('button[role="combobox"]');
-                    if (dropdown) dropdown.click();
+                    if (!dropdown) return 'NO_DROPDOWN';
+                    dropdown.click();
+                    return 'CLICKED';
                 })();
                 ''')
+                self.log(f"[Mode] Dropdown: {dropdown_result}")
                 time.sleep(0.5)
 
                 # Tìm và click option
                 option_clicked = self.driver.run_js('''
                 (function() {
-                    var allSpans = document.querySelectorAll('span');
-                    for (var el of allSpans) {
-                        var text = (el.textContent || '').trim().toLowerCase();
-                        // Vietnamese: "Từ văn bản sang video"
-                        // English: "Text to video"
-                        if ((text.includes('văn bản') && text.includes('video')) ||
-                            (text.includes('text') && text.includes('video') && !text.includes('assets'))) {
-                            el.click();
-                            console.log('[T2V] Clicked: ' + text);
-                            return 'CLICKED:' + text;
+                    try {
+                        var allSpans = document.querySelectorAll('span');
+                        var foundTexts = [];
+                        for (var i = 0; i < allSpans.length; i++) {
+                            var el = allSpans[i];
+                            var text = (el.textContent || '').trim().toLowerCase();
+                            // Vietnamese: "Từ văn bản sang video"
+                            // English: "Text to video"
+                            if ((text.indexOf('văn bản') >= 0 && text.indexOf('video') >= 0) ||
+                                (text.indexOf('text') >= 0 && text.indexOf('video') >= 0 && text.indexOf('assets') < 0)) {
+                                el.click();
+                                return 'CLICKED:' + text;
+                            }
+                            // Collect for debug
+                            if (text.length > 3 && text.length < 40) {
+                                foundTexts.push(text);
+                            }
                         }
-                    }
-                    // Log available options
-                    var found = [];
-                    for (var el of allSpans) {
-                        var text = (el.textContent || '').trim();
-                        if (text && text.length > 3 && text.length < 40) {
-                            found.push(text);
+                        // Dedupe and return
+                        var unique = [];
+                        for (var j = 0; j < foundTexts.length; j++) {
+                            if (unique.indexOf(foundTexts[j]) < 0 && unique.length < 10) {
+                                unique.push(foundTexts[j]);
+                            }
                         }
+                        return 'NOT_FOUND:' + unique.join(' | ');
+                    } catch(e) {
+                        return 'ERROR:' + e.message;
                     }
-                    return 'NOT_FOUND:' + [...new Set(found)].slice(0, 10).join(' | ');
                 })();
                 ''')
 
