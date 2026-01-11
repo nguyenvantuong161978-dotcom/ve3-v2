@@ -4645,6 +4645,29 @@ class SmartEngine:
                 self.log(f"[PARALLEL-VIDEO] Proxy init error: {e}", "WARN")
                 use_webshare = False
 
+        # === ĐỌC PROJECT URL TỪ EXCEL ===
+        project_url = None
+        try:
+            import openpyxl
+            wb_config = openpyxl.load_workbook(excel_path)
+            if 'config' in wb_config.sheetnames:
+                ws = wb_config['config']
+                for row in ws.iter_rows(min_row=1, max_row=10, values_only=True):
+                    if row and len(row) >= 2:
+                        key = str(row[0] or '').strip().lower()
+                        if key == 'flow_project_url' and row[1]:
+                            project_url = str(row[1]).strip()
+                            self.log(f"[PARALLEL-VIDEO] Project URL từ Excel: {project_url[:60]}...")
+                            break
+            wb_config.close()
+        except Exception as e:
+            self.log(f"[PARALLEL-VIDEO] Lỗi đọc project URL: {e}", "WARN")
+
+        if not project_url:
+            self.log("[PARALLEL-VIDEO] Không có project URL trong Excel - cần tạo ảnh trước!", "WARN")
+            self._parallel_video_running = False
+            return
+
         # === MỞ CHROME 2 (bên phải màn hình) ===
         drission_api = None
         try:
@@ -4660,7 +4683,8 @@ class SmartEngine:
                 chrome_portable=self.chrome_portable
             )
 
-            if not drission_api.setup():
+            # Mở đúng project URL từ Excel
+            if not drission_api.setup(project_url=project_url):
                 self.log("[PARALLEL-VIDEO] Không setup được Chrome 2!", "ERROR")
                 self._parallel_video_running = False
                 return

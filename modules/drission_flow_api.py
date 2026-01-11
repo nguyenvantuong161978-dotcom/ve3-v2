@@ -2068,6 +2068,20 @@ class DrissionFlowAPI:
             total = self._total_workers
             worker = self.worker_id
 
+            # Helper để set window position (tương thích nhiều version DrissionPage)
+            def set_window_rect(x, y, w, h):
+                try:
+                    # Thử cách mới: set.window.rect()
+                    self.driver.set.window.rect(x, y, w, h)
+                except AttributeError:
+                    try:
+                        # Thử cách cũ: size + position riêng
+                        self.driver.set.window.size(w, h)
+                        self.driver.set.window.position(x, y)
+                    except AttributeError:
+                        # Fallback: dùng JavaScript
+                        self.driver.run_js(f"window.moveTo({x}, {y}); window.resizeTo({w}, {h});")
+
             if total <= 1:
                 # 1 worker: Full màn hình (maximize)
                 self.driver.set.window.max()
@@ -2079,8 +2093,7 @@ class DrissionFlowAPI:
                 win_x = screen_left + (worker * win_w)
                 win_y = screen_top
 
-                self.driver.set.window.size(win_w, win_h)
-                self.driver.set.window.position(win_x, win_y)
+                set_window_rect(win_x, win_y, win_w, win_h)
                 pos_name = "LEFT" if worker == 0 else "RIGHT"
                 self.log(f"📐 Window: {pos_name} ({win_w}x{win_h} at {win_x},{win_y})")
             elif total == 3:
@@ -2098,8 +2111,7 @@ class DrissionFlowAPI:
                     win_x = screen_left
                     win_y = screen_top + screen_h // 2
 
-                self.driver.set.window.size(win_w, win_h)
-                self.driver.set.window.position(win_x, win_y)
+                set_window_rect(win_x, win_y, win_w, win_h)
                 self.log(f"📐 Window: Worker {worker} ({win_w}x{win_h} at {win_x},{win_y})")
             else:
                 # 4+ workers: Grid 2xN
@@ -2114,8 +2126,7 @@ class DrissionFlowAPI:
                 win_x = screen_left + (col * win_w)
                 win_y = screen_top + (row * win_h)
 
-                self.driver.set.window.size(win_w, win_h)
-                self.driver.set.window.position(win_x, win_y)
+                set_window_rect(win_x, win_y, win_w, win_h)
                 self.log(f"📐 Window: Worker {worker} ({win_w}x{win_h} at {win_x},{win_y})")
 
         except Exception as e:
