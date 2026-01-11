@@ -3447,7 +3447,7 @@ class DrissionFlowAPI:
                 })();
                 ''')
 
-                if dropdown_clicked == 'NO_DROPDOWN':
+                if not dropdown_clicked or dropdown_clicked == 'NO_DROPDOWN':
                     self.log("[Mode] Dropdown not found, retrying...", "WARN")
                     time.sleep(1)
                     continue
@@ -3480,7 +3480,7 @@ class DrissionFlowAPI:
                 })();
                 ''')
 
-                if option_clicked.startswith('CLICKED:'):
+                if option_clicked and option_clicked.startswith('CLICKED:'):
                     self.log(f"[Mode] ✓ Đã chuyển sang Video mode: {option_clicked}")
                     time.sleep(0.5)
                     return True
@@ -3862,7 +3862,7 @@ class DrissionFlowAPI:
                 })();
                 ''')
 
-                if dropdown_clicked == 'NO_DROPDOWN':
+                if not dropdown_clicked or dropdown_clicked == 'NO_DROPDOWN':
                     self.log("[Mode] Dropdown not found, retrying...", "WARN")
                     time.sleep(1)
                     continue
@@ -3896,7 +3896,7 @@ class DrissionFlowAPI:
                 })();
                 ''')
 
-                if option_clicked.startswith('CLICKED:'):
+                if option_clicked and option_clicked.startswith('CLICKED:'):
                     self.log(f"[Mode] ✓ Đã chuyển sang T2V mode: {option_clicked}")
                     time.sleep(0.5)
                     return True
