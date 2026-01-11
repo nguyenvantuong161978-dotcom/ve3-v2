@@ -4578,6 +4578,17 @@ class SmartEngine:
 
         self.log("[PARALLEL-VIDEO] Chrome 2 loop started")
 
+        # === ĐỢI CHROME 1 KHỞI ĐỘNG TRƯỚC ===
+        # Chrome 1 cần thời gian để mở và ổn định, Chrome 2 mở sau
+        wait_time = 20  # giây
+        self.log(f"[PARALLEL-VIDEO] Đợi {wait_time} giây để Chrome 1 khởi động và ổn định...")
+        for i in range(wait_time):
+            if not self._parallel_video_running or self.stop_flag:
+                self.log("[PARALLEL-VIDEO] Bị dừng trong khi đợi")
+                return
+            time.sleep(1)
+        self.log("[PARALLEL-VIDEO] Chrome 1 đã sẵn sàng - Bắt đầu mở Chrome 2...")
+
         # Load settings
         config_path = Path(__file__).parent.parent / "config" / "settings.yaml"
         cfg = {}
@@ -4734,7 +4745,7 @@ class SmartEngine:
                     scenes = wb.get_scenes()
                     video_prompt = "Subtle motion, cinematic, slow movement"
                     for scene in scenes:
-                        if str(scene.id) == str(scene_id):
+                        if str(scene.scene_id) == str(scene_id):
                             video_prompt = scene.video_prompt or video_prompt
                             break
 
