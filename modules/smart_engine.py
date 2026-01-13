@@ -1647,14 +1647,14 @@ class SmartEngine:
 
         # Load settings
         import yaml
-        headless = True
+        headless = False  # Mặc định False để bật Parallel Video
         settings = {}
         try:
             config_path = self.config_dir / "settings.yaml"
             if config_path.exists():
                 with open(config_path, 'r', encoding='utf-8') as f:
                     settings = yaml.safe_load(f) or {}
-                headless = settings.get('browser_headless', True)
+                headless = settings.get('browser_headless', False)  # Mặc định False
         except:
             pass
 
@@ -1664,7 +1664,7 @@ class SmartEngine:
         # Chrome 2 (bên phải): Theo dõi Excel và tạo video
         # Ảnh xong = project xong, video chạy nền được bao nhiêu thì được
         # =====================================================================
-        video_parallel_enabled = not headless  # Luôn bật khi không headless
+        video_parallel_enabled = True  # LUÔN bật parallel video
 
         if video_parallel_enabled:
             self.log("[PARALLEL-VIDEO] Chrome 2 sẽ tạo video SONG SONG")
@@ -1846,7 +1846,7 @@ class SmartEngine:
         self.log(f"Da sap xep: {[p.get('id') for p in prompts[:5]]}... (nv/loc truoc, scene sau)")
 
         # Load settings
-        headless = True
+        headless = False  # Mặc định False để bật Parallel Video
         parallel_browsers = 1
         try:
             import yaml
@@ -1854,7 +1854,7 @@ class SmartEngine:
             if config_path.exists():
                 with open(config_path, 'r', encoding='utf-8') as f:
                     settings = yaml.safe_load(f) or {}
-                headless = settings.get('browser_headless', True)
+                headless = settings.get('browser_headless', False)  # Mặc định False
                 parallel_browsers = max(1, min(5, settings.get('parallel_browsers', 1)))
         except:
             pass
@@ -1873,7 +1873,7 @@ class SmartEngine:
         # Chrome 2 (bên phải): Theo dõi Excel và tạo video
         # Ảnh xong = project xong, video chạy nền được bao nhiêu thì được
         # =====================================================================
-        video_parallel_enabled = not headless  # Luôn bật khi không headless
+        video_parallel_enabled = True  # LUÔN bật parallel video
 
         if video_parallel_enabled:
             self.log("[PARALLEL-VIDEO] Chrome 2 sẽ tạo video SONG SONG")
