@@ -2986,135 +2986,31 @@ class DrissionFlowAPI:
                     img.local_path = img_path
                     self.log(f"✓ Saved: {img_path.name}")
                 elif img.url:
-                    # Download image - thử nhiều cách từ nhanh đến chậm
+                    # Download image - URL có signature, tải trực tiếp
                     dl_start = time.time()
-                    self.log(f"→ Getting image...")
+                    self.log(f"→ Downloading image (URL has signature)...")
                     downloaded = False
 
-                    # Method 1: Lấy ảnh từ DOM (ảnh đã được Chrome tải và hiển thị)
-                    # Đây là cách NHANH NHẤT - không cần request mới
-                    if self.driver and not downloaded:
-                        try:
-                            dom_start = time.time()
-                            # Tìm <img> element có src chứa fifeUrl và convert sang base64
-                            js_code = '''
-                            (function() {
-                                // Tìm tất cả img elements có src là storage.googleapis.com
-                                const imgs = document.querySelectorAll('img[src*="storage.googleapis.com"]');
-                                if (imgs.length === 0) return { error: "No images found in DOM" };
+                    # SIMPLE: Tải trực tiếp bằng requests - URL đã có auth
+                    try:
+                        req_start = time.time()
+                        # Không proxy, không headers phức tạp - URL có signature rồi
+                        resp = requests.get(img.url, timeout=30)
+                        req_time = time.time() - req_start
 
-                                // Lấy ảnh cuối cùng (ảnh vừa tạo)
-                                const img = imgs[imgs.length - 1];
-                                if (!img.complete || img.naturalWidth === 0) {
-                                    return { error: "Image not loaded yet" };
-                                }
-
-                                // Dùng canvas để convert sang base64
-                                const canvas = document.createElement('canvas');
-                                canvas.width = img.naturalWidth;
-                                canvas.height = img.naturalHeight;
-                                const ctx = canvas.getContext('2d');
-                                ctx.drawImage(img, 0, 0);
-
-                                try {
-                                    const dataUrl = canvas.toDataURL('image/png');
-                                    return { base64: dataUrl.split(',')[1], width: img.naturalWidth, height: img.naturalHeight };
-                                } catch(e) {
-                                    return { error: "Canvas toDataURL failed: " + e.toString() };
-                                }
-                            })()
-                            '''
-                            result = self.driver.run_js(js_code)
-                            dom_time = time.time() - dom_start
-
-                            if result and result.get('base64'):
-                                img.base64_data = result['base64']
-                                img_path = save_dir / f"{fname}.png"
-                                img_path.write_bytes(base64.b64decode(img.base64_data))
-                                img.local_path = img_path
-                                w, h = result.get('width', 0), result.get('height', 0)
-                                self.log(f"✓ Got from DOM: {img_path.name} ({w}x{h}, {dom_time:.2f}s)")
-                                downloaded = True
-                            elif result and result.get('error'):
-                                self.log(f"   [DEBUG] DOM extract failed: {result['error']}")
-                        except Exception as e:
-                            self.log(f"   [DEBUG] DOM extract error: {e}")
-
-                    # Method 2: Fetch qua Chrome (nếu DOM không có)
-                    if self.driver and not downloaded:
-                        try:
-                            chrome_start = time.time()
-                            js_code = f'''
-                            (async () => {{
-                                try {{
-                                    const resp = await fetch("{img.url}");
-                                    if (!resp.ok) return {{ error: "HTTP " + resp.status }};
-                                    const blob = await resp.blob();
-                                    return new Promise((resolve) => {{
-                                        const reader = new FileReader();
-                                        reader.onloadend = () => resolve({{ base64: reader.result.split(',')[1] }});
-                                        reader.readAsDataURL(blob);
-                                    }});
-                                }} catch(e) {{
-                                    return {{ error: e.toString() }};
-                                }}
-                            }})()
-                            '''
-                            result = self.driver.run_js(js_code)
-                            chrome_time = time.time() - chrome_start
-
-                            if result and result.get('base64'):
-                                img.base64_data = result['base64']
-                                img_path = save_dir / f"{fname}.png"
-                                img_path.write_bytes(base64.b64decode(img.base64_data))
-                                img.local_path = img_path
-                                self.log(f"✓ Downloaded via Chrome fetch: {img_path.name} ({chrome_time:.2f}s)")
-                                downloaded = True
-                            elif result and result.get('error'):
-                                self.log(f"   [DEBUG] Chrome fetch failed: {result['error']}")
-                        except Exception as e:
-                            self.log(f"   [DEBUG] Chrome fetch error: {e}")
-
-                    # Method 3: Fallback sang requests.get() với Chrome headers
-                    if not downloaded:
-                        try:
-                            proxies = None
-                            if self._use_webshare and self._webshare_proxy:
-                                proxies = self._webshare_proxy.get_proxies()
-
-                            # Headers giống Chrome để tránh bị throttle
-                            chrome_headers = {
-                                'accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-                                'accept-encoding': 'gzip, deflate, br',
-                                'accept-language': 'en-US,en;q=0.9',
-                                'referer': 'https://labs.google/',
-                                'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-                                'sec-ch-ua-mobile': '?0',
-                                'sec-ch-ua-platform': '"Windows"',
-                                'sec-fetch-dest': 'image',
-                                'sec-fetch-mode': 'no-cors',
-                                'sec-fetch-site': 'cross-site',
-                                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-                            }
-
-                            # Thử KHÔNG proxy trước (URL đã có signature, không cần auth)
-                            req_start = time.time()
-                            resp = requests.get(img.url, timeout=(15, 30), headers=chrome_headers)
-                            req_time = time.time() - req_start
-                            self.log(f"   [DEBUG] requests.get (no proxy) took {req_time:.2f}s, status={resp.status_code}")
-
-                            if resp.status_code == 200:
-                                img_path = save_dir / f"{fname}.png"
-                                img_path.write_bytes(resp.content)
-                                img.local_path = img_path
-                                img.base64_data = base64.b64encode(resp.content).decode()
-                                total_time = time.time() - dl_start
-                                self.log(f"✓ Downloaded via requests: {img_path.name} (total {total_time:.2f}s)")
-                                downloaded = True
-                            else:
-                                self.log(f"✗ Download failed: HTTP {resp.status_code}", "WARN")
-                        except Exception as e:
-                            self.log(f"✗ Download error after {time.time()-dl_start:.2f}s: {e}", "WARN")
+                        if resp.status_code == 200:
+                            img_path = save_dir / f"{fname}.png"
+                            img_path.write_bytes(resp.content)
+                            img.local_path = img_path
+                            img.base64_data = base64.b64encode(resp.content).decode()
+                            self.log(f"✓ Downloaded: {img_path.name} ({len(resp.content)} bytes, {req_time:.2f}s)")
+                            downloaded = True
+                        else:
+                            self.log(f"   [DEBUG] Direct download failed: HTTP {resp.status_code}")
+                    except requests.exceptions.Timeout:
+                        self.log(f"✗ Download timeout after 30s", "WARN")
+                    except Exception as e:
+                        self.log(f"✗ Download error: {e}", "WARN")
 
         # F5 refresh sau mỗi ảnh thành công để tránh 403 cho prompt tiếp theo
         try:
