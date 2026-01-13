@@ -3817,11 +3817,11 @@ class DrissionFlowAPI:
                     # Check for operations (async video)
                     if response.get('operations'):
                         operation = response['operations'][0]
-                        operation_id = operation.get('name', '').split('/')[-1]
-                        self.log(f"[I2V-FORCE] ✓ Video operation started: {operation_id[:30]}...")
+                        operation_name = operation.get('name', '')
+                        self.log(f"[I2V-FORCE] ✓ Video operation started: {operation_name[-30:]}...")
 
-                        # Poll cho video hoàn thành
-                        video_url = self._poll_video_operation(operation_id, max_wait)
+                        # Poll cho video hoàn thành qua Browser
+                        video_url = self._poll_video_operation_browser(operation, max_wait)
                         if video_url:
                             self.log(f"[I2V-FORCE] ✓ Video ready: {video_url[:60]}...")
                             return self._download_video_if_needed(video_url, save_path)
@@ -3842,6 +3842,107 @@ class DrissionFlowAPI:
 
         self.log("[I2V-FORCE] ✗ Timeout đợi video response", "ERROR")
         return False, None, "Timeout waiting for video response"
+
+    def _poll_video_operation_browser(self, operation: Dict, max_wait: int = 300) -> Optional[str]:
+        """
+        Poll video operation qua Browser (dùng fetch trong browser).
+        Không cần gọi API trực tiếp, dùng Chrome's session/cookies.
+
+        Args:
+            operation: Operation dict từ response (chứa 'name', 'metadata', etc.)
+            max_wait: Thời gian poll tối đa (giây)
+
+        Returns:
+            Video URL nếu thành công, None nếu timeout/lỗi
+        """
+        poll_url = "https://aisandbox-pa.googleapis.com/v1/video:batchCheckAsyncVideoGenerationStatus"
+
+        # Chuẩn bị payload poll
+        poll_payload = json.dumps({"operations": [operation]})
+
+        # JS để poll qua browser's fetch
+        poll_js = f'''
+(async function() {{
+    window._videoPollResult = null;
+    window._videoPollError = null;
+    window._videoPollDone = false;
+
+    try {{
+        const response = await fetch("{poll_url}", {{
+            method: "POST",
+            headers: {{
+                "Content-Type": "application/json"
+            }},
+            body: {poll_payload!r}
+        }});
+
+        const data = await response.json();
+        window._videoPollResult = data;
+        window._videoPollDone = true;
+    }} catch(e) {{
+        window._videoPollError = e.toString();
+        window._videoPollDone = true;
+    }}
+}})();
+'''
+
+        start_time = time.time()
+        poll_interval = 5  # Poll mỗi 5 giây
+        poll_count = 0
+
+        while time.time() - start_time < max_wait:
+            poll_count += 1
+            self.log(f"[I2V-FORCE] Polling video... ({poll_count}, {int(time.time() - start_time)}s)")
+
+            # Run poll JS
+            self.driver.run_js(poll_js)
+
+            # Đợi kết quả
+            for _ in range(30):  # Max 3s đợi response
+                done = self.driver.run_js("return window._videoPollDone;")
+                if done:
+                    break
+                time.sleep(0.1)
+
+            # Check kết quả
+            error = self.driver.run_js("return window._videoPollError;")
+            if error:
+                self.log(f"[I2V-FORCE] Poll error: {error}", "WARN")
+                time.sleep(poll_interval)
+                continue
+
+            result = self.driver.run_js("return window._videoPollResult;")
+            if not result:
+                time.sleep(poll_interval)
+                continue
+
+            # Check operations status
+            if result.get('operations'):
+                op = result['operations'][0]
+                op_done = op.get('done', False)
+                progress = op.get('metadata', {}).get('progressPercent', 0)
+
+                self.log(f"[I2V-FORCE] Progress: {progress}%, Done: {op_done}")
+
+                if op_done:
+                    # Lấy video URL từ response
+                    if op.get('response', {}).get('videos'):
+                        video = op['response']['videos'][0]
+                        video_url = video.get('videoUri') or video.get('uri')
+                        if video_url:
+                            self.log(f"[I2V-FORCE] ✓ Video completed!")
+                            return video_url
+
+                    # Check error
+                    if op.get('error'):
+                        err_msg = op['error'].get('message', 'Unknown error')
+                        self.log(f"[I2V-FORCE] ✗ Video error: {err_msg}", "ERROR")
+                        return None
+
+            time.sleep(poll_interval)
+
+        self.log(f"[I2V-FORCE] ✗ Timeout sau {max_wait}s", "ERROR")
+        return None
 
     def generate_video_t2v_mode(
         self,
