@@ -565,6 +565,39 @@ window._t2vToI2vConfig=null; // Config để convert T2V request thành I2V (th�
             }
         }
 
+        // ============================================
+        // CATCH getProject RESPONSE (có media sau khi generation xong)
+        // Google API flow: batchGenerateImages → workflow ID → getProject poll → media ready
+        // ============================================
+        if (urlStr.includes('aisandbox') && urlStr.includes('getProject')) {
+            try {
+                var response = await orig.apply(this, [url, opts]);
+                var cloned = response.clone();
+
+                try {
+                    var data = await cloned.json();
+                    // Nếu có media mới với fifeUrl VÀ đang đợi response
+                    if (data.media && data.media.length > 0 && window._requestPending) {
+                        var hasNewMedia = data.media.some(function(m) {
+                            return m.image && m.image.generatedImage && m.image.generatedImage.fifeUrl;
+                        });
+                        if (hasNewMedia) {
+                            console.log('[PROJECT] ✓ Found media with fifeUrl! Images ready.');
+                            console.log('[PROJECT] Media count:', data.media.length);
+                            window._response = data;
+                            window._requestPending = false;
+                        }
+                    }
+                } catch(e) {
+                    // Ignore parse errors for getProject
+                }
+
+                return response;
+            } catch(e) {
+                throw e;
+            }
+        }
+
         return orig.apply(this, arguments);
     };
     console.log('[INTERCEPTOR] Ready - CUSTOM PAYLOAD INJECTION mode');
