@@ -207,14 +207,17 @@ window._t2vToI2vConfig=null; // Config để convert T2V request thành I2V (th�
             }
 
             // Normal image flow continues below...
-            window._requestPending = true;
-            window._response = null;
-            window._responseError = null;
-            window._url = urlStr;
-            // Lưu số media có fifeUrl hiện tại làm baseline
-            // Chỉ trigger khi số này TĂNG LÊN (có ảnh MỚI ready)
-            window._baselineReadyCount = window._currentReadyCount || 0;
-            console.log('[IMG] Baseline ready count:', window._baselineReadyCount);
+            // CHỈ reset nếu chưa có response (tránh override response đã có)
+            if (!window._response) {
+                window._requestPending = true;
+                window._response = null;
+                window._responseError = null;
+                window._url = urlStr;
+                console.log('[IMG] New request, reset state');
+            } else {
+                console.log('[IMG] Skip reset - already have response');
+                return orig.apply(this, [url, opts]);  // Forward mà không intercept
+            }
 
             // Capture headers
             if (opts && opts.headers) {
