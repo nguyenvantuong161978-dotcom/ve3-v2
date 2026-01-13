@@ -731,6 +731,55 @@ JS_SELECT_T2V_MODE_STEP3 = '''
 })();
 '''
 
+# JS để chuyển model sang "Lower Priority" (tránh rate limit)
+# Flow: Click Cài đặt → Click Mô hình dropdown → Select Lower Priority
+JS_SWITCH_TO_LOWER_PRIORITY = '''
+(function() {
+    window._modelSwitchResult = 'PENDING';
+
+    // Step 1: Click "Cài đặt"
+    var buttons = document.querySelectorAll('button');
+    for (var btn of buttons) {
+        if (btn.textContent.includes('Cài đặt')) {
+            btn.click();
+            console.log('[MODEL] [1] ✓ Clicked Cài đặt');
+
+            setTimeout(function() {
+                // Step 2: Click dropdown "Mô hình"
+                var combos = document.querySelectorAll('button[role="combobox"]');
+                for (var combo of combos) {
+                    if (combo.textContent.includes('Mô hình')) {
+                        combo.click();
+                        console.log('[MODEL] [2] ✓ Clicked Mô hình dropdown');
+
+                        setTimeout(function() {
+                            // Step 3: Select "Lower Priority"
+                            var spans = document.querySelectorAll('span');
+                            for (var span of spans) {
+                                if (span.textContent.includes('Lower Priority')) {
+                                    span.click();
+                                    console.log('[MODEL] [3] ✓ Selected Lower Priority');
+                                    window._modelSwitchResult = 'SUCCESS';
+                                    return;
+                                }
+                            }
+                            console.log('[MODEL] [3] ❌ Lower Priority not found');
+                            window._modelSwitchResult = 'NOT_FOUND_OPTION';
+                        }, 300);
+                        return;
+                    }
+                }
+                console.log('[MODEL] [2] ❌ Mô hình dropdown not found');
+                window._modelSwitchResult = 'NOT_FOUND_DROPDOWN';
+            }, 500);
+            return;
+        }
+    }
+    console.log('[MODEL] [1] ❌ Cài đặt button not found');
+    window._modelSwitchResult = 'NOT_FOUND_SETTINGS';
+})();
+'''
+
 
 class DrissionFlowAPI:
     """
@@ -4115,6 +4164,10 @@ class DrissionFlowAPI:
         if not self.switch_to_t2v_mode():
             self.log("[T2V→I2V] ⚠️ Không chuyển được T2V mode, thử tiếp...", "WARN")
 
+        # 1.5. Chuyển sang Lower Priority model (tránh rate limit)
+        self.log("[T2V→I2V] Chuyển sang model Lower Priority...")
+        self.switch_to_lower_priority_model()
+
         # 2. Reset video state
         self.driver.run_js("""
             window._videoResponse = null;
@@ -4242,6 +4295,53 @@ class DrissionFlowAPI:
                 time.sleep(0.5)
 
         self.log("[Mode] ✗ Không thể chuyển sang T2V mode sau nhiều lần thử", "ERROR")
+        return False
+
+    def switch_to_lower_priority_model(self) -> bool:
+        """
+        Chuyển model sang "Veo 3.1 - Fast [Lower Priority]" để tránh rate limit.
+        Flow: Click Cài đặt → Click Mô hình dropdown → Select Lower Priority
+
+        Returns:
+            True nếu thành công
+        """
+        if not self._ready:
+            return False
+
+        MAX_RETRIES = 2
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                self.log(f"[Model] Chuyển sang Lower Priority (attempt {attempt + 1}/{MAX_RETRIES})...")
+
+                # Chạy JS ALL-IN-ONE
+                self.driver.run_js("window._modelSwitchResult = 'PENDING';")
+                self.driver.run_js(JS_SWITCH_TO_LOWER_PRIORITY)
+
+                # Đợi JS async hoàn thành (500ms + 300ms = ~1s)
+                time.sleep(1.2)
+
+                # Kiểm tra kết quả
+                result = self.driver.run_js("return window._modelSwitchResult;")
+
+                if result == 'SUCCESS':
+                    self.log("[Model] ✓ Đã chuyển sang Lower Priority")
+                    # Click ra ngoài để đóng dialog
+                    time.sleep(0.3)
+                    self.driver.run_js('document.body.click();')
+                    time.sleep(0.3)
+                    return True
+                else:
+                    self.log(f"[Model] Chưa chuyển được: {result}", "WARN")
+                    # Click ra ngoài để đóng menu/dialog
+                    self.driver.run_js('document.body.click();')
+                    time.sleep(0.5)
+
+            except Exception as e:
+                self.log(f"[Model] Error: {e}", "ERROR")
+                time.sleep(0.5)
+
+        self.log("[Model] ⚠️ Không thể chuyển Lower Priority, tiếp tục với model mặc định", "WARN")
         return False
 
     def generate_video_pure_t2v(
