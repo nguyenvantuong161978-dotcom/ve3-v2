@@ -953,6 +953,10 @@ class DrissionFlowAPI:
         self._max_403_before_ipv6 = 5  # Số lần reset Chrome liên tiếp trước khi đổi IPv6
         self._ipv6_activated = False  # True = đã bật IPv6 proxy (chỉ bật sau khi reset Chrome đủ 5 lần)
 
+        # T2V mode tracking: chỉ chọn mode/model lần đầu khi mới mở Chrome
+        # Sau F5 refresh thì trang vẫn giữ mode/model đã chọn, không cần chọn lại
+        self._t2v_mode_selected = False  # True = đã chọn T2V mode + Lower Priority model
+
     def log(self, msg: str, level: str = "INFO"):
         """Log message - chỉ dùng 1 trong 2: callback hoặc print."""
         if self.log_callback:
@@ -3558,6 +3562,9 @@ class DrissionFlowAPI:
         save_path: Optional[Path]
     ) -> Tuple[bool, Optional[str], Optional[str]]:
         """Download video nếu có save_path, trả về (success, url, error)."""
+        download_success = False
+        result_path = video_url
+
         if save_path:
             try:
                 resp = requests.get(video_url, timeout=120)
@@ -3565,20 +3572,46 @@ class DrissionFlowAPI:
                     save_path.parent.mkdir(parents=True, exist_ok=True)
                     save_path.write_bytes(resp.content)
                     self.log(f"[I2V-Chrome] ✓ Downloaded: {save_path.name}")
-                    return True, str(save_path), None
+                    download_success = True
+                    result_path = str(save_path)
                 else:
                     self.log(f"[I2V-Chrome] Download error: HTTP {resp.status_code}", "ERROR")
                     return False, video_url, f"Download failed: HTTP {resp.status_code}"
             except Exception as e:
                 self.log(f"[I2V-Chrome] Download error: {e}", "ERROR")
                 return False, video_url, str(e)
+        else:
+            download_success = True
+
+        # F5 refresh sau mỗi video thành công để tránh 403 cho prompt tiếp theo
+        if download_success:
+            try:
+                if self.driver:
+                    self.log("[VIDEO] 🔄 F5 refresh để tránh 403...")
+                    self.driver.refresh()
+                    # Đợi page load hoàn toàn
+                    time.sleep(3)
+                    # Đợi textarea xuất hiện (page đã load xong)
+                    for _ in range(10):
+                        textarea = self.driver.ele("tag:textarea", timeout=1)
+                        if textarea:
+                            break
+                        time.sleep(0.5)
+                    # Re-inject JS Interceptor sau khi refresh (bị mất sau F5)
+                    self._reset_tokens()
+                    self.driver.run_js(JS_INTERCEPTOR)
+                    # Click vào textarea để focus
+                    self._click_textarea()
+                    self.log("[VIDEO] 🔄 Refreshed + ready")
+            except Exception as e:
+                self.log(f"[VIDEO] ⚠️ Refresh warning: {e}", "WARN")
 
         # Reset 403 counter khi thành công
         if self._consecutive_403 > 0:
             self.log(f"[IPv6] Reset 403 counter (was {self._consecutive_403})")
             self._consecutive_403 = 0
 
-        return True, video_url, None
+        return True, result_path, None
 
     def switch_to_image_mode(self) -> bool:
         """Chuyển Chrome về mode tạo ảnh."""
@@ -4159,14 +4192,22 @@ class DrissionFlowAPI:
         self.log(f"[T2V→I2V] Tạo video từ media: {media_id[:50]}...")
         self.log(f"[T2V→I2V] Prompt: {prompt[:60]}...")
 
-        # 1. Chuyển sang T2V mode - dùng switch_to_t2v_mode() với retry như commit cũ đã hoạt động
-        self.log("[T2V→I2V] Chuyển sang mode 'Từ văn bản sang video'...")
-        if not self.switch_to_t2v_mode():
-            self.log("[T2V→I2V] ⚠️ Không chuyển được T2V mode, thử tiếp...", "WARN")
+        # 1. Chuyển sang T2V mode + Lower Priority model
+        # CHỈ LÀM LẦN ĐẦU khi mới mở Chrome - sau F5 refresh không cần làm lại
+        if not self._t2v_mode_selected:
+            self.log("[T2V→I2V] Chuyển sang mode 'Từ văn bản sang video'...")
+            if not self.switch_to_t2v_mode():
+                self.log("[T2V→I2V] ⚠️ Không chuyển được T2V mode, thử tiếp...", "WARN")
 
-        # 1.5. Chuyển sang Lower Priority model (tránh rate limit)
-        self.log("[T2V→I2V] Chuyển sang model Lower Priority...")
-        self.switch_to_lower_priority_model()
+            # 1.5. Chuyển sang Lower Priority model (tránh rate limit)
+            self.log("[T2V→I2V] Chuyển sang model Lower Priority...")
+            self.switch_to_lower_priority_model()
+
+            # Đánh dấu đã chọn mode/model - không cần chọn lại sau F5
+            self._t2v_mode_selected = True
+            self.log("[T2V→I2V] ✓ Mode/Model đã chọn - các video sau sẽ không chọn lại")
+        else:
+            self.log("[T2V→I2V] Mode/Model đã sẵn sàng (giữ từ lần trước)")
 
         # 2. Reset video state
         self.driver.run_js("""
@@ -4869,6 +4910,9 @@ class DrissionFlowAPI:
             self._bridge_port = None
 
         self._ready = False
+
+        # Reset T2V mode state - cần chọn lại khi mở Chrome mới
+        self._t2v_mode_selected = False
 
     def _kill_chrome_using_profile(self):
         """Tắt Chrome đang dùng profile này để tránh conflict."""
