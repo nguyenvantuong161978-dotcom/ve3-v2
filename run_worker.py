@@ -835,6 +835,74 @@ def run_single_project(code: str):
     process_project(code)
 
 
+def run_parallel_mode(project: str = None):
+    """
+    Run PIC and VIDEO workers in parallel.
+    Main process finishes when PIC is done.
+    VIDEO continues in background.
+    """
+    import threading
+    import subprocess
+
+    print(f"\n{'='*60}")
+    print(f"  VE3 TOOL - PARALLEL MODE (PIC + VIDEO)")
+    print(f"{'='*60}")
+    print(f"  PIC worker:   Image generation (main)")
+    print(f"  VIDEO worker: Video generation (background)")
+    print(f"{'='*60}")
+
+    # Start VIDEO worker in background process
+    video_cmd = [sys.executable, str(TOOL_DIR / "run_worker_video.py")]
+    if project:
+        video_cmd.append(project)
+    video_cmd.extend(["--worker-id", str(WORKER_ID), "--total-workers", str(TOTAL_WORKERS)])
+
+    print(f"\n[PARALLEL] Starting VIDEO worker in background...")
+    video_process = subprocess.Popen(
+        video_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
+    )
+
+    # Thread to print VIDEO output
+    def print_video_output():
+        try:
+            for line in video_process.stdout:
+                print(f"[VIDEO] {line.rstrip()}")
+        except:
+            pass
+
+    video_thread = threading.Thread(target=print_video_output, daemon=True)
+    video_thread.start()
+
+    # Run PIC worker in main thread
+    print(f"\n[PARALLEL] Starting PIC worker (main)...")
+
+    try:
+        from run_worker_pic import run_scan_loop as pic_scan_loop, process_project_pic
+
+        if project:
+            process_project_pic(project)
+        else:
+            pic_scan_loop()
+
+    except KeyboardInterrupt:
+        print("\n\n[PARALLEL] Stopped by user.")
+
+    finally:
+        # Terminate VIDEO worker when PIC is done
+        print(f"\n[PARALLEL] PIC worker finished. Stopping VIDEO worker...")
+        try:
+            video_process.terminate()
+            video_process.wait(timeout=5)
+        except:
+            video_process.kill()
+
+    print(f"[PARALLEL] Done!")
+
+
 # Global worker settings (set from command line)
 WORKER_ID = 0
 TOTAL_WORKERS = 1
@@ -848,6 +916,8 @@ def main():
     parser.add_argument('project', nargs='?', default=None, help='Project code to process')
     parser.add_argument('--worker-id', type=int, default=0, help='Worker ID (0-based, for window layout)')
     parser.add_argument('--total-workers', type=int, default=1, help='Total number of workers (1=full, 2=split, ...)')
+    parser.add_argument('--mode', choices=['all', 'pic', 'video', 'parallel'], default='all',
+                        help='Mode: all (default), pic (image only), video (video only), parallel (pic+video separate)')
     args = parser.parse_args()
 
     # Set global worker settings
@@ -858,12 +928,29 @@ def main():
         pos_name = ["FULL", "LEFT", "RIGHT", "TOP-LEFT", "TOP-RIGHT", "BOTTOM"][min(WORKER_ID, 5)]
         print(f"[WORKER {WORKER_ID}/{TOTAL_WORKERS}] Window: {pos_name}")
 
-    if args.project:
-        # Single project mode
-        run_single_project(args.project)
-    else:
-        # Scan loop mode
-        run_scan_loop()
+    # Route to appropriate mode
+    if args.mode == 'pic':
+        from run_worker_pic import run_scan_loop as pic_loop, process_project_pic
+        if args.project:
+            process_project_pic(args.project)
+        else:
+            pic_loop()
+
+    elif args.mode == 'video':
+        from run_worker_video import run_scan_loop as video_loop, process_project_video
+        if args.project:
+            process_project_video(args.project)
+        else:
+            video_loop()
+
+    elif args.mode == 'parallel':
+        run_parallel_mode(args.project)
+
+    else:  # 'all' - default behavior (combined)
+        if args.project:
+            run_single_project(args.project)
+        else:
+            run_scan_loop()
 
 
 if __name__ == "__main__":
