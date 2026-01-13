@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-VE3 Tool - Voice to SRT (Master Mode - SRT Only)
-Tự động quét thư mục voice và tạo SRT + Excel (fallback only, không API).
+VE3 Tool - Voice to SRT (Master Mode - SRT ONLY)
+Tự động quét thư mục voice và tạo SRT.
 
-Worker VMs sẽ gọi API để hoàn thiện Excel.
+QUAN TRỌNG: Script này CHỈ tạo SRT, KHÔNG tạo Excel.
+Worker VMs (run_worker.py) sẽ tạo Excel bằng API.
 
 Usage:
     python run_srt.py                     (quét D:\AUTO\voice mặc định)
@@ -21,8 +22,12 @@ Output trong PROJECTS\{voice_name}\:
     PROJECTS\AR47-0028\
     ├── AR47-0028.mp3
     ├── AR47-0028.txt (nếu có)
-    ├── AR47-0028.srt
-    └── AR47-0028_prompts.xlsx (fallback prompts, cần API hoàn thiện)
+    └── AR47-0028.srt
+
+Worker VMs sẽ:
+    1. Copy project từ master
+    2. Tạo Excel bằng API (hoặc fallback nếu API fail)
+    3. Tạo ảnh/video
 """
 
 import sys
@@ -60,23 +65,6 @@ def is_project_has_srt(project_dir: Path, name: str) -> bool:
     """Check if project has SRT file."""
     srt_path = project_dir / f"{name}.srt"
     return srt_path.exists()
-
-
-def is_project_has_excel(project_dir: Path, name: str) -> bool:
-    """Check if project has Excel file (any prompts - fallback or API)."""
-    excel_path = project_dir / f"{name}_prompts.xlsx"
-    if not excel_path.exists():
-        return False
-
-    try:
-        from modules.excel_manager import PromptWorkbook
-        wb = PromptWorkbook(str(excel_path))
-        stats = wb.get_stats()
-        total_scenes = stats.get('total_scenes', 0)
-        # Có Excel với ít nhất 1 scene là đủ
-        return total_scenes > 0
-    except:
-        return False
 
 
 def delete_voice_source(voice_path: Path):
@@ -138,8 +126,13 @@ def process_voice_to_srt(voice_path: Path) -> bool:
     """
     Process voice file to SRT (Step 0 + Step 1 only).
     Returns True if SRT exists/created successfully.
+
+    Sau khi SRT xong, cleanup source voice file.
     """
     name = voice_path.stem
+
+    # Check if voice is from source folder (not already in PROJECTS)
+    is_from_source = PROJECTS_DIR not in voice_path.parents
 
     # Output directory = PROJECTS/{name}/
     output_dir = PROJECTS_DIR / name
@@ -162,7 +155,10 @@ def process_voice_to_srt(voice_path: Path) -> bool:
 
     # === STEP 1: Voice to SRT ===
     if srt_path.exists():
-        return True  # Already done
+        # Already done - cleanup source if needed
+        if is_from_source:
+            delete_voice_source(voice_path)
+        return True
 
     safe_print(f"[SRT] {name}: Creating SRT (Whisper)...")
     try:
@@ -181,73 +177,14 @@ def process_voice_to_srt(voice_path: Path) -> bool:
         conv = VoiceToSrt(model_name=whisper_model, language=whisper_lang)
         conv.transcribe(str(voice_copy), str(srt_path))
         safe_print(f"[SRT] {name}: ✅ Done")
+
+        # Cleanup source voice file after successful SRT
+        if is_from_source:
+            delete_voice_source(voice_path)
+
         return True
     except Exception as e:
         safe_print(f"[SRT] {name}: ❌ Error - {e}")
-        return False
-
-
-def process_srt_to_fallback_excel(project_dir: Path, voice_source: Path = None) -> bool:
-    """
-    Process SRT to Excel (FALLBACK ONLY - không gọi API).
-    Worker VMs sẽ gọi API sau để hoàn thiện.
-    Returns True if Excel created successfully.
-    """
-    name = project_dir.name
-    srt_path = project_dir / f"{name}.srt"
-    excel_path = project_dir / f"{name}_prompts.xlsx"
-
-    # Must have SRT
-    if not srt_path.exists():
-        return False
-
-    # Check if Excel already exists
-    if excel_path.exists():
-        try:
-            from modules.excel_manager import PromptWorkbook
-            wb = PromptWorkbook(str(excel_path))
-            stats = wb.get_stats()
-            total_scenes = stats.get('total_scenes', 0)
-
-            if total_scenes > 0:
-                # Already has scenes - cleanup source
-                if voice_source:
-                    delete_voice_source(voice_source)
-                return True
-        except Exception as e:
-            safe_print(f"[FALLBACK] {name}: Warning - {e}")
-
-    safe_print(f"[FALLBACK] {name}: Creating fallback Excel (no API)...")
-    try:
-        # Load config
-        import yaml
-        cfg = {}
-        cfg_file = TOOL_DIR / "config" / "settings.yaml"
-        if cfg_file.exists():
-            with open(cfg_file, "r", encoding="utf-8") as f:
-                cfg = yaml.safe_load(f) or {}
-
-        # Force fallback mode - disable API
-        cfg['fallback_only'] = True
-
-        # Generate prompts
-        from modules.prompts_generator import PromptGenerator
-        gen = PromptGenerator(cfg)
-
-        if gen.generate_for_project(project_dir, name, fallback_only=True):
-            safe_print(f"[FALLBACK] {name}: ✅ Excel created (fallback)")
-            # Cleanup source voice file
-            if voice_source:
-                delete_voice_source(voice_source)
-            return True
-        else:
-            safe_print(f"[FALLBACK] {name}: ❌ Failed to generate prompts")
-            return False
-
-    except Exception as e:
-        safe_print(f"[FALLBACK] {name}: ❌ Error - {e}")
-        import traceback
-        traceback.print_exc()
         return False
 
 
@@ -310,43 +247,6 @@ def get_pending_srt(voice_dir: Path) -> list:
     return result
 
 
-def get_pending_fallback() -> list:
-    """Get projects that have SRT but need fallback Excel."""
-    pending = []
-
-    if not PROJECTS_DIR.exists():
-        return pending
-
-    for project_dir in PROJECTS_DIR.iterdir():
-        if not project_dir.is_dir():
-            continue
-        name = project_dir.name
-        srt_path = project_dir / f"{name}.srt"
-        excel_path = project_dir / f"{name}_prompts.xlsx"
-
-        # Must have SRT
-        if not srt_path.exists():
-            continue
-
-        # Check if Excel exists
-        if not excel_path.exists():
-            pending.append(project_dir)
-            continue
-
-        # Check if Excel has scenes
-        try:
-            from modules.excel_manager import PromptWorkbook
-            wb = PromptWorkbook(str(excel_path))
-            stats = wb.get_stats()
-            total_scenes = stats.get('total_scenes', 0)
-            if total_scenes == 0:
-                pending.append(project_dir)
-        except:
-            pending.append(project_dir)
-
-    return pending
-
-
 def srt_worker(voice_dir: Path, stop_event: threading.Event):
     """Worker thread for SRT generation (runs continuously)."""
     safe_print("[SRT Worker] Started")
@@ -371,62 +271,22 @@ def srt_worker(voice_dir: Path, stop_event: threading.Event):
     safe_print("[SRT Worker] Stopped")
 
 
-def fallback_worker(voice_dir: Path, stop_event: threading.Event):
-    """Worker thread for fallback Excel generation (runs continuously)."""
-    safe_print("[FALLBACK Worker] Started")
-
-    # Build voice source mapping for cleanup
-    def get_voice_source(name: str) -> Path:
-        """Find original voice file for a project."""
-        # Check voice folder
-        for subdir in voice_dir.iterdir():
-            if subdir.is_dir():
-                for ext in ['.mp3', '.wav', '.m4a', '.flac', '.ogg']:
-                    voice_path = subdir / f"{name}{ext}"
-                    if voice_path.exists():
-                        return voice_path
-        return None
-
-    while not stop_event.is_set():
-        try:
-            pending = get_pending_fallback()
-
-            if pending:
-                safe_print(f"[FALLBACK Worker] Found {len(pending)} projects needing Excel")
-                for project_dir in pending:
-                    if stop_event.is_set():
-                        break
-                    voice_source = get_voice_source(project_dir.name)
-                    process_srt_to_fallback_excel(project_dir, voice_source)
-
-            # Short sleep between checks
-            stop_event.wait(5)
-        except Exception as e:
-            safe_print(f"[FALLBACK Worker] Error: {e}")
-            stop_event.wait(10)
-
-    safe_print("[FALLBACK Worker] Stopped")
-
-
 def run_scan_loop(voice_dir: Path):
-    """Run parallel processing with SRT and FALLBACK workers."""
+    """Run SRT worker only (Excel sẽ do Worker VMs tạo)."""
     print(f"\n{'='*60}")
-    print(f"  VE3 TOOL - VOICE TO SRT (SRT + FALLBACK MODE)")
+    print(f"  VE3 TOOL - VOICE TO SRT (SRT ONLY)")
     print(f"{'='*60}")
     print(f"  Input:  {voice_dir}")
     print(f"  Output: {PROJECTS_DIR}")
-    print(f"  Mode:   SRT + Fallback Excel (no API)")
-    print(f"         Workers sẽ gọi API để hoàn thiện Excel")
+    print(f"  Mode:   SRT ONLY (không tạo Excel)")
+    print(f"         Worker VMs sẽ tạo Excel bằng API")
     print(f"{'='*60}")
 
     stop_event = threading.Event()
 
-    # Start worker threads
+    # Start SRT worker thread only
     srt_thread = threading.Thread(target=srt_worker, args=(voice_dir, stop_event), daemon=True)
-    fallback_thread = threading.Thread(target=fallback_worker, args=(voice_dir, stop_event), daemon=True)
-
     srt_thread.start()
-    fallback_thread.start()
 
     # Status monitor loop
     cycle = 0
@@ -437,18 +297,16 @@ def run_scan_loop(voice_dir: Path):
 
             # Print status
             pending_srt = get_pending_srt(voice_dir)
-            pending_fallback = get_pending_fallback()
 
-            safe_print(f"\n[STATUS {cycle}] SRT pending: {len(pending_srt)}, Fallback pending: {len(pending_fallback)}")
+            safe_print(f"\n[STATUS {cycle}] SRT pending: {len(pending_srt)}")
 
-            if not pending_srt and not pending_fallback:
-                safe_print("  All projects have SRT + fallback Excel!")
+            if not pending_srt:
+                safe_print("  All voices have SRT! Worker VMs will create Excel.")
 
     except KeyboardInterrupt:
-        safe_print("\n\nStopping workers...")
+        safe_print("\n\nStopping worker...")
         stop_event.set()
         srt_thread.join(timeout=5)
-        fallback_thread.join(timeout=5)
         safe_print("Stopped.")
 
 
