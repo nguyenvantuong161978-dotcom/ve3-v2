@@ -1274,7 +1274,8 @@ class DrissionFlowAPI:
         wait_for_project: bool = True,
         timeout: int = 120,
         warm_up: bool = False,
-        project_url: str = None
+        project_url: str = None,
+        skip_mode_selection: bool = False  # True = không click chọn mode (cho Chrome 2 video)
     ) -> bool:
         """
         Setup Chrome và inject interceptor.
@@ -1285,6 +1286,7 @@ class DrissionFlowAPI:
             timeout: Timeout đợi project (giây)
             warm_up: Tạo 1 ảnh trong Chrome trước (default False - không cần)
             project_url: URL project cố định (nếu có, sẽ vào thẳng project này)
+            skip_mode_selection: Bỏ qua việc click chọn "Tạo hình ảnh" (cho video mode)
 
         Returns:
             True nếu thành công
@@ -1765,31 +1767,36 @@ class DrissionFlowAPI:
             else:
                 self.log("✓ Đã ở trong project!")
                 # Chọn "Tạo hình ảnh" từ dropdown - với retry khi page refresh
-                time.sleep(1)
-                select_success = False
-                for retry_count in range(3):  # Retry tối đa 3 lần nếu page refresh
-                    try:
-                        for j in range(10):
-                            result = self.driver.run_js(JS_SELECT_IMAGE_MODE)
-                            if result == 'CLICKED':
-                                self.log("✓ Chọn 'Tạo hình ảnh'")
-                                time.sleep(1)
-                                select_success = True
+                # SKIP nếu skip_mode_selection=True (cho Chrome 2 video - sẽ switch T2V mode sau)
+                if not skip_mode_selection:
+                    time.sleep(1)
+                    select_success = False
+                    for retry_count in range(3):  # Retry tối đa 3 lần nếu page refresh
+                        try:
+                            for j in range(10):
+                                result = self.driver.run_js(JS_SELECT_IMAGE_MODE)
+                                if result == 'CLICKED':
+                                    self.log("✓ Chọn 'Tạo hình ảnh'")
+                                    time.sleep(1)
+                                    select_success = True
+                                    break
+                                time.sleep(0.5)
+                            if select_success:
                                 break
-                            time.sleep(0.5)
-                        if select_success:
-                            break
-                    except Exception as e:
-                        if ContextLostError and isinstance(e, ContextLostError):
-                            self.log(f"[PAGE] ⚠️ Page bị refresh, đợi load lại... (retry {retry_count + 1}/3)")
-                            if self._wait_for_page_ready(timeout=30):
-                                continue  # Retry sau khi page load xong
+                        except Exception as e:
+                            if ContextLostError and isinstance(e, ContextLostError):
+                                self.log(f"[PAGE] ⚠️ Page bị refresh, đợi load lại... (retry {retry_count + 1}/3)")
+                                if self._wait_for_page_ready(timeout=30):
+                                    continue  # Retry sau khi page load xong
+                                else:
+                                    self.log("[PAGE] ✗ Timeout đợi page, thử lại...", "WARN")
+                                    continue
                             else:
-                                self.log("[PAGE] ✗ Timeout đợi page, thử lại...", "WARN")
-                                continue
-                        else:
-                            self.log(f"[PAGE] ⚠️ Lỗi: {e}", "WARN")
-                            break
+                                self.log(f"[PAGE] ⚠️ Lỗi: {e}", "WARN")
+                                break
+                else:
+                    self.log("⏭️ Skip mode selection (video mode)")
+                    time.sleep(1)
 
         # 5. Đợi textarea sẵn sàng - với xử lý ContextLostError và LOGOUT
         self.log("Đợi project load...")

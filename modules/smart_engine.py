@@ -4716,7 +4716,8 @@ class SmartEngine:
             )
 
             # Mở đúng project URL từ Excel
-            if not drission_api.setup(project_url=project_url):
+            # skip_mode_selection=True để KHÔNG click "Tạo hình ảnh" - sẽ switch T2V mode sau
+            if not drission_api.setup(project_url=project_url, skip_mode_selection=True):
                 self.log("[PARALLEL-VIDEO] Không setup được Chrome 2!", "ERROR")
                 self._parallel_video_running = False
                 return
