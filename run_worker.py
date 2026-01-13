@@ -445,11 +445,12 @@ def copy_to_visual(code: str, local_dir: Path) -> bool:
 
 def is_local_complete(project_dir: Path, name: str) -> bool:
     """
-    Check if local project has images AND videos created (if video enabled).
+    Check if local project has ALL images AND videos created (if video enabled).
 
     Logic:
-    1. Phải có ít nhất 1 ảnh
-    2. Nếu video_count > 0: phải có đủ video tương ứng với ảnh
+    1. Đọc Excel để biết tổng số scenes cần tạo
+    2. Phải có ĐỦ ảnh cho tất cả scenes (không chỉ "có ảnh")
+    3. Nếu video_count > 0: phải có đủ video tương ứng
     """
     img_dir = project_dir / "img"
     if not img_dir.exists():
@@ -464,6 +465,30 @@ def is_local_complete(project_dir: Path, name: str) -> bool:
     # Cần ít nhất 1 file ảnh
     if len(img_files) == 0:
         return False
+
+    # ĐỌC EXCEL ĐỂ BIẾT TỔNG SỐ SCENES CẦN TẠO
+    required_images = 0
+    try:
+        from modules.excel_manager import PromptWorkbook
+        excel_path = project_dir / f"{name}_prompts.xlsx"
+        if excel_path.exists():
+            wb = PromptWorkbook(str(excel_path))
+            scenes = wb.get_scenes()
+            # Chỉ đếm scenes có img_prompt (cần tạo ảnh)
+            required_images = sum(1 for s in scenes if s.img_prompt)
+    except Exception as e:
+        print(f"    [{name}] Warning reading Excel: {e}")
+
+    # Nếu không đọc được Excel, dùng logic cũ (có ảnh là OK)
+    if required_images == 0:
+        required_images = len(img_files)  # Fallback
+
+    # CHECK ĐỦ ẢNH CHƯA
+    if len(img_files) < required_images:
+        print(f"    [{name}] Images: {len(img_files)}/{required_images} - NOT complete")
+        return False
+    else:
+        print(f"    [{name}] Images: {len(img_files)}/{required_images} - OK")
 
     # Check video_count from settings
     try:
