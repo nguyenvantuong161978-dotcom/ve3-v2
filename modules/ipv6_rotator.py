@@ -177,11 +177,8 @@ class IPv6Rotator:
                         self.ipv6_list.append(line)
 
                 if self.ipv6_list:
-                    # KHÔNG tự động bật - chỉ load danh sách
-                    # self.enabled giữ nguyên từ settings.yaml
+                    self.enabled = True  # Auto-enable nếu có danh sách
                     print(f"[IPv6] Loaded {len(self.ipv6_list)} IPv6 addresses from {ipv6_file.name}")
-                    if not self.enabled:
-                        print(f"[IPv6] Status: DISABLED (set enabled: true in settings.yaml to enable)")
                     if self.ipv6_gateways:
                         print(f"[IPv6] Custom gateways: {len(self.ipv6_gateways)} entries")
                 else:
@@ -194,41 +191,19 @@ class IPv6Rotator:
 
     def _remove_dead_ipv6(self, dead_ip: str):
         """
-        Xóa IPv6 chết khỏi danh sách và file config/ipv6_list.txt.
+        Xóa IPv6 chết khỏi danh sách memory (KHÔNG sửa file config).
 
         Args:
             dead_ip: IPv6 không hoạt động cần xóa
         """
         try:
-            # 1. Xóa khỏi memory
+            # Chỉ xóa khỏi memory, KHÔNG sửa file ipv6_list.txt
             if dead_ip in self.ipv6_list:
                 self.ipv6_list.remove(dead_ip)
-                self.log(f"[IPv6] 🗑️ Removed dead IP from list: {dead_ip}")
-                self.log(f"[IPv6] Remaining: {len(self.ipv6_list)} IPs")
+                self.log(f"[IPv6] 🗑️ Removed dead IP from memory: {dead_ip}")
+                self.log(f"[IPv6] Remaining this session: {len(self.ipv6_list)} IPs")
 
-            # 2. Xóa khỏi file
-            base_dir = Path(__file__).parent.parent
-            ipv6_file = base_dir / "config" / "ipv6_list.txt"
-
-            if ipv6_file.exists():
-                with open(ipv6_file, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-
-                # Lọc bỏ dòng chứa IP chết
-                new_lines = []
-                for line in lines:
-                    stripped = line.strip()
-                    # Giữ lại comment và IP khác
-                    if stripped.startswith('#') or stripped.lower() != dead_ip.lower():
-                        new_lines.append(line)
-
-                # Ghi lại file
-                with open(ipv6_file, 'w', encoding='utf-8') as f:
-                    f.writelines(new_lines)
-
-                self.log(f"[IPv6] ✓ Updated {ipv6_file.name}")
-
-            # 3. Điều chỉnh current_index nếu cần
+            # Điều chỉnh current_index nếu cần
             if self.current_index >= len(self.ipv6_list):
                 self.current_index = 0
 
