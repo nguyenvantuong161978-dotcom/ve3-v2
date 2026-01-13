@@ -4104,23 +4104,10 @@ class DrissionFlowAPI:
         self.log(f"[T2V→I2V] Tạo video từ media: {media_id[:50]}...")
         self.log(f"[T2V→I2V] Prompt: {prompt[:60]}...")
 
-        # 1. Chuyển sang T2V mode (CẦN THIẾT - phải switch mỗi lần như cleanup branch)
+        # 1. Chuyển sang T2V mode - dùng switch_to_t2v_mode() với retry như commit cũ đã hoạt động
         self.log("[T2V→I2V] Chuyển sang mode 'Từ văn bản sang video'...")
-        result = self.driver.run_js(JS_SELECT_T2V_MODE_ALL)
-        time.sleep(0.8)  # Đợi dropdown animation
-        t2v_result = self.driver.run_js("return window._t2vResult;")
-        if t2v_result == 'CLICKED':
-            self.log("[T2V→I2V] ✓ Đã chuyển sang T2V mode")
-            time.sleep(0.5)
-        else:
-            self.log(f"[T2V→I2V] ⚠️ T2V mode result: {t2v_result}", "WARN")
-
-        # 1.5. Re-inject interceptor (có thể bị mất sau khi chuyển mode)
-        interceptor_ready = self.driver.run_js("return window.__interceptReady;")
-        if not interceptor_ready:
-            self.log("[T2V→I2V] Re-inject interceptor...")
-            self.driver.run_js(JS_INTERCEPTOR)
-            time.sleep(0.3)
+        if not self.switch_to_t2v_mode():
+            self.log("[T2V→I2V] ⚠️ Không chuyển được T2V mode, thử tiếp...", "WARN")
 
         # 2. Reset video state
         self.driver.run_js("""
