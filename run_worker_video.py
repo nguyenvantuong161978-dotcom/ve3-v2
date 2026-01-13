@@ -153,13 +153,43 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
         chrome_portable = config.get('chrome_portable', '')
         chrome_portable_2 = config.get('chrome_portable_2', chrome_portable)
 
-        # Get project URL from Excel
-        from modules.excel_manager import PromptWorkbook
-        wb = PromptWorkbook(str(excel_path))
-        project_url = wb.get_project_url()
+        # Get project URL from Excel metadata or cache
+        project_url = None
+
+        # Method 1: Read from Excel metadata rows
+        try:
+            import openpyxl
+            wb_xl = openpyxl.load_workbook(excel_path, data_only=True)
+            ws = wb_xl.active
+            for row in ws.iter_rows(min_row=1, max_row=20, values_only=True):
+                if row and len(row) >= 2:
+                    key = str(row[0]).strip().lower() if row[0] else ''
+                    val = str(row[1]).strip() if row[1] else ''
+                    if key == 'flow_project_url' and '/project/' in val:
+                        project_url = val
+                        break
+            wb_xl.close()
+        except Exception as e:
+            log(f"  ⚠️ Error reading Excel: {e}")
+
+        # Method 2: Read from cache file
+        if not project_url:
+            cache_file = local_dir / f".cache_{code}.json"
+            if cache_file.exists():
+                try:
+                    import json
+                    with open(cache_file, 'r', encoding='utf-8') as f:
+                        cache_data = json.load(f)
+                    project_url = cache_data.get('_project_url', '')
+                    if not project_url:
+                        project_id = cache_data.get('_project_id', '')
+                        if project_id:
+                            project_url = f"https://labs.google/fx/vi/tools/flow/project/{project_id}"
+                except:
+                    pass
 
         if not project_url:
-            log(f"  ❌ No project URL in Excel!")
+            log(f"  ❌ No project URL in Excel or cache!")
             return False
 
         log(f"  📋 Project URL: {project_url[:50]}...")

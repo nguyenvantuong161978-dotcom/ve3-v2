@@ -131,22 +131,20 @@ def process_project_pic(code: str, callback=None) -> bool:
         log(f"  📋 Excel has [FALLBACK] prompts, trying API...")
         complete_excel_with_api(local_dir, code)
 
-    # Step 4: Create images ONLY (video_count=0)
+    # Step 4: Create images ONLY (skip video)
     try:
         from modules.smart_engine import SmartEngine
 
         engine = SmartEngine(
             worker_id=WORKER_ID,
-            total_workers=TOTAL_WORKERS,
-            video_count=0,  # NO VIDEO
-            video_parallel_enabled=False  # NO PARALLEL VIDEO
+            total_workers=TOTAL_WORKERS
         )
 
         log(f"  📋 Excel: {excel_path.name}")
         log(f"  🖼️ MODE: Image ONLY (no video)")
 
-        # Run engine - images only
-        result = engine.run(str(excel_path), callback=callback, skip_compose=True)
+        # Run engine - images only, skip video generation
+        result = engine.run(str(excel_path), callback=callback, skip_compose=True, skip_video=True)
 
         if result.get('error'):
             log(f"  ❌ Error: {result.get('error')}", "ERROR")

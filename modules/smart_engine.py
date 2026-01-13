@@ -1664,9 +1664,11 @@ class SmartEngine:
         # Chrome 2 (bên phải): Theo dõi Excel và tạo video
         # Ảnh xong = project xong, video chạy nền được bao nhiêu thì được
         # =====================================================================
-        video_parallel_enabled = True  # LUÔN bật parallel video
+        video_parallel_enabled = not getattr(self, '_skip_video', False)  # Tắt nếu skip_video=True
 
-        if video_parallel_enabled:
+        if getattr(self, '_skip_video', False):
+            self.log("[MODE] IMAGE ONLY - Bỏ qua tạo video")
+        elif video_parallel_enabled:
             self.log("[PARALLEL-VIDEO] Chrome 2 sẽ tạo video SONG SONG")
             self.log("[PARALLEL-VIDEO] Ảnh xong = xong, video chạy nền")
 
@@ -1873,9 +1875,11 @@ class SmartEngine:
         # Chrome 2 (bên phải): Theo dõi Excel và tạo video
         # Ảnh xong = project xong, video chạy nền được bao nhiêu thì được
         # =====================================================================
-        video_parallel_enabled = True  # LUÔN bật parallel video
+        video_parallel_enabled = not getattr(self, '_skip_video', False)  # Tắt nếu skip_video=True
 
-        if video_parallel_enabled:
+        if getattr(self, '_skip_video', False):
+            self.log("[MODE] IMAGE ONLY - Bỏ qua tạo video")
+        elif video_parallel_enabled:
             self.log("[PARALLEL-VIDEO] Chrome 2 sẽ tạo video SONG SONG")
             self.log("[PARALLEL-VIDEO] Ảnh xong = xong, video chạy nền")
 
@@ -2210,7 +2214,8 @@ class SmartEngine:
         input_path: str,
         output_dir: str = None,
         callback: Callable = None,
-        skip_compose: bool = False
+        skip_compose: bool = False,
+        skip_video: bool = False
     ) -> Dict:
         """
         BROWSER MODE PIPELINE - Tao anh bang JS automation.
@@ -2226,12 +2231,14 @@ class SmartEngine:
             input_path: Voice file (.mp3, .wav) hoac Excel (.xlsx)
             output_dir: Thu muc output (optional)
             callback: Ham log callback
+            skip_video: If True, skip video generation (image only mode)
 
         Returns:
             Dict with success/failed counts
         """
         self.callback = callback
         self.stop_flag = False
+        self._skip_video = skip_video  # Flag to skip video generation
 
         inp = Path(input_path)
         ext = inp.suffix.lower()
