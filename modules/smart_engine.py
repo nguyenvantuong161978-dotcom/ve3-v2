@@ -4722,14 +4722,13 @@ class SmartEngine:
                 self._parallel_video_running = False
                 return
 
-            # === CHUYỂN SANG I2V MODE (Tạo video từ các thành phần) ===
-            # Native I2V mode - Chrome gửi batchAsyncGenerateVideoReferenceImages
-            # Interceptor sẽ inject media_id vào request
-            self.log("[PARALLEL-VIDEO] Chuyển sang mode 'Tạo video từ các thành phần'...")
+            # === CHUYỂN SANG T2V MODE (Từ văn bản sang video) ===
+            # UI: T2V mode, nhưng interceptor convert thành I2V API với media_id
+            self.log("[PARALLEL-VIDEO] Chuyển sang mode 'Từ văn bản sang video'...")
             time.sleep(2)  # Đợi page ổn định
 
-            i2v_js = '''
-// Tìm "Tạo video từ các thành phần" hoặc "Create video from assets"
+            t2v_js = '''
+// Tìm "Từ văn bản sang video" (length 22)
 var btn = document.querySelector('button[role="combobox"]');
 if (btn) {
     btn.click();
@@ -4738,32 +4737,30 @@ if (btn) {
         setTimeout(() => {
             var spans = document.querySelectorAll('span');
             for (var el of spans) {
-                var text = el.textContent.trim().toLowerCase();
-                // Vietnamese: "Tạo video từ các thành phần"
-                // English: "Create video from assets"
-                if (text.includes('video') && (text.includes('thành phần') || text.includes('assets') || text.includes('elements'))) {
-                    console.log('[I2V] FOUND:', text);
+                var text = el.textContent.trim();
+                if (text.includes('video') && text.length === 22) {
+                    console.log('[T2V] FOUND:', text);
                     el.click();
-                    window._i2vResult = 'CLICKED';
+                    window._t2vResult = 'CLICKED';
                     return;
                 }
             }
-            console.log('[I2V] NOT FOUND');
-            window._i2vResult = 'NOT_FOUND';
+            console.log('[T2V] NOT FOUND');
+            window._t2vResult = 'NOT_FOUND';
         }, 300);
     }, 100);
 } else {
-    window._i2vResult = 'NO_DROPDOWN';
+    window._t2vResult = 'NO_DROPDOWN';
 }
 '''
-            drission_api.driver.run_js(i2v_js)
+            drission_api.driver.run_js(t2v_js)
             time.sleep(1.5)  # Đợi dropdown animation
 
-            result = drission_api.driver.run_js("return window._i2vResult || 'PENDING'")
+            result = drission_api.driver.run_js("return window._t2vResult || 'PENDING'")
             if result == 'CLICKED':
-                self.log("[PARALLEL-VIDEO] ✓ Đã chuyển sang I2V mode!")
+                self.log("[PARALLEL-VIDEO] ✓ Đã chuyển sang T2V mode!")
             else:
-                self.log(f"[PARALLEL-VIDEO] ⚠️ I2V switch result: {result}", "WARN")
+                self.log(f"[PARALLEL-VIDEO] ⚠️ T2V switch result: {result}", "WARN")
 
             self.log("[PARALLEL-VIDEO] Chrome 2 ready - Bắt đầu theo dõi Excel...")
 
@@ -4814,9 +4811,9 @@ if (btn) {
                             video_prompt = scene.video_prompt or video_prompt
                             break
 
-                    # Tạo video bằng MODIFY mode (Chrome đã ở I2V mode)
-                    # Interceptor sẽ inject media_id vào Chrome request
-                    ok, result_path, error = drission_api.generate_video_modify_mode(
+                    # Tạo video bằng T2V mode (Chrome ở "Từ văn bản sang video")
+                    # Interceptor convert T2V request → I2V API với media_id
+                    ok, result_path, error = drission_api.generate_video_t2v_mode(
                         media_id=media_id,
                         prompt=video_prompt,
                         save_path=mp4_path
