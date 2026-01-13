@@ -166,12 +166,21 @@ def needs_api_completion(project_dir: Path, name: str) -> bool:
 
 def create_excel_with_api(project_dir: Path, name: str) -> bool:
     """
-    Tạo Excel từ SRT bằng API (V2 flow).
+    Tạo Excel từ SRT bằng Progressive API (từng step, lưu ngay).
 
-    Flow:
-    1. Thử tạo Excel bằng API
-    2. Nếu API thành công → return True
-    3. Nếu API fail → tạo fallback Excel từ SRT
+    Flow mới (Progressive - mỗi step lưu vào Excel):
+    1. Step 1: Phân tích story → Lưu Excel
+    2. Step 2: Tạo characters → Lưu Excel
+    3. Step 3: Tạo locations → Lưu Excel
+    4. Step 4: Tạo director_plan → Lưu Excel
+    5. Step 5: Tạo scene prompts → Lưu Excel
+
+    Lợi ích:
+    - Nếu fail giữa chừng: Không mất progress
+    - Có thể resume từ step bị fail
+    - API đọc context từ Excel → chất lượng tốt hơn
+
+    Fallback: Nếu không có API keys → tạo fallback Excel
 
     Returns True nếu có Excel (API hoặc fallback).
     """
@@ -185,7 +194,7 @@ def create_excel_with_api(project_dir: Path, name: str) -> bool:
         print(f"  ❌ No SRT file found!")
         return False
 
-    print(f"  🤖 Creating Excel from SRT...")
+    print(f"  🤖 Creating Excel from SRT (Progressive API)...")
 
     # Load config
     cfg = {}
@@ -204,35 +213,35 @@ def create_excel_with_api(project_dir: Path, name: str) -> bool:
 
     has_api_keys = bool(groq_keys or gemini_keys or deepseek_key)
 
-    # === BƯỚC 1: Thử tạo Excel bằng API ===
+    # === PHƯƠNG ÁN 1: Progressive API (từng step, lưu ngay) ===
     if has_api_keys:
-        print(f"  🌐 Trying API first...")
-
-        # Prefer DeepSeek for prompts
-        cfg['preferred_provider'] = 'deepseek' if deepseek_key else ('groq' if groq_keys else 'gemini')
-        cfg['use_v2_flow'] = True
-        cfg['fallback_only'] = False
+        print(f"  🌐 Using Progressive API (step-by-step, save immediately)...")
 
         try:
-            from modules.prompts_generator import PromptGenerator
-            gen = PromptGenerator(cfg)
-            api_success = gen.generate_for_project(project_dir, name, overwrite=True)
+            from modules.progressive_prompts import ProgressivePromptsGenerator
+
+            gen = ProgressivePromptsGenerator(cfg)
+
+            # Chạy tất cả steps (mỗi step tự lưu vào Excel)
+            api_success = gen.run_all_steps(project_dir, name, log_callback=print)
 
             if api_success and excel_path.exists():
-                print(f"  ✅ Excel created with API prompts")
+                print(f"  ✅ Excel created with Progressive API")
                 return True
             else:
-                print(f"  ⚠️ API returned but Excel not created properly")
+                print(f"  ⚠️ Progressive API incomplete, trying fallback...")
+
         except Exception as api_err:
-            print(f"  ⚠️ API error: {api_err}")
+            print(f"  ⚠️ Progressive API error: {api_err}")
+            import traceback
+            traceback.print_exc()
     else:
         print(f"  ⚠️ No API keys configured")
 
-    # === BƯỚC 2: API fail hoặc không có keys → tạo fallback ===
+    # === PHƯƠNG ÁN 2: Fallback (không cần API) ===
     print(f"  📋 Creating fallback Excel from SRT...")
 
     try:
-        # Force fallback mode
         cfg['fallback_only'] = True
 
         from modules.prompts_generator import PromptGenerator

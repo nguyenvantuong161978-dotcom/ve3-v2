@@ -355,6 +355,8 @@ class PromptWorkbook:
     CHARACTERS_SHEET = "characters"
     SCENES_SHEET = "scenes"
     DIRECTOR_PLAN_SHEET = "director_plan"
+    STORY_ANALYSIS_SHEET = "story_analysis"
+    LOCATIONS_SHEET = "locations"
     BACKUP_CHARACTERS_SHEET = "backup_characters"
     BACKUP_LOCATIONS_SHEET = "backup_locations"
     
@@ -884,6 +886,184 @@ class PromptWorkbook:
                 return True
 
         return False
+
+    # ========== STORY ANALYSIS SHEET ==========
+
+    def _ensure_story_analysis_sheet(self) -> None:
+        """Đảm bảo sheet story_analysis tồn tại."""
+        if self.workbook is None:
+            self.load_or_create()
+
+        if self.STORY_ANALYSIS_SHEET not in self.workbook.sheetnames:
+            self._create_story_analysis_sheet()
+            self.save()
+
+    def _create_story_analysis_sheet(self) -> None:
+        """Tạo sheet story_analysis với header."""
+        ws = self.workbook.create_sheet(self.STORY_ANALYSIS_SHEET)
+
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="8B4513", end_color="8B4513", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center")
+
+        columns = ["key", "value"]
+        for col, column_name in enumerate(columns, start=1):
+            cell = ws.cell(row=1, column=col, value=column_name)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+
+        ws.column_dimensions["A"].width = 20
+        ws.column_dimensions["B"].width = 100
+
+    def save_story_analysis(self, data: dict) -> None:
+        """
+        Lưu phân tích story vào sheet story_analysis.
+
+        Args:
+            data: Dict với các keys như setting, themes, visual_style, context_lock
+        """
+        self._ensure_story_analysis_sheet()
+        ws = self.workbook[self.STORY_ANALYSIS_SHEET]
+
+        # Xóa dữ liệu cũ (giữ header)
+        if ws.max_row > 1:
+            ws.delete_rows(2, ws.max_row)
+
+        # Flatten nested dict và lưu
+        def flatten_dict(d, parent_key=''):
+            items = []
+            for k, v in d.items():
+                new_key = f"{parent_key}.{k}" if parent_key else k
+                if isinstance(v, dict):
+                    items.extend(flatten_dict(v, new_key))
+                elif isinstance(v, list):
+                    items.append((new_key, json.dumps(v)))
+                else:
+                    items.append((new_key, str(v) if v else ""))
+            return items
+
+        for key, value in flatten_dict(data):
+            next_row = ws.max_row + 1
+            ws.cell(row=next_row, column=1, value=key)
+            ws.cell(row=next_row, column=2, value=value[:1000] if value else "")
+
+        self.save()
+        self.logger.info(f"Saved story_analysis to Excel")
+
+    def get_story_analysis(self) -> dict:
+        """
+        Đọc phân tích story từ sheet story_analysis.
+
+        Returns:
+            Dict với các keys từ sheet
+        """
+        self._ensure_story_analysis_sheet()
+        ws = self.workbook[self.STORY_ANALYSIS_SHEET]
+
+        data = {}
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row[0] is None:
+                continue
+            key = row[0]
+            value = row[1] or ""
+
+            # Try to parse JSON for lists
+            if value.startswith("["):
+                try:
+                    value = json.loads(value)
+                except:
+                    pass
+
+            # Handle nested keys (e.g., "setting.era")
+            if "." in key:
+                parts = key.split(".")
+                current = data
+                for part in parts[:-1]:
+                    if part not in current:
+                        current[part] = {}
+                    current = current[part]
+                current[parts[-1]] = value
+            else:
+                data[key] = value
+
+        return data
+
+    # ========== LOCATIONS SHEET ==========
+
+    def _ensure_locations_sheet(self) -> None:
+        """Đảm bảo sheet locations tồn tại."""
+        if self.workbook is None:
+            self.load_or_create()
+
+        if self.LOCATIONS_SHEET not in self.workbook.sheetnames:
+            self._create_locations_sheet()
+            self.save()
+
+    def _create_locations_sheet(self) -> None:
+        """Tạo sheet locations với header."""
+        ws = self.workbook.create_sheet(self.LOCATIONS_SHEET)
+
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="2E8B57", end_color="2E8B57", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center")
+
+        columns = ["id", "name", "english_prompt", "location_lock", "lighting_default", "image_file", "status"]
+        for col, column_name in enumerate(columns, start=1):
+            cell = ws.cell(row=1, column=col, value=column_name)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+
+        column_widths = {"id": 15, "name": 25, "english_prompt": 80, "location_lock": 50, "lighting_default": 30, "image_file": 20, "status": 12}
+        for col, column_name in enumerate(columns, start=1):
+            ws.column_dimensions[get_column_letter(col)].width = column_widths.get(column_name, 15)
+
+    def add_location(self, location: "Location") -> None:
+        """
+        Thêm một location mới vào sheet locations.
+
+        Args:
+            location: Location object
+        """
+        self._ensure_locations_sheet()
+        ws = self.workbook[self.LOCATIONS_SHEET]
+
+        next_row = ws.max_row + 1
+        ws.cell(row=next_row, column=1, value=location.id)
+        ws.cell(row=next_row, column=2, value=location.name)
+        ws.cell(row=next_row, column=3, value=location.english_prompt[:500] if location.english_prompt else "")
+        ws.cell(row=next_row, column=4, value=getattr(location, 'location_lock', '')[:200])
+        ws.cell(row=next_row, column=5, value=getattr(location, 'lighting_default', ''))
+        ws.cell(row=next_row, column=6, value=getattr(location, 'image_file', ''))
+        ws.cell(row=next_row, column=7, value="pending")
+
+    def get_locations(self) -> List["Location"]:
+        """
+        Đọc tất cả locations từ sheet locations.
+
+        Returns:
+            List[Location]
+        """
+        self._ensure_locations_sheet()
+        ws = self.workbook[self.LOCATIONS_SHEET]
+
+        locations = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row[0] is None:
+                continue
+
+            loc = Location(
+                id=row[0] or "",
+                name=row[1] or "",
+                english_prompt=row[2] or "",
+                location_lock=row[3] or "" if len(row) > 3 else "",
+                lighting_default=row[4] or "" if len(row) > 4 else "",
+                image_file=row[5] or "" if len(row) > 5 else "",
+            )
+            locations.append(loc)
+
+        return locations
 
     # ========== BACKUP CHARACTERS SHEET ==========
 
