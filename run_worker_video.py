@@ -156,40 +156,79 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
         # Get project URL from Excel metadata or cache
         project_url = None
 
-        # Method 1: Read from Excel metadata rows
+        # Method 1: Read from Excel sheet 'config' (same as BrowserFlowGenerator)
         try:
             import openpyxl
             wb_xl = openpyxl.load_workbook(excel_path, data_only=True)
-            ws = wb_xl.active
-            for row in ws.iter_rows(min_row=1, max_row=20, values_only=True):
-                if row and len(row) >= 2:
-                    key = str(row[0]).strip().lower() if row[0] else ''
-                    val = str(row[1]).strip() if row[1] else ''
+
+            # Try sheet 'config' first
+            if 'config' in wb_xl.sheetnames:
+                ws = wb_xl['config']
+                log(f"  📋 Reading from sheet 'config'...")
+            else:
+                ws = wb_xl.active
+                log(f"  📋 No 'config' sheet, using active sheet...")
+
+            for row in ws.iter_rows(min_row=1, max_row=30, values_only=True):
+                if not row:
+                    continue
+
+                # Method 1a: Find URL directly in any cell
+                for cell_val in row:
+                    if cell_val and isinstance(cell_val, str):
+                        cell_str = str(cell_val).strip()
+                        if '/project/' in cell_str and cell_str.startswith('http'):
+                            project_url = cell_str
+                            log(f"  📋 Found project URL in Excel!")
+                            break
+
+                if project_url:
+                    break
+
+                # Method 1b: Key-value format (column A = key, column B = value)
+                if len(row) >= 2 and row[0]:
+                    key = str(row[0]).strip().lower()
+                    val = str(row[1] or '').strip()
                     if key == 'flow_project_url' and '/project/' in val:
                         project_url = val
+                        log(f"  📋 Found project URL from key 'flow_project_url'!")
                         break
+                    elif key == 'flow_project_id' and val:
+                        project_url = f"https://labs.google/fx/vi/tools/flow/project/{val}"
+                        log(f"  📋 Built project URL from project_id!")
+                        break
+
             wb_xl.close()
         except Exception as e:
             log(f"  ⚠️ Error reading Excel: {e}")
 
-        # Method 2: Read from cache file
+        # Method 2: Read from .media_cache.json (same as SmartEngine uses)
+        # Try both flat and nested locations
         if not project_url:
-            cache_file = local_dir / f".cache_{code}.json"
-            if cache_file.exists():
-                try:
-                    import json
-                    with open(cache_file, 'r', encoding='utf-8') as f:
-                        cache_data = json.load(f)
-                    project_url = cache_data.get('_project_url', '')
-                    if not project_url:
-                        project_id = cache_data.get('_project_id', '')
-                        if project_id:
-                            project_url = f"https://labs.google/fx/vi/tools/flow/project/{project_id}"
-                except:
-                    pass
+            cache_locations = [
+                local_dir / ".media_cache.json",  # Flat structure
+                local_dir / "prompts" / ".media_cache.json",  # Nested structure
+            ]
+            for cache_file in cache_locations:
+                if cache_file.exists():
+                    try:
+                        import json
+                        with open(cache_file, 'r', encoding='utf-8') as f:
+                            cache_data = json.load(f)
+                        project_url = cache_data.get('_project_url', '')
+                        if not project_url:
+                            project_id = cache_data.get('_project_id', '')
+                            if project_id:
+                                project_url = f"https://labs.google/fx/vi/tools/flow/project/{project_id}"
+                        if project_url:
+                            log(f"  📦 Found project URL from cache: {cache_file.name}")
+                            break
+                    except Exception as e:
+                        log(f"  ⚠️ Error reading cache {cache_file}: {e}")
 
         if not project_url:
             log(f"  ❌ No project URL in Excel or cache!")
+            log(f"  💡 Run run_worker_pic first to create images and save project URL")
             return False
 
         log(f"  📋 Project URL: {project_url[:50]}...")
@@ -207,41 +246,11 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
             log(f"  ❌ Failed to setup Chrome for video!")
             return False
 
-        # Switch to T2V mode
-        log(f"  🎬 Switching to T2V mode...")
-        time.sleep(2)
-
-        t2v_js = '''
-var btn = document.querySelector('button[role="combobox"]');
-if (btn) {
-    btn.click();
-    setTimeout(() => {
-        btn.click();
-        setTimeout(() => {
-            var spans = document.querySelectorAll('span');
-            for (var el of spans) {
-                var text = el.textContent.trim();
-                if (text.includes('video') && text.length === 22) {
-                    el.click();
-                    window._t2vResult = 'CLICKED';
-                    return;
-                }
-            }
-            window._t2vResult = 'NOT_FOUND';
-        }, 300);
-    }, 100);
-} else {
-    window._t2vResult = 'NO_DROPDOWN';
-}
-'''
-        api.driver.run_js(t2v_js)
-        time.sleep(1.5)
-
-        result = api.driver.run_js("return window._t2vResult || 'PENDING'")
-        if result == 'CLICKED':
-            log(f"  ✓ T2V mode ready!")
-        else:
-            log(f"  ⚠️ T2V switch result: {result}", "WARN")
+        # FORCE MODE: Stay in IMAGE mode (don't switch to T2V)
+        # FORCE mode intercepts IMAGE requests to get valid reCAPTCHA tokens
+        # T2V mode's reCAPTCHA gets 403 errors
+        log(f"  🎬 Using FORCE MODE (stay in IMAGE mode for reCAPTCHA)")
+        time.sleep(1)
 
         # Create videos
         img_dir = local_dir / "img"
@@ -259,7 +268,9 @@ if (btn) {
             log(f"     Prompt: {video_prompt[:50]}...")
 
             try:
-                ok, result_path, error = api.generate_video_t2v_mode(
+                # Use FORCE MODE (intercepts IMAGE request for reCAPTCHA)
+                # T2V mode's reCAPTCHA gets 403 errors, FORCE mode works
+                ok, result_path, error = api.generate_video_force_mode(
                     media_id=media_id,
                     prompt=video_prompt,
                     save_path=mp4_path

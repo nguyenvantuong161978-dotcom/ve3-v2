@@ -390,12 +390,18 @@ class IPv6Rotator:
                 self.log("[IPv6] 🔌 Disabling IPv4 to force IPv6...")
                 commands.append(f'netsh interface ipv4 set interface "{self.interface_name}" admin=disabled')
 
-            # Bước 1: Xóa tất cả IPv6 cũ trong danh sách khỏi interface
+            # Bước 1: XÓA IP HIỆN TẠI đang dùng (quan trọng!)
+            current_ip = self.get_current_ipv6()
+            if current_ip and current_ip.lower() != new_ipv6.lower():
+                self.log(f"[IPv6] Removing current IP: {current_ip}")
+                commands.append(f'netsh interface ipv6 delete address "{self.interface_name}" {current_ip}')
+
+            # Bước 2: Xóa tất cả IPv6 cũ trong danh sách khỏi interface
             for old_ip in self.ipv6_list:
-                if old_ip.lower() != new_ipv6.lower():
+                if old_ip.lower() != new_ipv6.lower() and old_ip.lower() != (current_ip or '').lower():
                     commands.append(f'netsh interface ipv6 delete address "{self.interface_name}" {old_ip}')
 
-            # Bước 2: Thêm IPv6 mới
+            # Bước 3: Thêm IPv6 mới
             commands.append(f'netsh interface ipv6 add address "{self.interface_name}" {new_ipv6}')
 
             # Bước 3: Set gateway

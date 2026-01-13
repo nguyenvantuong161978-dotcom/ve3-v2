@@ -4252,6 +4252,12 @@ class SmartEngine:
                                     cache_data = json.load(f)
                             cache_data['_bearer_token'] = bearer
                             cache_data['_project_id'] = drission_api.project_id
+                            # Lưu project URL để run_worker_video có thể dùng
+                            project_url = getattr(drission_api, '_current_project_url', '')
+                            if not project_url and drission_api.project_id:
+                                project_url = f"https://labs.google/fx/vi/tools/flow/project/{drission_api.project_id}"
+                            if project_url:
+                                cache_data['_project_url'] = project_url
                             with open(cache_path, 'w', encoding='utf-8') as f:
                                 json.dump(cache_data, f, indent=2)
                         except:
