@@ -5829,25 +5829,49 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
         workbook.save_backup_characters(backup_chars)
 
         # === BƯỚC 5: Tạo locations cho Flashback ===
+        # QUAN TRỌNG: Phải add vào LOCATIONS sheet (không chỉ backup) để smart_engine đọc được
+        from .excel_manager import Location
+
         flashback_locs = [
-            {"id": "loc_narrator", "name": "Storytelling Room", "lock": LOCATION_LOCK},
-            {"id": "loc_01", "name": "Outdoor Scene", "lock": "outdoor natural setting, daylight, trees and sky visible"},
-            {"id": "loc_02", "name": "Indoor Scene", "lock": "indoor room, warm lighting, comfortable atmosphere"},
-            {"id": "loc_03", "name": "Urban Scene", "lock": "city street, buildings, urban environment"},
+            {"id": "loc_narrator", "name": "Storytelling Room",
+             "lock": LOCATION_LOCK,
+             "english_prompt": f"Photorealistic scene. {LOCATION_LOCK}. Cinematic lighting, 8K quality."},
+            {"id": "loc_01", "name": "Outdoor Scene",
+             "lock": "outdoor natural setting, daylight, trees and sky visible",
+             "english_prompt": "Photorealistic outdoor scene. Natural setting with daylight, trees and sky visible. Wide establishing shot, golden hour lighting, 8K cinematic quality."},
+            {"id": "loc_02", "name": "Indoor Scene",
+             "lock": "indoor room, warm lighting, comfortable atmosphere",
+             "english_prompt": "Photorealistic indoor scene. Warm lighting, comfortable atmosphere, cozy room. Soft natural light through window, 8K cinematic quality."},
+            {"id": "loc_03", "name": "Urban Scene",
+             "lock": "city street, buildings, urban environment",
+             "english_prompt": "Photorealistic urban scene. City street with buildings, urban environment. Dynamic street photography style, 8K cinematic quality."},
         ]
         all_loc_refs = []
-
         backup_locs = []
+
         for fl in flashback_locs:
+            # Tạo Location object và add vào locations sheet (để smart_engine tạo ảnh)
+            loc_obj = Location(
+                id=fl["id"],
+                name=fl["name"],
+                english_prompt=fl["english_prompt"],
+                location_lock=fl["lock"],
+                lighting_default="natural warm",
+                image_file=f"{fl['id']}.png",
+                status="pending"
+            )
+            workbook.add_location(loc_obj)
+            all_loc_refs.append(f"{fl['id']}.png")
+
+            # Backup data
             backup_locs.append({
                 "id": fl["id"], "name": fl["name"],
                 "location_lock": fl["lock"],
                 "image_file": f"{fl['id']}.png"
             })
-            all_loc_refs.append(f"{fl['id']}.png")
 
         workbook.save_backup_locations(backup_locs)
-        self.logger.info(f"[FALLBACK] ✓ Đã tạo {len(flashback_locs)} locations")
+        self.logger.info(f"[FALLBACK] ✓ Đã tạo {len(flashback_locs)} locations (trong locations sheet)")
 
         # === BƯỚC 6: Nhóm SRT thành scenes ===
         scenes_data = group_srt_into_scenes(

@@ -3810,14 +3810,23 @@ class BrowserFlowGenerator:
                         media_id_saved = False
                         if workbook:
                             try:
-                                # update_character works for both nv* and loc* (same sheet)
-                                if workbook.update_character(pid, media_id=images[0].media_name):
-                                    workbook.save()
-                                    self._log(f"   [EXCEL] Saved media_id for {pid}: {images[0].media_name[:40]}...")
-                                    excel_media_ids[pid] = images[0].media_name
-                                    media_id_saved = True
+                                # Locations (loc_*) in locations sheet, characters (nv*) in characters sheet
+                                if pid.startswith('loc'):
+                                    if workbook.update_location(pid, media_id=images[0].media_name):
+                                        workbook.save()
+                                        self._log(f"   [EXCEL] Saved media_id for {pid}: {images[0].media_name[:40]}...")
+                                        excel_media_ids[pid] = images[0].media_name
+                                        media_id_saved = True
+                                    else:
+                                        self._log(f"   [EXCEL] {pid} not found in locations sheet", "warn")
                                 else:
-                                    self._log(f"   [EXCEL] {pid} not found in characters sheet", "warn")
+                                    if workbook.update_character(pid, media_id=images[0].media_name):
+                                        workbook.save()
+                                        self._log(f"   [EXCEL] Saved media_id for {pid}: {images[0].media_name[:40]}...")
+                                        excel_media_ids[pid] = images[0].media_name
+                                        media_id_saved = True
+                                    else:
+                                        self._log(f"   [EXCEL] {pid} not found in characters sheet", "warn")
                             except Exception as e:
                                 self._log(f"   [EXCEL] Cannot save media_id: {e}", "warn")
 
@@ -3945,11 +3954,19 @@ class BrowserFlowGenerator:
                                         media_id_saved = False
                                         if workbook:
                                             try:
-                                                if workbook.update_character(pid, media_id=images2[0].media_name):
-                                                    workbook.save()
-                                                    self._log(f"   [EXCEL] Saved media_id for {pid}")
-                                                    excel_media_ids[pid] = images2[0].media_name
-                                                    media_id_saved = True
+                                                # Locations (loc_*) in locations sheet, characters (nv*) in characters sheet
+                                                if pid.startswith('loc'):
+                                                    if workbook.update_location(pid, media_id=images2[0].media_name):
+                                                        workbook.save()
+                                                        self._log(f"   [EXCEL] Saved media_id for {pid}")
+                                                        excel_media_ids[pid] = images2[0].media_name
+                                                        media_id_saved = True
+                                                else:
+                                                    if workbook.update_character(pid, media_id=images2[0].media_name):
+                                                        workbook.save()
+                                                        self._log(f"   [EXCEL] Saved media_id for {pid}")
+                                                        excel_media_ids[pid] = images2[0].media_name
+                                                        media_id_saved = True
                                             except:
                                                 pass
                                         # Fallback to cache
