@@ -10,7 +10,11 @@ import json
 import shutil
 import zipfile
 import urllib.request
+import ssl
 from pathlib import Path
+
+# Disable SSL verification (fix for Windows)
+ssl._create_default_https_context = ssl._create_unverified_context
 
 TOOL_DIR = Path(__file__).parent
 CONFIG_DIR = TOOL_DIR / "config"
