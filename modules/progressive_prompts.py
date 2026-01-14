@@ -673,12 +673,24 @@ Return JSON only:
 
         context_lock = story_analysis.get("context_lock", "")
 
-        # Build character/location lookup
-        char_lookup = {c.id: c.character_lock for c in characters if c.character_lock}
+        # Build character/location lookup - bao gồm cả image_file cho reference
+        char_lookup = {}
+        char_image_lookup = {}  # id -> image_file (nvc.png, nvp1.png...)
+        for c in characters:
+            if c.character_lock:
+                char_lookup[c.id] = c.character_lock
+            # Lấy image_file, mặc định là {id}.png
+            img_file = c.image_file if c.image_file else f"{c.id}.png"
+            char_image_lookup[c.id] = img_file
+
         loc_lookup = {}
+        loc_image_lookup = {}  # id -> image_file (loc_xxx.png)
         for loc in locations:
             if hasattr(loc, 'location_lock') and loc.location_lock:
                 loc_lookup[loc.id] = loc.location_lock
+            # Lấy image_file, mặc định là {id}.png
+            img_file = loc.image_file if hasattr(loc, 'image_file') and loc.image_file else f"{loc.id}.png"
+            loc_image_lookup[loc.id] = img_file
 
         # Process in batches
         total_created = 0
@@ -692,12 +704,22 @@ Return JSON only:
             # Build batch prompt
             scenes_text = ""
             for scene in batch:
-                # Get character/location locks
-                char_ids = scene.get("characters_used", "").split(", ")
-                char_desc = ", ".join([char_lookup.get(cid, cid) for cid in char_ids if cid])
+                # Get character/location locks VÀ image files
+                char_ids = [cid.strip() for cid in scene.get("characters_used", "").split(",") if cid.strip()]
+                char_desc_parts = []
+                char_refs = []
+                for cid in char_ids:
+                    desc = char_lookup.get(cid, cid)
+                    img = char_image_lookup.get(cid, f"{cid}.png")
+                    char_desc_parts.append(f"{desc} ({img})")
+                    char_refs.append(img)
+                char_desc = ", ".join(char_desc_parts)
 
                 loc_id = scene.get("location_used", "")
                 loc_desc = loc_lookup.get(loc_id, loc_id)
+                loc_img = loc_image_lookup.get(loc_id, f"{loc_id}.png") if loc_id else ""
+                if loc_desc and loc_img:
+                    loc_desc = f"{loc_desc} ({loc_img})"
 
                 scenes_text += f"""
 Scene {scene.get('scene_id')}:
@@ -708,6 +730,7 @@ Scene {scene.get('scene_id')}:
 - Location: {loc_desc}
 - Camera: {scene.get('camera', '')}
 - Lighting: {scene.get('lighting', '')}
+- Reference files: {', '.join(char_refs + ([loc_img] if loc_img else []))}
 """
 
             prompt = f"""Create detailed image prompts for these scenes.
@@ -715,19 +738,27 @@ Scene {scene.get('scene_id')}:
 VISUAL CONTEXT (use as prefix):
 {context_lock}
 
+IMPORTANT - REFERENCE FILE ANNOTATIONS:
+- Each character MUST have their reference file in parentheses: "a man (nvc.png)"
+- Location MUST have reference file: "in the room (loc_room.png)"
+- Format: "Description of person (filename.png) doing action in location (loc_filename.png)"
+
 SCENES TO PROCESS:
 {scenes_text}
 
 For each scene, create:
-1. img_prompt: Detailed image generation prompt (include context_lock, character descriptions, location, camera, lighting)
+1. img_prompt: Detailed image generation prompt with REFERENCE ANNOTATIONS for each character and location
 2. video_prompt: Motion/video prompt if this becomes a video clip
+
+Example img_prompt:
+"Close-up shot, 85mm lens, a 35-year-old man with tired eyes (nvc.png) sitting at a desk, looking worried, soft window light, in a modern office (loc_office.png), cinematic, 4K"
 
 Return JSON only:
 {{
     "scenes": [
         {{
             "scene_id": 1,
-            "img_prompt": "detailed image prompt...",
+            "img_prompt": "detailed prompt with (character.png) and (location.png) annotations...",
             "video_prompt": "camera movement and action description..."
         }}
     ]
@@ -756,16 +787,49 @@ Return JSON only:
                     if not original:
                         continue
 
+                    # Lấy img_prompt từ AI
+                    img_prompt = scene_data.get("img_prompt", "")
+
+                    # POST-PROCESS: Đảm bảo có reference annotations
+                    char_ids = [cid.strip() for cid in original.get("characters_used", "").split(",") if cid.strip()]
+                    loc_id = original.get("location_used", "")
+
+                    # Kiểm tra và thêm character references nếu thiếu
+                    for cid in char_ids:
+                        img_file = char_image_lookup.get(cid, f"{cid}.png")
+                        if img_file and f"({img_file})" not in img_prompt:
+                            # Thêm reference vào cuối prompt
+                            img_prompt = img_prompt.rstrip(". ") + f" ({img_file})."
+
+                    # Kiểm tra và thêm location reference nếu thiếu
+                    if loc_id:
+                        loc_img = loc_image_lookup.get(loc_id, f"{loc_id}.png")
+                        if loc_img and f"({loc_img})" not in img_prompt:
+                            # Thêm reference vào cuối prompt
+                            img_prompt = img_prompt.rstrip(". ") + f" (reference: {loc_img})."
+
+                    # Build reference_files list
+                    ref_files = []
+                    for cid in char_ids:
+                        img_file = char_image_lookup.get(cid, f"{cid}.png")
+                        if img_file and img_file not in ref_files:
+                            ref_files.append(img_file)
+                    if loc_id:
+                        loc_img = loc_image_lookup.get(loc_id, f"{loc_id}.png")
+                        if loc_img and loc_img not in ref_files:
+                            ref_files.append(loc_img)
+
                     scene = Scene(
                         scene_id=scene_id,
                         srt_start=original.get("srt_start", ""),
                         srt_end=original.get("srt_end", ""),
                         duration=original.get("duration", 0),
                         srt_text=original.get("srt_text", ""),
-                        img_prompt=scene_data.get("img_prompt", ""),
+                        img_prompt=img_prompt,
                         video_prompt=scene_data.get("video_prompt", ""),
                         characters_used=original.get("characters_used", ""),
                         location_used=original.get("location_used", ""),
+                        reference_files=json.dumps(ref_files) if ref_files else "",
                         status_img="pending",
                         status_vid="pending"
                     )
