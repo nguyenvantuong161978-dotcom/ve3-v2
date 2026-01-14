@@ -3630,9 +3630,28 @@ class DrissionFlowAPI:
         self._paste_prompt_ctrlv(textarea, prompt)
         time.sleep(2)
 
-        # 4. Nhấn Enter
-        textarea.input('\n')
-        self.log("[I2V-Chrome] → Enter → Interceptor converting IMAGE → VIDEO request...")
+        # 4. Gửi prompt - thử nhiều cách
+        # Cách 1: Click nút gửi (nếu có) - giống người dùng nhất
+        send_clicked = self.driver.run_js('''
+            // Tìm nút gửi (thường là button gần textarea)
+            var sendBtn = document.querySelector('button[aria-label*="Send"]')
+                       || document.querySelector('button[aria-label*="send"]')
+                       || document.querySelector('button[type="submit"]');
+            if (sendBtn && !sendBtn.disabled) {
+                sendBtn.click();
+                return true;
+            }
+            return false;
+        ''')
+
+        if send_clicked:
+            self.log("[I2V-Chrome] → Clicked send button")
+        else:
+            # Cách 2: Nhấn Enter bằng DrissionPage (native keyboard)
+            textarea.input('\n')
+            self.log("[I2V-Chrome] → Enter key pressed")
+
+        self.log("[I2V-Chrome] → Interceptor converting IMAGE → VIDEO request...")
 
         # 5. Đợi video response từ browser
         start_time = time.time()
