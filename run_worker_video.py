@@ -253,6 +253,9 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
         img_dir = local_dir / "img"
         video_created = 0
 
+        consecutive_failures = 0  # Đếm số lần fail liên tiếp
+        MAX_CONSECUTIVE_FAILURES = 5  # Nếu fail 5 lần liên tiếp, restart Chrome
+
         for scene_info in scenes:
             scene_id = scene_info['scene_id']
             media_id = scene_info['media_id']
@@ -263,6 +266,20 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
             log(f"\n  🎬 Creating video: {scene_id}")
             log(f"     Media ID: {media_id[:40]}...")
             log(f"     Prompt: {video_prompt[:50]}...")
+
+            # Kiểm tra Chrome còn sống không
+            if not api._ready or api.driver is None:
+                log(f"     ⚠️ Chrome không sẵn sàng, restart...", "WARN")
+                try:
+                    if api.restart_chrome():
+                        log(f"     ✓ Chrome restarted")
+                        consecutive_failures = 0
+                    else:
+                        log(f"     ✗ Không restart được Chrome, skip video {scene_id}", "WARN")
+                        continue
+                except Exception as e:
+                    log(f"     ✗ Restart error: {e}, skip video {scene_id}", "WARN")
+                    continue
 
             try:
                 # Use T2V→I2V MODE:
@@ -277,6 +294,7 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
 
                 if ok:
                     video_created += 1
+                    consecutive_failures = 0  # Reset counter on success
                     log(f"     ✓ Video created: {scene_id}.mp4")
 
                     # Di chuyển ảnh gốc sang thư mục img_src để tránh nhầm lẫn khi edit
@@ -291,12 +309,32 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
                         except Exception as e:
                             log(f"     ⚠️ Cannot move image: {e}", "WARN")
                 else:
-                    log(f"     ✗ Failed: {error}", "WARN")
+                    consecutive_failures += 1
+                    log(f"     ✗ Failed: {error} (fail {consecutive_failures}/{MAX_CONSECUTIVE_FAILURES})", "WARN")
+
+                    # Nếu fail nhiều lần liên tiếp, restart Chrome
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                        log(f"     ⚠️ {consecutive_failures} failures, restarting Chrome...", "WARN")
+                        try:
+                            if api.restart_chrome():
+                                log(f"     ✓ Chrome restarted")
+                                consecutive_failures = 0
+                        except:
+                            pass
 
             except Exception as e:
-                log(f"     ✗ Exception: {e}", "ERROR")
-                import traceback
-                traceback.print_exc()
+                consecutive_failures += 1
+                log(f"     ✗ Exception: {e} (fail {consecutive_failures}/{MAX_CONSECUTIVE_FAILURES})", "ERROR")
+
+                # Nếu fail nhiều lần liên tiếp, restart Chrome
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    log(f"     ⚠️ {consecutive_failures} failures, restarting Chrome...", "WARN")
+                    try:
+                        if api.restart_chrome():
+                            log(f"     ✓ Chrome restarted")
+                            consecutive_failures = 0
+                    except:
+                        pass
 
         # Cleanup
         try:

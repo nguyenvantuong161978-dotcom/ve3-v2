@@ -110,6 +110,17 @@ def matches_channel(code: str) -> bool:
 
 def is_project_complete_on_master(code: str) -> bool:
     """Check if project already exists in VISUAL folder on master."""
+    # SAFETY: Kiểm tra master có thực sự accessible không
+    # Nếu không accessible, return False để không xóa local project
+    try:
+        if not MASTER_VISUAL.exists():
+            return False
+        # Thử list thư mục để verify thực sự accessible (không phải cache)
+        _ = list(MASTER_VISUAL.iterdir())
+    except (OSError, PermissionError):
+        # Master không accessible - return False để giữ local an toàn
+        return False
+
     visual_dir = MASTER_VISUAL / code
     if not visual_dir.exists():
         return False
@@ -117,8 +128,11 @@ def is_project_complete_on_master(code: str) -> bool:
     # Check if has ANY images (*.png, *.mp4, *.jpg)
     img_dir = visual_dir / "img"
     if img_dir.exists():
-        img_files = list(img_dir.glob("*.png")) + list(img_dir.glob("*.mp4")) + list(img_dir.glob("*.jpg"))
-        return len(img_files) > 0
+        try:
+            img_files = list(img_dir.glob("*.png")) + list(img_dir.glob("*.mp4")) + list(img_dir.glob("*.jpg"))
+            return len(img_files) > 0
+        except (OSError, PermissionError):
+            return False
 
     return False
 
@@ -445,11 +459,12 @@ def copy_to_visual(code: str, local_dir: Path) -> bool:
 
 def is_local_complete(project_dir: Path, name: str) -> bool:
     """
-    Check if local project has images AND videos created (if video enabled).
+    Check if local project has ALL images AND videos created (if video enabled).
 
     Logic:
-    1. Phải có ít nhất 1 ảnh
-    2. Nếu video_count > 0: phải có đủ video tương ứng với ảnh
+    1. Đọc Excel để biết tổng số scenes cần tạo
+    2. Phải có ĐỦ ảnh cho tất cả scenes (không chỉ "có ảnh")
+    3. Nếu video_count > 0: phải có đủ video tương ứng
     """
     img_dir = project_dir / "img"
     if not img_dir.exists():
@@ -464,6 +479,30 @@ def is_local_complete(project_dir: Path, name: str) -> bool:
     # Cần ít nhất 1 file ảnh
     if len(img_files) == 0:
         return False
+
+    # ĐỌC EXCEL ĐỂ BIẾT TỔNG SỐ SCENES CẦN TẠO
+    required_images = 0
+    try:
+        from modules.excel_manager import PromptWorkbook
+        excel_path = project_dir / f"{name}_prompts.xlsx"
+        if excel_path.exists():
+            wb = PromptWorkbook(str(excel_path))
+            scenes = wb.get_scenes()
+            # Chỉ đếm scenes có img_prompt (cần tạo ảnh)
+            required_images = sum(1 for s in scenes if s.img_prompt)
+    except Exception as e:
+        print(f"    [{name}] Warning reading Excel: {e}")
+
+    # Nếu không đọc được Excel, dùng logic cũ (có ảnh là OK)
+    if required_images == 0:
+        required_images = len(img_files)  # Fallback
+
+    # CHECK ĐỦ ẢNH CHƯA
+    if len(img_files) < required_images:
+        print(f"    [{name}] Images: {len(img_files)}/{required_images} - NOT complete")
+        return False
+    else:
+        print(f"    [{name}] Images: {len(img_files)}/{required_images} - OK")
 
     # Check video_count from settings
     try:
@@ -586,13 +625,14 @@ def process_project(code: str, callback=None) -> bool:
 
 def scan_incomplete_local_projects() -> list:
     """
-    Scan local PROJECTS for incomplete projects (có Excel nhưng chưa có ảnh).
-    Đây là các project đã copy về nhưng chưa xử lý xong.
+    Scan local PROJECTS for projects that need processing.
+    Bao gồm CẢ project chưa có ảnh VÀ project có ảnh nhưng chưa đủ.
+    Engine sẽ chạy và hoàn thành project trước khi sync VISUAL.
     """
-    incomplete = []
+    need_processing = []
 
     if not LOCAL_PROJECTS.exists():
-        return incomplete
+        return need_processing
 
     for item in LOCAL_PROJECTS.iterdir():
         if not item.is_dir():
@@ -604,25 +644,32 @@ def scan_incomplete_local_projects() -> list:
         if not matches_channel(code):
             continue
 
-        # Skip if already in VISUAL
+        # Skip if already in VISUAL (đã hoàn thành)
         if is_project_complete_on_master(code):
-            continue
-
-        # Skip if already has images (complete)
-        if is_local_complete(item, code):
             continue
 
         # Check if has Excel with prompts OR has SRT (can create Excel)
         srt_path = item / f"{code}.srt"
-        if has_excel_with_prompts(item, code):
-            print(f"    - {code}: incomplete (has Excel, no images) → will continue")
-            incomplete.append(code)
-        elif srt_path.exists():
-            # Có SRT nhưng không có Excel - worker sẽ tự tạo
-            print(f"    - {code}: has SRT, no Excel → will create with API")
-            incomplete.append(code)
+        has_excel = has_excel_with_prompts(item, code)
+        has_srt = srt_path.exists()
 
-    return sorted(incomplete)
+        if not has_excel and not has_srt:
+            continue  # Không có gì để xử lý
+
+        # Check trạng thái hiện tại
+        if is_local_complete(item, code):
+            # Đã có đủ ảnh/video - nhưng VẪN chạy engine để verify
+            # Engine sẽ skip các ảnh đã tạo và chỉ tạo thiếu (nếu có)
+            print(f"    - {code}: appears complete, will verify via engine")
+            need_processing.append(code)
+        elif has_excel:
+            print(f"    - {code}: incomplete (has Excel) → will process")
+            need_processing.append(code)
+        elif has_srt:
+            print(f"    - {code}: has SRT, no Excel → will create with API")
+            need_processing.append(code)
+
+    return sorted(need_processing)
 
 
 def scan_master_projects() -> list:
@@ -673,23 +720,38 @@ def scan_master_projects() -> list:
 
 def sync_local_to_visual() -> int:
     """
-    Scan local PROJECTS và copy các project đã có ảnh sang VISUAL.
-    Chạy khi bắt đầu để sync các project đã hoàn thành trước đó.
+    Scan local PROJECTS và CLEANUP các project đã sync.
+    KHÔNG copy sang VISUAL ở đây - để process_project() chạy engine trước rồi mới sync.
 
     Returns:
-        Số lượng projects đã copy
+        Số lượng projects đã cleanup
     """
+    print(f"[SYNC] Checking local projects to sync to VISUAL...")
     print(f"  [DEBUG] Checking local: {LOCAL_PROJECTS}")
 
     if not LOCAL_PROJECTS.exists():
         print(f"  [DEBUG] Local PROJECTS folder does not exist")
         return 0
 
+    # SAFETY CHECK: Kiểm tra master VISUAL có thực sự accessible không
+    # Nếu không accessible, KHÔNG xóa bất kỳ local project nào
+    master_accessible = False
+    try:
+        if MASTER_VISUAL.exists():
+            _ = list(MASTER_VISUAL.iterdir())  # Thử list để verify
+            master_accessible = True
+    except (OSError, PermissionError):
+        pass
+
+    if not master_accessible:
+        print(f"  ⚠️ Master VISUAL not accessible - skipping cleanup to protect local data")
+        return 0
+
     # List all folders
     all_folders = [item for item in LOCAL_PROJECTS.iterdir() if item.is_dir()]
     print(f"  [DEBUG] Found {len(all_folders)} local project folders")
 
-    copied = 0
+    cleaned = 0
 
     for item in all_folders:
         code = item.name
@@ -702,17 +764,23 @@ def sync_local_to_visual() -> int:
         if is_project_complete_on_master(code):
             print(f"    - {code}: already in VISUAL, cleaning up local...")
             delete_local_project(code)
+            cleaned += 1
             continue
 
-        # Check local có ảnh không
+        # KHÔNG copy sang VISUAL ở đây!
+        # Để scan_incomplete_local_projects() và process_project() xử lý
+        # Engine sẽ chạy và hoàn thành project trước khi sync
         if is_local_complete(item, code):
-            print(f"  📤 Found local project with images: {code}")
-            if copy_to_visual(code, item):
-                copied += 1
+            print(f"    - {code}: has images, will process via engine")
         else:
-            print(f"    - {code}: no images yet")
+            print(f"    - {code}: incomplete, will process via engine")
 
-    return copied
+    if cleaned > 0:
+        print(f"  Cleaned up {cleaned} projects already in VISUAL")
+    else:
+        print(f"  No local projects to sync")
+
+    return cleaned
 
 
 def run_scan_loop():

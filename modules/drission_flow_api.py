@@ -207,10 +207,17 @@ window._t2vToI2vConfig=null; // Config để convert T2V request thành I2V (th�
             }
 
             // Normal image flow continues below...
-            window._requestPending = true;
-            window._response = null;
-            window._responseError = null;
-            window._url = urlStr;
+            // CHỈ reset nếu chưa có response (tránh override response đã có)
+            if (!window._response) {
+                window._requestPending = true;
+                window._response = null;
+                window._responseError = null;
+                window._url = urlStr;
+                console.log('[IMG] New request, reset state');
+            } else {
+                console.log('[IMG] Skip reset - already have response');
+                return orig.apply(this, [url, opts]);  // Forward mà không intercept
+            }
 
             // Capture headers
             if (opts && opts.headers) {
@@ -347,16 +354,29 @@ window._t2vToI2vConfig=null; // Config để convert T2V request thành I2V (th�
 
                 try {
                     var data = await cloned.json();
-                    window._response = data;
                     console.log('[RESPONSE] Status:', response.status);
-                    if (data.media) {
-                        console.log('[RESPONSE] Got ' + data.media.length + ' images');
+
+                    // Check nếu có media MỚI với fifeUrl → trigger ngay
+                    if (data.media && data.media.length > 0) {
+                        var readyMedia = data.media.filter(function(m) {
+                            return m.image && m.image.generatedImage && m.image.generatedImage.fifeUrl;
+                        });
+
+                        if (readyMedia.length > 0) {
+                            console.log('[RESPONSE] ✓ Got ' + readyMedia.length + ' images with fifeUrl!');
+                            window._response = data;
+                            window._requestPending = false;
+                        } else {
+                            console.log('[RESPONSE] Media exists but no fifeUrl yet, waiting...');
+                        }
+                    } else {
+                        console.log('[RESPONSE] No media yet, waiting for poll...');
                     }
                 } catch(e) {
                     window._response = {status: response.status, error: 'parse_failed'};
+                    window._requestPending = false;
                 }
 
-                window._requestPending = false;
                 return response;
             } catch(e) {
                 console.log('[ERROR] Request failed:', e);
@@ -561,6 +581,51 @@ window._t2vToI2vConfig=null; // Config để convert T2V request thành I2V (th�
                 console.log('[VIDEO] Request failed:', e);
                 window._videoError = e.toString();
                 window._videoPending = false;
+                throw e;
+            }
+        }
+
+        // ============================================
+        // CATCH getProject RESPONSE (có media sau khi generation xong)
+        // Google API flow: batchGenerateImages → workflow ID → getProject poll → media ready
+        // ============================================
+        if (urlStr.includes('aisandbox') && urlStr.includes('getProject')) {
+            try {
+                var response = await orig.apply(this, [url, opts]);
+                var cloned = response.clone();
+
+                try {
+                    var data = await cloned.json();
+                    // Nếu đang đợi response VÀ có media
+                    if (data.media && window._requestPending) {
+                        var currentMediaCount = data.media.length;
+
+                        // Đếm số media có fifeUrl (ảnh đã ready)
+                        var readyCount = data.media.filter(function(m) {
+                            return m.image && m.image.generatedImage && m.image.generatedImage.fifeUrl;
+                        }).length;
+
+                        // Lần poll đầu tiên: set baseline
+                        if (window._lastMediaCount === null) {
+                            window._lastMediaCount = readyCount;
+                            console.log('[PROJECT] Baseline set:', readyCount, 'ready images');
+                        } else {
+                            console.log('[PROJECT] Media:', currentMediaCount, 'Ready:', readyCount, 'Baseline:', window._lastMediaCount);
+
+                            // Chỉ accept khi số ảnh ready TĂNG LÊN so với baseline
+                            if (readyCount > window._lastMediaCount) {
+                                console.log('[PROJECT] ✓ New image ready! (' + window._lastMediaCount + ' → ' + readyCount + ')');
+                                window._response = data;
+                                window._requestPending = false;
+                            }
+                        }
+                    }
+                } catch(e) {
+                    // Ignore parse errors for getProject
+                }
+
+                return response;
+            } catch(e) {
                 throw e;
             }
         }
@@ -948,10 +1013,10 @@ class DrissionFlowAPI:
         # Model fallback: khi quota exceeded (429), chuyển từ GEM_PIX_2 (Pro) sang GEM_PIX
         self._use_fallback_model = False  # True = dùng nano banana (GEM_PIX) thay vì pro (GEM_PIX_2)
 
-        # IPv6 rotation: đếm số lần reset Chrome do 403, sau 5 lần mới đổi IPv6
+        # IPv6 rotation: TẠM TẮT - đặt 999 để không bao giờ kích hoạt
         self._consecutive_403 = 0
-        self._max_403_before_ipv6 = 5  # Số lần reset Chrome liên tiếp trước khi đổi IPv6
-        self._ipv6_activated = False  # True = đã bật IPv6 proxy (chỉ bật sau khi reset Chrome đủ 5 lần)
+        self._max_403_before_ipv6 = 999  # TẠM TẮT IPv6 (đặt 999)
+        self._ipv6_activated = False  # True = đã bật IPv6 proxy
 
         # T2V mode tracking: chỉ chọn mode/model lần đầu khi mới mở Chrome
         # Sau F5 refresh thì trang vẫn giữ mode/model đã chọn, không cần chọn lại
@@ -1324,6 +1389,74 @@ class DrissionFlowAPI:
             time.sleep(1)
         except Exception as e:
             pass
+
+    def clear_chrome_data(self) -> bool:
+        """
+        Xóa dữ liệu Chrome profile (cookies, cache, localStorage...) để reset reCAPTCHA score.
+        Gọi khi gặp 403 liên tiếp nhiều lần.
+
+        Returns:
+            True nếu xóa thành công
+        """
+        import shutil
+
+        try:
+            self.log("🗑️ Clearing Chrome profile data...")
+
+            # Đóng Chrome trước
+            self._kill_chrome()
+            time.sleep(2)
+
+            # Tìm profile directory
+            profile_path = self.profile_dir
+            if not profile_path or not profile_path.exists():
+                self.log("⚠️ Profile directory not found", "WARN")
+                return False
+
+            # Xóa các folder chứa data (giữ lại folder gốc)
+            folders_to_clear = [
+                "Default/Cache",
+                "Default/Code Cache",
+                "Default/GPUCache",
+                "Default/Cookies",
+                "Default/Cookies-journal",
+                "Default/Local Storage",
+                "Default/Session Storage",
+                "Default/IndexedDB",
+                "Default/Service Worker",
+                "Default/Web Data",
+                "Default/Web Data-journal",
+                "Default/History",
+                "Default/History-journal",
+                "Default/Visited Links",
+                "GrShaderCache",
+                "ShaderCache",
+            ]
+
+            cleared = 0
+            for folder in folders_to_clear:
+                target = profile_path / folder
+                if target.exists():
+                    try:
+                        if target.is_dir():
+                            shutil.rmtree(target)
+                        else:
+                            target.unlink()
+                        cleared += 1
+                    except Exception as e:
+                        pass  # Một số file có thể bị lock
+
+            self.log(f"✓ Cleared {cleared} items from Chrome profile")
+            self.log("⚠️ Cần login lại Google sau khi restart Chrome!")
+
+            # Reset flags
+            self._t2v_mode_selected = False
+
+            return True
+
+        except Exception as e:
+            self.log(f"✗ Clear Chrome data failed: {e}", "ERROR")
+            return False
 
     def setup(
         self,
@@ -2693,12 +2826,18 @@ class DrissionFlowAPI:
                     images = self._parse_response(response_data)
                     self.log(f"✓ Got {len(images)} images from browser!")
 
+                    # DEBUG: Log URL của từng ảnh
+                    for idx, img in enumerate(images):
+                        self.log(f"   [IMG {idx}] url={img.url[:60] if img.url else 'None'}...")
+
                     # Clear modifyConfig for next request
                     self.driver.run_js("window._modifyConfig = null;")
 
                     # Đợi 3 giây để reCAPTCHA có thời gian regenerate token mới
                     # Nếu không đợi, request tiếp theo sẽ bị 403
+                    self.log(f"[DEBUG] Sleeping 3s for reCAPTCHA...")
                     time.sleep(3)
+                    self.log(f"[DEBUG] Returning {len(images)} images from generate_image_forward")
 
                     return images, None
 
@@ -2835,36 +2974,12 @@ class DrissionFlowAPI:
                     else:
                         return False, [], "Không restart được Chrome sau 403"
 
-                # === TIMEOUT ERROR: Tương tự 403, cần reset Chrome và đổi proxy ===
+                # === TIMEOUT ERROR: Có thể do prompt vi phạm policy → SKIP sang prompt khác ===
                 if "timeout" in error.lower():
-                    self.log(f"⚠️ Timeout error (attempt {attempt+1}/{max_retries}) - Reset Chrome...", "WARN")
-
-                    # Kill Chrome và đổi proxy
-                    self._kill_chrome()
-                    self.close()
-
-                    # === ROTATING ENDPOINT MODE ===
-                    if hasattr(self, '_is_rotating_mode') and self._is_rotating_mode:
-                        if hasattr(self, '_is_random_ip_mode') and self._is_random_ip_mode:
-                            self.log(f"  → 🎲 Random IP: Restart Chrome để lấy IP mới...")
-                        else:
-                            # Sticky Session mode: Tăng session ID
-                            self._rotating_session_id += 1
-                            if self._rotating_session_id > self._session_range_end:
-                                self._rotating_session_id = self._session_range_start
-                                self.log(f"  → ♻️ Hết dải, quay lại session {self._rotating_session_id}")
-                            else:
-                                self.log(f"  → Sticky: Đổi sang session {self._rotating_session_id}")
-                            _save_last_session_id(self._machine_id, self.worker_id, self._rotating_session_id)
-
-                        if attempt < max_retries - 1:
-                            time.sleep(3)
-                            if self.setup(project_url=getattr(self, '_current_project_url', None)):
-                                continue
-                            else:
-                                return False, [], "Không restart được Chrome sau timeout"
-                        else:
-                            return False, [], error
+                    self.log(f"⚠️ Timeout - có thể do policy violation → SKIP prompt này", "WARN")
+                    self.log(f"  → Chuyển sang prompt khác, RETRY PHASE sẽ thử lại sau")
+                    # KHÔNG retry, return ngay để chuyển sang prompt khác
+                    return False, [], f"Timeout (có thể policy) - skip"
 
                     # === DIRECT PROXY LIST MODE ===
                     if self._use_webshare and self._webshare_proxy:
@@ -2898,11 +3013,13 @@ class DrissionFlowAPI:
             return False, [], last_error or "Max retries exceeded"
 
         # 3. Download và save nếu cần
+        self.log(f"[DEBUG] Starting download phase, save_dir={save_dir}")
         if save_dir:
             save_dir = Path(save_dir)
             save_dir.mkdir(parents=True, exist_ok=True)
 
             for i, img in enumerate(images):
+                self.log(f"[DEBUG] Processing image {i}: has_base64={bool(img.base64_data)}, has_url={bool(img.url)}")
                 fname = filename or f"image_{int(time.time())}"
                 if len(images) > 1:
                     fname = f"{fname}_{i+1}"
@@ -2913,20 +3030,95 @@ class DrissionFlowAPI:
                     img.local_path = img_path
                     self.log(f"✓ Saved: {img_path.name}")
                 elif img.url:
-                    # Download from URL
-                    try:
-                        proxies = None
-                        if self._use_webshare and self._webshare_proxy:
-                            proxies = self._webshare_proxy.get_proxies()
-                        resp = requests.get(img.url, timeout=60, proxies=proxies)
-                        if resp.status_code == 200:
-                            img_path = save_dir / f"{fname}.png"
-                            img_path.write_bytes(resp.content)
-                            img.local_path = img_path
-                            img.base64_data = base64.b64encode(resp.content).decode()
-                            self.log(f"✓ Downloaded: {img_path.name}")
-                    except Exception as e:
-                        self.log(f"✗ Download error: {e}", "WARN")
+                    # Download image bằng cách mở tab mới trong Chrome
+                    dl_start = time.time()
+                    self.log(f"→ Opening image in new tab...")
+                    downloaded = False
+                    image_tab = None
+
+                    if self.driver and not downloaded:
+                        try:
+                            # Lưu tab hiện tại (tab chính) - dùng get_tab()
+                            original_tab = self.driver.get_tab()
+
+                            # Mở tab mới với URL ảnh - new_tab trả về tab object
+                            image_tab = self.driver.new_tab(img.url)
+                            image_tab.set.activate()  # Switch sang tab mới
+                            time.sleep(2)  # Đợi ảnh load
+
+                            # Đợi ảnh load xong (tối đa 10s)
+                            for _ in range(20):
+                                img_loaded = image_tab.run_js('''
+                                    const img = document.querySelector('img');
+                                    return img && img.complete && img.naturalWidth > 0;
+                                ''')
+                                if img_loaded:
+                                    break
+                                time.sleep(0.5)
+
+                            # Convert ảnh sang base64 qua canvas
+                            result = image_tab.run_js('''
+                                const img = document.querySelector('img');
+                                if (!img || !img.complete) return { error: "Image not found or not loaded" };
+
+                                const canvas = document.createElement('canvas');
+                                canvas.width = img.naturalWidth;
+                                canvas.height = img.naturalHeight;
+                                const ctx = canvas.getContext('2d');
+                                ctx.drawImage(img, 0, 0);
+
+                                try {
+                                    const dataUrl = canvas.toDataURL('image/png');
+                                    return {
+                                        base64: dataUrl.split(',')[1],
+                                        width: img.naturalWidth,
+                                        height: img.naturalHeight
+                                    };
+                                } catch(e) {
+                                    return { error: e.toString() };
+                                }
+                            ''')
+
+                            chrome_time = time.time() - dl_start
+
+                            # Đóng tab ảnh, quay về tab chính
+                            image_tab.close()  # Đóng tab ảnh
+                            original_tab.set.activate()  # Về tab chính
+
+                            if result and result.get('base64'):
+                                img.base64_data = result['base64']
+                                img_path = save_dir / f"{fname}.png"
+                                img_path.write_bytes(base64.b64decode(img.base64_data))
+                                img.local_path = img_path
+                                w, h = result.get('width', 0), result.get('height', 0)
+                                self.log(f"✓ Downloaded: {img_path.name} ({w}x{h}, {chrome_time:.2f}s)")
+                                downloaded = True
+                            elif result and result.get('error'):
+                                self.log(f"   [DEBUG] Chrome tab error: {result['error']}")
+                        except Exception as e:
+                            self.log(f"   [DEBUG] Chrome tab exception: {e}")
+                            # Đảm bảo đóng tab ảnh nếu có lỗi
+                            try:
+                                if image_tab:
+                                    image_tab.close()
+                            except:
+                                pass
+
+                    # Fallback to requests nếu Chrome fail
+                    if not downloaded:
+                        try:
+                            self.log(f"   Fallback to requests...")
+                            resp = requests.get(img.url, timeout=120)
+                            req_time = time.time() - dl_start
+                            if resp.status_code == 200:
+                                img_path = save_dir / f"{fname}.png"
+                                img_path.write_bytes(resp.content)
+                                img.local_path = img_path
+                                img.base64_data = base64.b64encode(resp.content).decode()
+                                self.log(f"✓ Downloaded: {img_path.name} ({len(resp.content)} bytes, {req_time:.2f}s)")
+                                downloaded = True
+                        except Exception as e:
+                            self.log(f"✗ Download failed: {e}", "WARN")
 
         # F5 refresh sau mỗi ảnh thành công để tránh 403 cho prompt tiếp theo
         try:
@@ -3482,9 +3674,28 @@ class DrissionFlowAPI:
         self._paste_prompt_ctrlv(textarea, prompt)
         time.sleep(2)
 
-        # 4. Nhấn Enter
-        textarea.input('\n')
-        self.log("[I2V-Chrome] → Enter → Interceptor converting IMAGE → VIDEO request...")
+        # 4. Gửi prompt - thử nhiều cách
+        # Cách 1: Click nút gửi (nếu có) - giống người dùng nhất
+        send_clicked = self.driver.run_js('''
+            // Tìm nút gửi (thường là button gần textarea)
+            var sendBtn = document.querySelector('button[aria-label*="Send"]')
+                       || document.querySelector('button[aria-label*="send"]')
+                       || document.querySelector('button[type="submit"]');
+            if (sendBtn && !sendBtn.disabled) {
+                sendBtn.click();
+                return true;
+            }
+            return false;
+        ''')
+
+        if send_clicked:
+            self.log("[I2V-Chrome] → Clicked send button")
+        else:
+            # Cách 2: Nhấn Enter bằng DrissionPage (native keyboard)
+            textarea.input('\n')
+            self.log("[I2V-Chrome] → Enter key pressed")
+
+        self.log("[I2V-Chrome] → Interceptor converting IMAGE → VIDEO request...")
 
         # 5. Đợi video response từ browser
         start_time = time.time()
@@ -4068,7 +4279,7 @@ class DrissionFlowAPI:
         save_path: Optional[Path] = None,
         video_model: str = "veo_3_0_r2v_fast_ultra",
         max_wait: int = 300,
-        timeout: int = 60,
+        timeout: int = 180,  # Tăng từ 60 → 180 giây
         max_retries: int = 3
     ) -> Tuple[bool, Optional[str], Optional[str]]:
         """
@@ -4124,10 +4335,18 @@ class DrissionFlowAPI:
             if error:
                 last_error = error
 
-                # === 403 ERROR: RESET CHROME + IPv6 ===
+                # === 403 ERROR: RESET CHROME + IPv6 + CLEAR DATA ===
                 if "403" in str(error):
                     self._consecutive_403 += 1
-                    self.log(f"[T2V→I2V] ⚠️ 403 error (lần {self._consecutive_403}/{self._max_403_before_ipv6}) - RESET CHROME!", "WARN")
+                    self.log(f"[T2V→I2V] ⚠️ 403 error (lần {self._consecutive_403}) - RESET CHROME!", "WARN")
+
+                    # Sau 3 lần 403 liên tiếp, clear Chrome data để reset reCAPTCHA
+                    if self._consecutive_403 >= 3:
+                        self.log(f"[T2V→I2V] 🗑️ 403 liên tiếp {self._consecutive_403} lần → CLEAR CHROME DATA!")
+                        self.clear_chrome_data()
+                        self._consecutive_403 = 0
+                        # Sau clear data cần login lại - return để user xử lý
+                        return False, None, "403 liên tiếp - Đã clear Chrome data, cần login lại Google!"
 
                     self._kill_chrome()
                     self.close()
