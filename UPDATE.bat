@@ -1,13 +1,13 @@
 @echo off
-chcp 65001 >nul
-title VE3 - Update
+:: VE3 Tool - Auto Update
+:: Khong can git - tu dong tai tu GitHub
 
-:: Use pushd for UNC path support
+chcp 65001 >nul
 pushd "%~dp0"
 
-echo ============================================
-echo   VE3 TOOL - CAP NHAT
-echo ============================================
+echo ========================================
+echo   VE3 Tool - CAP NHAT
+echo ========================================
 echo.
 
 :: Doc branch tu config file
@@ -15,8 +15,7 @@ set BRANCH=main
 if exist "config\current_branch.txt" (
     set /p BRANCH=<config\current_branch.txt
 )
-echo [*] Branch hien tai: %BRANCH%
-echo.
+echo [*] Branch: %BRANCH%
 
 :: Thu update bang git truoc (neu co)
 where git >nul 2>&1
@@ -35,12 +34,15 @@ if %errorlevel% equ 0 (
 :: Neu khong co git, dung Python updater
 echo [*] Dang cap nhat bang Python...
 python UPDATE.py
+if %errorlevel% neq 0 (
+    echo [!] Cap nhat that bai, dung ban local
+)
 
 :done
 echo.
-echo ============================================
-echo   [OK] HOAN TAT!
-echo ============================================
+echo ========================================
+echo   HOAN TAT!
+echo ========================================
 
 popd
 pause
