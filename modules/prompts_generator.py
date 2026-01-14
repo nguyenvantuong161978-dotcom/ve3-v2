@@ -5791,11 +5791,14 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
 
         # === BƯỚC 3: Tạo thêm các nhân vật placeholder cho Flashback ===
         # ID phải bắt đầu bằng "nv" để smart_engine nhận diện và lưu vào nv/
+        # Tổng 4 nhân vật: nvc + nv1, nv2, nv3
         flashback_chars = [
             {"id": "nv1", "name": "Main Character", "role": "protagonist",
-             "english_prompt": "Young adult, expressive face, casual modern clothing, photorealistic, 8K quality"},
-            {"id": "nv2", "name": "Supporting Character", "role": "supporting",
-             "english_prompt": "Middle-aged person, warm appearance, neat attire, photorealistic, 8K quality"},
+             "english_prompt": "Young adult Asian man, expressive face, casual modern clothing, confident posture, photorealistic, 8K quality"},
+            {"id": "nv2", "name": "Female Lead", "role": "supporting",
+             "english_prompt": "Young Asian woman, gentle features, elegant casual wear, warm smile, photorealistic, 8K quality"},
+            {"id": "nv3", "name": "Elder Figure", "role": "supporting",
+             "english_prompt": "Middle-aged Asian person, wise appearance, traditional yet modern attire, dignified presence, photorealistic, 8K quality"},
         ]
         all_char_refs = ["nvc.png"]  # Start with narrator
 
@@ -5831,20 +5834,27 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
         # === BƯỚC 5: Tạo locations cho Flashback ===
         # QUAN TRỌNG: Locations cũng add vào CHARACTERS sheet (như Character với role=location)
         # Tất cả tham chiếu (nhân vật + bối cảnh) đều vào characters sheet, ảnh lưu vào nv/
+        # Tổng 6 locations: loc_narrator + loc_01 -> loc_05
 
         flashback_locs = [
             {"id": "loc_narrator", "name": "Storytelling Room",
              "lock": LOCATION_LOCK,
              "english_prompt": f"Photorealistic scene. {LOCATION_LOCK}. Cinematic lighting, 8K quality."},
-            {"id": "loc_01", "name": "Outdoor Scene",
-             "lock": "outdoor natural setting, daylight, trees and sky visible",
-             "english_prompt": "Photorealistic outdoor scene. Natural setting with daylight, trees and sky visible. Wide establishing shot, golden hour lighting, 8K cinematic quality."},
-            {"id": "loc_02", "name": "Indoor Scene",
-             "lock": "indoor room, warm lighting, comfortable atmosphere",
-             "english_prompt": "Photorealistic indoor scene. Warm lighting, comfortable atmosphere, cozy room. Soft natural light through window, 8K cinematic quality."},
-            {"id": "loc_03", "name": "Urban Scene",
-             "lock": "city street, buildings, urban environment",
-             "english_prompt": "Photorealistic urban scene. City street with buildings, urban environment. Dynamic street photography style, 8K cinematic quality."},
+            {"id": "loc_01", "name": "Outdoor Nature",
+             "lock": "outdoor natural setting, daylight, trees and sky visible, peaceful atmosphere",
+             "english_prompt": "Photorealistic outdoor scene. Natural setting with lush trees, clear sky, golden hour sunlight filtering through leaves. Wide establishing shot, 8K cinematic quality."},
+            {"id": "loc_02", "name": "Cozy Interior",
+             "lock": "indoor living room, warm lighting, comfortable furniture, homey atmosphere",
+             "english_prompt": "Photorealistic indoor scene. Cozy living room with warm lamp light, comfortable sofa, soft textures. Intimate atmosphere, 8K cinematic quality."},
+            {"id": "loc_03", "name": "Urban Street",
+             "lock": "city street, modern buildings, urban life, dynamic atmosphere",
+             "english_prompt": "Photorealistic urban scene. Busy city street with modern architecture, people walking, vibrant urban energy. Dynamic street photography, 8K cinematic quality."},
+            {"id": "loc_04", "name": "Night Scene",
+             "lock": "nighttime setting, city lights, neon glow, mysterious atmosphere",
+             "english_prompt": "Photorealistic night scene. City at night with glowing lights, neon signs reflecting on wet streets, cinematic noir atmosphere. 8K quality."},
+            {"id": "loc_05", "name": "Dramatic Landscape",
+             "lock": "epic landscape, mountains or ocean, dramatic sky, vast open space",
+             "english_prompt": "Photorealistic epic landscape. Vast mountains or ocean horizon, dramatic clouds, golden or blue hour lighting. Awe-inspiring scale, 8K cinematic quality."},
         ]
         all_loc_refs = []
         backup_locs = []
