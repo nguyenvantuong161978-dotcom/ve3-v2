@@ -5790,12 +5790,12 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
         self.logger.info("[FALLBACK] ✓ Đã tạo nhân vật narrator")
 
         # === BƯỚC 3: Tạo thêm các nhân vật placeholder cho Flashback ===
-        # Các nhân vật này sẽ được tạo ảnh, Flow sẽ tự chọn khi cần
+        # ID phải bắt đầu bằng "nv" để smart_engine nhận diện và lưu vào nv/
         flashback_chars = [
-            {"id": "char_01", "name": "Main Character", "role": "protagonist",
-             "english_prompt": "Young adult, expressive face, casual modern clothing"},
-            {"id": "char_02", "name": "Supporting Character", "role": "supporting",
-             "english_prompt": "Middle-aged person, warm appearance, neat attire"},
+            {"id": "nv1", "name": "Main Character", "role": "protagonist",
+             "english_prompt": "Young adult, expressive face, casual modern clothing, photorealistic, 8K quality"},
+            {"id": "nv2", "name": "Supporting Character", "role": "supporting",
+             "english_prompt": "Middle-aged person, warm appearance, neat attire, photorealistic, 8K quality"},
         ]
         all_char_refs = ["nvc.png"]  # Start with narrator
 
