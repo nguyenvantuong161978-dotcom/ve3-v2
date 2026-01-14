@@ -7,7 +7,7 @@ pushd "%~dp0"
 
 echo ============================================
 echo   VE3 TOOL - SETUP MAY CHU (MASTER)
-echo   Dung cho: run_excel.bat, run_edit.bat
+echo   Dung cho: RUN_MASTER.bat
 echo ============================================
 echo.
 
@@ -25,18 +25,23 @@ echo [OK] Python da cai
 
 :: Install core dependencies
 echo.
-echo [1/3] Cai thu vien co ban...
-pip install pyyaml openpyxl requests pillow pyperclip -q
+echo [1/4] Cai thu vien co ban...
+pip install numpy pyyaml openpyxl requests pillow pyperclip gspread google-auth -q
 
 :: Install Whisper (for voice to SRT)
 echo.
-echo [2/3] Cai Whisper (Voice to SRT)...
+echo [2/4] Cai Whisper (Voice to SRT)...
 echo       (Co the mat 5-10 phut)
 pip install openai-whisper -q
 
+:: Install moviepy for video editing
+echo.
+echo [3/4] Cai MoviePy (Edit video)...
+pip install moviepy -q
+
 :: Check/Setup FFmpeg
 echo.
-echo [3/3] Kiem tra FFmpeg...
+echo [4/4] Kiem tra FFmpeg...
 where ffmpeg >nul 2>&1
 if %errorlevel% neq 0 (
     :: Check if FFmpeg exists in tools folder (with bin subfolder)
@@ -74,8 +79,7 @@ echo   HOAN TAT SETUP MAY CHU!
 echo ============================================
 echo.
 echo   Cac lenh co the chay:
-echo   - run_excel.bat  : Tao Excel tu voice
-echo   - run_edit.bat   : Ghep video MP4
+echo   - RUN_MASTER.bat : Chay run_srt.py + run_edit.py
 echo.
 echo ============================================
 
