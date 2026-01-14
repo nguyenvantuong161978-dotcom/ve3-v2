@@ -612,10 +612,11 @@ class PromptWorkbook:
     def get_media_ids(self) -> Dict[str, str]:
         """
         Lấy tất cả media_id từ characters sheet.
+        (Cả nhân vật nv* và bối cảnh loc* đều nằm trong characters sheet)
 
         Returns:
-            Dict mapping character_id -> media_id
-            VD: {"nvc": "CAMSJDZiYzQ2...", "nv1": "CAMSJDZiYzQ1..."}
+            Dict mapping id -> media_id
+            VD: {"nvc": "CAMSJDZiYzQ2...", "loc_01": "CAMSJDZiYzQ1..."}
         """
         if self.workbook is None:
             self.load_or_create()
