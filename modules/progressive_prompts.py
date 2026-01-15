@@ -4,18 +4,27 @@ VE3 Tool - Progressive Prompts Generator
 Tạo prompts theo từng step, mỗi step lưu vào Excel ngay.
 API có thể đọc context từ Excel để học từ những gì đã làm.
 
-Flow:
-    Step 1: Phân tích story → Excel (story_analysis)
-    Step 2: Tạo characters → Excel (characters)
-    Step 3: Tạo locations → Excel (locations)
-    Step 4: Tạo director_plan → Excel (director_plan)
-    Step 5-N: Tạo scenes (từng batch) → Excel (scenes)
+Flow (Top-Down Planning):
+    Step 1:   Phân tích story → Excel (story_analysis)
+    Step 1.5: Phân tích nội dung con → Excel (story_segments)
+              - Chia câu chuyện thành các phần
+              - Mỗi phần cần bao nhiêu ảnh để truyền tải
+    Step 2:   Tạo characters → Excel (characters)
+    Step 3:   Tạo locations → Excel (characters với loc_xxx)
+    Step 4:   Tạo director_plan → Excel (director_plan)
+              - Dựa vào segments để phân bổ scenes
+    Step 4.5: Lên kế hoạch chi tiết từng scene → Excel (scene_planning)
+              - Ý đồ nghệ thuật cho mỗi scene
+              - Góc máy, cảm xúc, ánh sáng
+    Step 5:   Tạo scene prompts → Excel (scenes)
+              - Đọc planning để viết prompt chính xác
 
 Lợi ích:
     - Fail recovery: Resume từ step bị fail
     - Debug: Xem Excel biết step nào sai
     - Kiểm soát: Có thể sửa Excel giữa chừng
     - Chất lượng: API đọc context từ Excel
+    - Top-down: Lên kế hoạch trước, prompt sau
 """
 
 import json
@@ -24,6 +33,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Callable
 from dataclasses import dataclass
 from enum import Enum
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from modules.utils import (
     get_logger,
@@ -184,6 +194,175 @@ class ProgressivePromptsGenerator:
 
         return None
 
+    def _sample_text(self, text: str, total_chars: int = 8000) -> str:
+        """
+        Lấy mẫu text thông minh: đầu + giữa + cuối.
+        Thay vì gửi 15-20k chars, chỉ gửi ~8k nhưng bao phủ toàn bộ nội dung.
+
+        Args:
+            text: Full text
+            total_chars: Tổng số ký tự muốn lấy (default 8000)
+
+        Returns:
+            Sampled text với markers [BEGINNING], [MIDDLE], [END]
+        """
+        if len(text) <= total_chars:
+            return text
+
+        # Chia tỷ lệ: 40% đầu, 30% giữa, 30% cuối
+        begin_chars = int(total_chars * 0.4)
+        middle_chars = int(total_chars * 0.3)
+        end_chars = int(total_chars * 0.3)
+
+        # Lấy phần đầu
+        begin_text = text[:begin_chars]
+
+        # Lấy phần giữa (từ khoảng 40% đến 60% của text)
+        middle_start = len(text) // 2 - middle_chars // 2
+        middle_text = text[middle_start:middle_start + middle_chars]
+
+        # Lấy phần cuối
+        end_text = text[-end_chars:]
+
+        sampled = f"""[BEGINNING - First {begin_chars} chars]
+{begin_text}
+
+[MIDDLE - Around center of story]
+{middle_text}
+
+[END - Last {end_chars} chars]
+{end_text}"""
+
+        return sampled
+
+    def _get_srt_for_range(self, srt_entries: list, start_idx: int, end_idx: int) -> str:
+        """
+        Lấy SRT text cho một range cụ thể.
+
+        Args:
+            srt_entries: List of SRT entries
+            start_idx: 1-based start index
+            end_idx: 1-based end index
+
+        Returns:
+            Formatted SRT text
+        """
+        srt_text = ""
+        for i, entry in enumerate(srt_entries, 1):
+            if start_idx <= i <= end_idx:
+                srt_text += f"[{i}] {entry.start_time} --> {entry.end_time}\n{entry.text}\n\n"
+        return srt_text
+
+    def _split_long_scene_cinematically(
+        self,
+        scene: dict,
+        char_locks: list,
+        loc_locks: list
+    ) -> list:
+        """
+        Chia một scene dài (> 8s) thành multiple shots một cách nghệ thuật.
+        Gọi API để quyết định cách chia dựa trên nội dung, không phải công thức.
+
+        Returns:
+            List of split scenes, or None if failed
+        """
+        duration = scene.get("duration", 0)
+        srt_text = scene.get("srt_text", "")
+        visual_moment = scene.get("visual_moment", "")
+        characters_used = scene.get("characters_used", "")
+        location_used = scene.get("location_used", "")
+        srt_start = scene.get("srt_start", "")
+        srt_end = scene.get("srt_end", "")
+
+        # Tính số shots cần thiết (target 5-7s mỗi shot)
+        min_shots = max(2, int(duration / 7))
+        max_shots = max(2, int(duration / 4))
+
+        prompt = f"""You are a FILM DIRECTOR. This scene is {duration:.1f} seconds - TOO LONG for one shot (max 8s).
+Split it into {min_shots}-{max_shots} DISTINCT cinematic shots.
+
+ORIGINAL SCENE:
+- Duration: {duration:.1f}s (from {srt_start} to {srt_end})
+- Narration: "{srt_text}"
+- Visual concept: "{visual_moment}"
+- Characters: {characters_used}
+- Location: {location_used}
+
+AVAILABLE CHARACTERS:
+{chr(10).join(char_locks) if char_locks else 'None'}
+
+AVAILABLE LOCATIONS:
+{chr(10).join(loc_locks) if loc_locks else 'None'}
+
+RULES FOR SPLITTING:
+1. Each shot MUST be 3-8 seconds (divide the {duration:.1f}s total)
+2. Each shot must show DIFFERENT aspect: angle, focus, emotion
+3. All shots together must cover the FULL narration
+4. Use EXACT character/location IDs from the lists above
+5. Think cinematically - what sequence of shots tells this story best?
+
+Examples of good splits:
+- Character making decision: Close-up face → Insert object → Wide shot reaction
+- Two people talking: Speaker close-up → Listener reaction → Two-shot
+- Action sequence: Wide establishing → Medium action → Close-up detail
+
+Return JSON only:
+{{
+    "shots": [
+        {{
+            "shot_number": 1,
+            "duration": 5.0,
+            "srt_text": "portion of narration for this shot",
+            "visual_moment": "what viewer sees - specific and purposeful",
+            "shot_purpose": "why this shot at this moment",
+            "characters_used": "{characters_used}",
+            "location_used": "{location_used}",
+            "camera": "shot type and movement"
+        }}
+    ]
+}}"""
+
+        response = self._call_api(prompt, temperature=0.5, max_tokens=2000)
+        if not response:
+            return None
+
+        data = self._extract_json(response)
+        if not data or "shots" not in data:
+            return None
+
+        shots = data["shots"]
+        if not shots or len(shots) < 2:
+            return None
+
+        # Validate total duration roughly matches original
+        total_split_duration = sum(s.get("duration", 0) for s in shots)
+        if abs(total_split_duration - duration) > duration * 0.3:  # Allow 30% variance
+            # Adjust durations proportionally
+            ratio = duration / total_split_duration if total_split_duration > 0 else 1
+            for shot in shots:
+                shot["duration"] = round(shot.get("duration", 5) * ratio, 2)
+
+        # Convert shots to scene format
+        split_scenes = []
+        for shot in shots:
+            split_scene = {
+                "scene_id": 0,  # Will be assigned later
+                "srt_indices": scene.get("srt_indices", []),
+                "srt_start": srt_start,  # Keep original timing reference
+                "srt_end": srt_end,
+                "duration": shot.get("duration", 5.0),
+                "srt_text": shot.get("srt_text", srt_text),
+                "visual_moment": shot.get("visual_moment", ""),
+                "shot_purpose": shot.get("shot_purpose", ""),
+                "characters_used": shot.get("characters_used", characters_used),
+                "location_used": shot.get("location_used", location_used),
+                "camera": shot.get("camera", ""),
+                "lighting": scene.get("lighting", "")
+            }
+            split_scenes.append(split_scene)
+
+        return split_scenes
+
     # =========================================================================
     # STEP 1: PHÂN TÍCH STORY
     # =========================================================================
@@ -218,17 +397,23 @@ class ProgressivePromptsGenerator:
         except:
             pass
 
-        # Prepare story text
+        # Prepare story text - OPTIMIZED: Use sampled text instead of full 15k
         if txt_content:
             story_text = txt_content
         else:
             story_text = " ".join([e.text for e in srt_entries])
 
+        # Sample text: 8k chars thay vì 15k - tiết kiệm ~50% tokens
+        sampled_text = self._sample_text(story_text, total_chars=8000)
+        self._log(f"  Text: {len(story_text)} chars → sampled {len(sampled_text)} chars")
+
         # Build prompt
         prompt = f"""Analyze this story and extract key information for visual production.
 
-STORY:
-{story_text[:15000]}
+NOTE: The story is provided in sampled format (beginning + middle + end) to capture the full narrative arc.
+
+STORY (SAMPLED):
+{sampled_text}
 
 Return JSON only:
 {{
@@ -266,10 +451,249 @@ Return JSON only:
             self._log(f"  -> Saved story_analysis to Excel")
             self._log(f"     Setting: {data.get('setting', {}).get('era', 'N/A')}, {data.get('setting', {}).get('location', 'N/A')}")
             self._log(f"     Context: {data.get('context_lock', 'N/A')[:80]}...")
+
+            # TRACKING: Cập nhật trạng thái
+            workbook.update_step_status("step_1", "COMPLETED", 1, 1,
+                f"context_lock: {data.get('context_lock', '')[:50]}...")
+
             return StepResult("analyze_story", StepStatus.COMPLETED, "Success", data)
         except Exception as e:
             self._log(f"  ERROR: Could not save to Excel: {e}", "ERROR")
+            workbook.update_step_status("step_1", "ERROR", 0, 0, str(e)[:100])
             return StepResult("analyze_story", StepStatus.FAILED, str(e))
+
+    # =========================================================================
+    # STEP 1.5: PHÂN TÍCH NỘI DUNG CON (STORY SEGMENTS)
+    # =========================================================================
+
+    def step_analyze_story_segments(
+        self,
+        project_dir: Path,
+        code: str,
+        workbook: PromptWorkbook,
+        srt_entries: list,
+        txt_content: str = ""
+    ) -> StepResult:
+        """
+        Step 1.5: Phân tích câu chuyện thành các nội dung con (segments).
+
+        Logic top-down:
+        1. Xác định các phần nội dung chính trong câu chuyện
+        2. Mỗi phần cần truyền tải thông điệp gì
+        3. Mỗi phần cần bao nhiêu ảnh để thể hiện đầy đủ
+        4. Ước tính thời gian từ SRT
+
+        Output sheet: story_segments
+        """
+        self._log("\n" + "="*60)
+        self._log("[STEP 1.5] Phân tích nội dung con (story segments)...")
+        self._log("="*60)
+
+        # Check if already done
+        try:
+            existing = workbook.get_story_segments()
+            if existing and len(existing) > 0:
+                self._log(f"  -> Đã có {len(existing)} segments, skip!")
+                return StepResult("analyze_story_segments", StepStatus.COMPLETED, "Already done")
+        except:
+            pass
+
+        # TRACKING: Khởi tạo SRT coverage để đối chiếu
+        self._log(f"  Khởi tạo SRT coverage tracking...")
+        workbook.init_srt_coverage(srt_entries)
+
+        # Read context from previous step
+        story_analysis = {}
+        try:
+            story_analysis = workbook.get_story_analysis() or {}
+        except:
+            pass
+
+        context_lock = story_analysis.get("context_lock", "")
+        themes = story_analysis.get("themes", [])
+
+        # Prepare story text - OPTIMIZED: Use sampled text
+        if txt_content:
+            story_text = txt_content
+        else:
+            story_text = " ".join([e.text for e in srt_entries])
+
+        # Sample text: 10k chars để có đủ context cho segment analysis
+        sampled_text = self._sample_text(story_text, total_chars=10000)
+        self._log(f"  Text: {len(story_text)} chars → sampled {len(sampled_text)} chars")
+
+        # Tính tổng thời gian từ SRT
+        total_duration = 0
+        if srt_entries:
+            try:
+                # Parse end time của entry cuối
+                last_entry = srt_entries[-1]
+                end_time = last_entry.end_time  # Format: "00:01:30,500"
+                parts = end_time.replace(',', ':').split(':')
+                total_duration = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2]) + int(parts[3]) / 1000
+            except:
+                total_duration = len(srt_entries) * 3  # Ước tính 3s/entry
+
+        self._log(f"  Tổng thời gian SRT: {total_duration:.1f}s ({len(srt_entries)} entries)")
+
+        # Build prompt - OPTIMIZED: Produce richer segment insights for later steps
+        prompt = f"""Analyze this story and divide it into content segments for video creation.
+
+IMPORTANT: Your segment analysis will be used by later steps to create visuals WITHOUT re-reading the full story.
+So make your "message" and "key_elements" DETAILED enough to guide visual creation.
+
+STORY CONTEXT:
+{context_lock}
+
+THEMES: {', '.join(themes) if themes else 'Not specified'}
+
+TOTAL DURATION: {total_duration:.1f} seconds
+TOTAL SRT ENTRIES: {len(srt_entries)}
+
+STORY CONTENT (SAMPLED - beginning + middle + end):
+{sampled_text}
+
+TASK: Divide the story into logical segments. Each segment is a distinct part of the narrative.
+
+CRITICAL REQUIREMENT:
+- Your segments MUST cover ALL {len(srt_entries)} SRT entries
+- First segment starts at srt_range_start: 1
+- Last segment MUST end at srt_range_end: {len(srt_entries)}
+- NO gaps between segments (segment N ends where segment N+1 starts)
+
+For each segment, provide DETAILED information (this will guide image creation):
+1. message: The narrative purpose - what story is being told? What happens?
+2. key_elements: List of VISUAL elements (characters, locations, objects, actions, emotions)
+3. visual_summary: A 2-3 sentence description of what images should show for this segment
+4. mood: The emotional tone (tense, warm, sad, hopeful, dramatic, etc.)
+5. characters_involved: Which characters appear in this segment
+
+GUIDELINES:
+- Total images across all segments should roughly equal: {int(total_duration / 5)} (assuming ~5s per image)
+- Each segment should have at least 1 image, typically 2-5 images
+- Important emotional moments may need more images
+- Action sequences need more images than dialogue
+
+Return JSON only:
+{{
+    "segments": [
+        {{
+            "segment_id": 1,
+            "segment_name": "Opening/Introduction",
+            "message": "DETAILED narrative: what happens, who is involved, what's the conflict/emotion",
+            "key_elements": ["character doing action", "specific location", "emotional state", "important object"],
+            "visual_summary": "2-3 sentences describing what the images should show. E.g., 'Show the protagonist alone in his room, looking worried. Then show him making a decision, getting up with determination.'",
+            "mood": "melancholic/hopeful/tense/etc",
+            "characters_involved": ["main character", "supporting character"],
+            "image_count": 3,
+            "estimated_duration": 15.0,
+            "srt_range_start": 1,
+            "srt_range_end": 5,
+            "importance": "high/medium/low"
+        }}
+    ],
+    "total_images": 20,
+    "summary": "Brief overview of the story structure"
+}}
+"""
+
+        # Call API
+        response = self._call_api(prompt, temperature=0.3, max_tokens=4096)
+        if not response:
+            self._log("  ERROR: API call failed!", "ERROR")
+            return StepResult("analyze_story_segments", StepStatus.FAILED, "API call failed")
+
+        # Parse response
+        data = self._extract_json(response)
+        if not data or "segments" not in data:
+            self._log("  ERROR: Could not parse segments!", "ERROR")
+            return StepResult("analyze_story_segments", StepStatus.FAILED, "JSON parse failed")
+
+        segments = data["segments"]
+        total_srt = len(srt_entries)
+
+        # VALIDATION: Check if segments cover all SRT entries
+        if segments:
+            last_seg = segments[-1]
+            last_srt_end = last_seg.get("srt_range_end", 0)
+
+            if last_srt_end < total_srt:
+                # FIX: Extend coverage to include all SRT entries
+                missing_entries = total_srt - last_srt_end
+                self._log(f"  ⚠️ Segments only cover SRT 1-{last_srt_end}, missing {missing_entries} entries")
+                self._log(f"  -> Auto-fixing: extending coverage to SRT {total_srt}")
+
+                # Calculate how many additional images needed (~5s per image)
+                missing_duration = missing_entries * (total_duration / total_srt)
+                additional_images = max(1, int(missing_duration / 5))
+
+                # Either extend last segment or add new segment
+                if missing_entries <= 50:  # Small gap - extend last segment
+                    segments[-1]["srt_range_end"] = total_srt
+                    segments[-1]["image_count"] = segments[-1].get("image_count", 1) + additional_images
+                    self._log(f"     -> Extended last segment to SRT {total_srt} (+{additional_images} images)")
+                else:
+                    # Larger gap - add new segment(s)
+                    remaining = missing_entries
+                    current_start = last_srt_end + 1
+                    seg_id = len(segments) + 1
+
+                    while remaining > 0:
+                        chunk = min(remaining, 100)  # Max 100 entries per segment
+                        chunk_images = max(1, int(chunk * (total_duration / total_srt) / 5))
+                        new_seg = {
+                            "segment_id": seg_id,
+                            "segment_name": f"Continuation Part {seg_id - len(data['segments'])}",
+                            "message": "Continuing the narrative",
+                            "key_elements": [],
+                            "image_count": chunk_images,
+                            "estimated_duration": chunk * (total_duration / total_srt),
+                            "srt_range_start": current_start,
+                            "srt_range_end": current_start + chunk - 1,
+                            "importance": "medium"
+                        }
+                        segments.append(new_seg)
+                        self._log(f"     -> Added segment {seg_id}: SRT {current_start}-{current_start + chunk - 1} ({chunk_images} images)")
+
+                        current_start += chunk
+                        remaining -= chunk
+                        seg_id += 1
+
+                data["segments"] = segments
+
+        # Save to Excel
+        try:
+            workbook.save_story_segments(data["segments"], data.get("total_images", 0), data.get("summary", ""))
+            workbook.save()
+
+            total_images = sum(s.get("image_count", 0) for s in data["segments"])
+            self._log(f"  -> Saved {len(data['segments'])} segments ({total_images} total images)")
+            for seg in data["segments"][:5]:
+                self._log(f"     - {seg.get('segment_name')}: {seg.get('image_count')} images")
+
+            # TRACKING: Cập nhật và kiểm tra coverage
+            coverage = workbook.update_srt_coverage_segments(data["segments"])
+            self._log(f"\n  📊 SRT COVERAGE (sau Step 1.5):")
+            self._log(f"     Total SRT: {coverage['total_srt']}")
+            self._log(f"     Covered by segments: {coverage['covered_by_segment']} ({coverage['coverage_percent']}%)")
+
+            # Determine status based on coverage
+            if coverage['uncovered'] > 0:
+                self._log(f"     ⚠️ UNCOVERED: {coverage['uncovered']} entries", "WARN")
+                status = "PARTIAL" if coverage['coverage_percent'] >= 50 else "ERROR"
+                workbook.update_step_status("step_1.5", status,
+                    coverage['total_srt'], coverage['covered_by_segment'],
+                    f"{len(data['segments'])} segments, {coverage['uncovered']} SRT uncovered")
+            else:
+                workbook.update_step_status("step_1.5", "COMPLETED",
+                    coverage['total_srt'], coverage['covered_by_segment'],
+                    f"{len(data['segments'])} segments, {total_images} images planned")
+
+            return StepResult("analyze_story_segments", StepStatus.COMPLETED, "Success", data)
+        except Exception as e:
+            self._log(f"  ERROR: Could not save to Excel: {e}", "ERROR")
+            workbook.update_step_status("step_1.5", "ERROR", 0, 0, str(e)[:100])
+            return StepResult("analyze_story_segments", StepStatus.FAILED, str(e))
 
     # =========================================================================
     # STEP 2: TẠO CHARACTERS
@@ -309,26 +733,84 @@ Return JSON only:
         context_lock = story_analysis.get("context_lock", "")
         setting = story_analysis.get("setting", {})
 
-        # Prepare story text
-        if txt_content:
-            story_text = txt_content
-        else:
-            story_text = " ".join([e.text for e in srt_entries])
+        # OPTIMIZED: Tận dụng insights từ Step 1.5 (segments)
+        story_segments = workbook.get_story_segments() or []
 
-        # Build prompt with context from previous step
-        prompt = f"""Based on this story, identify all characters and create visual descriptions.
+        # Build rich context từ segments thay vì đọc lại full text
+        segment_insights = ""
+        all_characters_mentioned = set()
+        all_key_elements = []
 
-STORY CONTEXT (from previous analysis):
+        for seg in story_segments:
+            seg_name = seg.get("segment_name", "")
+            message = seg.get("message", "")
+            visual_summary = seg.get("visual_summary", "")
+            key_elements = seg.get("key_elements", [])
+            chars_involved = seg.get("characters_involved", [])
+            mood = seg.get("mood", "")
+
+            segment_insights += f"""
+SEGMENT "{seg_name}":
+- Story: {message}
+- Visuals: {visual_summary}
+- Mood: {mood}
+- Characters: {', '.join(chars_involved) if isinstance(chars_involved, list) else chars_involved}
+- Key elements: {', '.join(key_elements) if isinstance(key_elements, list) else key_elements}
+"""
+            if isinstance(chars_involved, list):
+                all_characters_mentioned.update(chars_involved)
+            if isinstance(key_elements, list):
+                all_key_elements.extend(key_elements)
+
+        # Chỉ dùng TARGETED text từ SRT cho các segment chính (đầu + giữa + cuối)
+        # thay vì gửi full text
+        targeted_srt_text = ""
+        if story_segments and srt_entries:
+            # Lấy 3 segments: đầu, giữa, cuối
+            target_segments = [story_segments[0]]
+            if len(story_segments) > 2:
+                target_segments.append(story_segments[len(story_segments)//2])
+                target_segments.append(story_segments[-1])
+            elif len(story_segments) > 1:
+                target_segments.append(story_segments[-1])
+
+            for seg in target_segments:
+                srt_start = seg.get("srt_range_start", 1)
+                srt_end = seg.get("srt_range_end", min(srt_start + 20, len(srt_entries)))
+                # Chỉ lấy 10 entries đầu của mỗi segment
+                entries_to_take = min(10, srt_end - srt_start + 1)
+                targeted_srt_text += f"\n[From segment '{seg.get('segment_name')}']\n"
+                targeted_srt_text += self._get_srt_for_range(srt_entries, srt_start, srt_start + entries_to_take - 1)
+
+        self._log(f"  Using {len(story_segments)} segment insights + targeted SRT (~{len(targeted_srt_text)} chars)")
+
+        # Build prompt - dùng SEGMENT INSIGHTS thay vì full text
+        prompt = f"""Based on the story analysis below, identify all characters and create visual descriptions.
+
+STORY CONTEXT (from Step 1):
 - Era: {setting.get('era', 'Not specified')}
 - Location: {setting.get('location', 'Not specified')}
 - Visual style: {context_lock}
 
-STORY:
-{story_text[:15000]}
+CHARACTERS TO LOOK FOR (from Step 1.5 segments):
+{', '.join(all_characters_mentioned) if all_characters_mentioned else 'Analyze from story segments below'}
+
+STORY SEGMENTS ANALYSIS (from Step 1.5 - this tells you WHAT happens and WHO is involved):
+{segment_insights}
+
+SAMPLE SRT CONTENT (for character dialogue/description details):
+{targeted_srt_text[:8000] if targeted_srt_text else 'Use segment analysis above'}
 
 For each character, provide:
 1. portrait_prompt: Full description for generating a reference portrait (white background, portrait style)
 2. character_lock: Short 10-15 word description to use in scene prompts (for consistency)
+3. is_minor: TRUE if character is under 18 years old (child, teenager, baby, infant, etc.)
+
+IMPORTANT: Identify minors accurately based on context clues:
+- Age mentions (e.g., "5-year-old", "teenager", "16 years old")
+- Role descriptions (e.g., "son", "daughter", "child", "kid", "baby", "infant", "toddler")
+- School context (e.g., "student", "high school", "elementary")
+- Any character described as young, minor, underage, or child-like
 
 Return JSON only:
 {{
@@ -339,7 +821,8 @@ Return JSON only:
             "role": "protagonist/antagonist/supporting/narrator",
             "portrait_prompt": "detailed portrait description for image generation, white background",
             "character_lock": "short description for scene prompts (10-15 words)",
-            "vietnamese_description": "Mô tả tiếng Việt"
+            "vietnamese_description": "Optional alternate description",
+            "is_minor": false
         }}
     ]
 }}
@@ -359,8 +842,18 @@ Return JSON only:
 
         # Save to Excel
         try:
+            minor_count = 0
             for char_data in data["characters"]:
                 char_id = char_data.get("id", "")
+                # Đảm bảo id bắt đầu bằng "nv_"
+                if not char_id.startswith("nv_"):
+                    char_id = f"nv_{char_id}"
+
+                # Detect trẻ vị thành niên (dưới 18 tuổi)
+                is_minor = char_data.get("is_minor", False)
+                if isinstance(is_minor, str):
+                    is_minor = is_minor.lower() in ("true", "yes", "1")
+
                 char = Character(
                     id=char_id,
                     name=char_data.get("name", ""),
@@ -368,14 +861,22 @@ Return JSON only:
                     english_prompt=char_data.get("portrait_prompt", ""),
                     character_lock=char_data.get("character_lock", ""),
                     vietnamese_prompt=char_data.get("vietnamese_description", ""),
-                    image_file=f"{char_id}.png",  # Gán image_file = {id}.png
+                    image_file=f"{char_id}.png",
+                    is_child=is_minor,
+                    status="skip" if is_minor else "pending",  # Skip tạo ảnh cho trẻ em
                 )
                 workbook.add_character(char)
 
+                if is_minor:
+                    minor_count += 1
+
             workbook.save()
             self._log(f"  -> Saved {len(data['characters'])} characters to Excel")
+            if minor_count > 0:
+                self._log(f"  -> ⚠️ {minor_count} characters là trẻ em (sẽ KHÔNG tạo ảnh)")
             for c in data["characters"][:3]:
-                self._log(f"     - {c.get('name', 'N/A')} ({c.get('role', 'N/A')})")
+                minor_tag = " [MINOR]" if c.get("is_minor") else ""
+                self._log(f"     - {c.get('name', 'N/A')} ({c.get('role', 'N/A')}){minor_tag}")
             if len(data["characters"]) > 3:
                 self._log(f"     ... và {len(data['characters']) - 3} characters khác")
 
@@ -425,23 +926,69 @@ Return JSON only:
         context_lock = story_analysis.get("context_lock", "")
         setting = story_analysis.get("setting", {})
 
-        # Prepare story text
-        if txt_content:
-            story_text = txt_content
-        else:
-            story_text = " ".join([e.text for e in srt_entries])
+        # OPTIMIZED: Tận dụng insights từ Step 1.5 (segments)
+        story_segments = workbook.get_story_segments() or []
 
-        # Build prompt
-        prompt = f"""Based on this story, identify all locations and create visual descriptions.
+        # Build rich context từ segments thay vì đọc lại full text
+        segment_insights = ""
+        all_locations_hints = set()
 
-STORY CONTEXT:
+        for seg in story_segments:
+            seg_name = seg.get("segment_name", "")
+            message = seg.get("message", "")
+            visual_summary = seg.get("visual_summary", "")
+            key_elements = seg.get("key_elements", [])
+            mood = seg.get("mood", "")
+
+            segment_insights += f"""
+SEGMENT "{seg_name}":
+- Story: {message}
+- Visuals: {visual_summary}
+- Mood: {mood}
+- Key elements: {', '.join(key_elements) if isinstance(key_elements, list) else key_elements}
+"""
+            # Extract location hints từ key_elements
+            if isinstance(key_elements, list):
+                for elem in key_elements:
+                    elem_lower = elem.lower()
+                    if any(word in elem_lower for word in ["room", "house", "office", "street", "park", "school", "hospital", "forest", "beach", "city", "village", "building", "kitchen", "bedroom", "garden", "car", "restaurant", "cafe", "church"]):
+                        all_locations_hints.add(elem)
+
+        # Chỉ lấy targeted SRT từ vài segment để có thêm context
+        targeted_srt_text = ""
+        if story_segments and srt_entries:
+            target_segments = [story_segments[0]]
+            if len(story_segments) > 2:
+                target_segments.append(story_segments[len(story_segments)//2])
+                target_segments.append(story_segments[-1])
+            elif len(story_segments) > 1:
+                target_segments.append(story_segments[-1])
+
+            for seg in target_segments:
+                srt_start = seg.get("srt_range_start", 1)
+                entries_to_take = min(8, len(srt_entries) - srt_start + 1)
+                targeted_srt_text += f"\n[From segment '{seg.get('segment_name')}']\n"
+                targeted_srt_text += self._get_srt_for_range(srt_entries, srt_start, srt_start + entries_to_take - 1)
+
+        self._log(f"  Using {len(story_segments)} segment insights + targeted SRT (~{len(targeted_srt_text)} chars)")
+
+        # Build prompt - dùng SEGMENT INSIGHTS thay vì full text
+        prompt = f"""Based on the story analysis below, identify all locations and create visual descriptions.
+
+STORY CONTEXT (from Step 1):
 - Era: {setting.get('era', 'Not specified')}
 - Location type: {setting.get('location', 'Not specified')}
 - Visual style: {context_lock}
 - Characters: {', '.join(char_names[:5])}
 
-STORY:
-{story_text[:15000]}
+LOCATION HINTS (from Step 1.5 key_elements):
+{', '.join(all_locations_hints) if all_locations_hints else 'Analyze from story segments below'}
+
+STORY SEGMENTS ANALYSIS (from Step 1.5 - shows WHERE scenes take place):
+{segment_insights}
+
+SAMPLE SRT CONTENT (for location description details):
+{targeted_srt_text[:6000] if targeted_srt_text else 'Use segment analysis above'}
 
 For each location, provide:
 1. location_prompt: Full description for generating a reference image
@@ -473,22 +1020,29 @@ Return JSON only:
             self._log("  ERROR: Could not parse locations!", "ERROR")
             return StepResult("create_locations", StepStatus.FAILED, "JSON parse failed")
 
-        # Save to Excel
+        # Save to Excel - LƯU VÀO SHEET CHARACTERS với id loc_xxx
         try:
             for loc_data in data["locations"]:
                 loc_id = loc_data.get("id", "")
-                loc = Location(
+                # Đảm bảo id bắt đầu bằng "loc_"
+                if not loc_id.startswith("loc_"):
+                    loc_id = f"loc_{loc_id}"
+
+                # Tạo Character với role="location" thay vì Location riêng
+                loc_char = Character(
                     id=loc_id,
                     name=loc_data.get("name", ""),
+                    role="location",  # Đánh dấu là location
                     english_prompt=loc_data.get("location_prompt", ""),
-                    location_lock=loc_data.get("location_lock", ""),
-                    lighting_default=loc_data.get("lighting_default", ""),
-                    image_file=f"{loc_id}.png",  # Gán image_file = {id}.png
+                    character_lock=loc_data.get("location_lock", ""),
+                    vietnamese_prompt=loc_data.get("lighting_default", ""),  # Dùng field này cho lighting
+                    image_file=f"{loc_id}.png",
+                    status="pending",
                 )
-                workbook.add_location(loc)
+                workbook.add_character(loc_char)  # Thêm vào characters sheet
 
             workbook.save()
-            self._log(f"  -> Saved {len(data['locations'])} locations to Excel")
+            self._log(f"  -> Saved {len(data['locations'])} locations to characters sheet")
             for loc in data["locations"][:3]:
                 self._log(f"     - {loc.get('name', 'N/A')}")
 
@@ -498,7 +1052,7 @@ Return JSON only:
             return StepResult("create_locations", StepStatus.FAILED, str(e))
 
     # =========================================================================
-    # STEP 4: TẠO DIRECTOR'S PLAN
+    # STEP 4: TẠO DIRECTOR'S PLAN (OPTIMIZED - SEGMENT-FIRST)
     # =========================================================================
 
     def step_create_director_plan(
@@ -509,13 +1063,24 @@ Return JSON only:
         srt_entries: list
     ) -> StepResult:
         """
-        Step 4: Tạo director's plan - chia SRT thành scenes.
+        Step 4: Tạo director's plan - OPTIMIZED với segment-first approach.
 
-        Input: Đọc story_analysis, characters, locations từ Excel
-        Output sheet: director_plan
+        THAY ĐỔI SO VỚI PHIÊN BẢN CŨ:
+        - CŨ: Chia SRT theo character count (~6000 chars) → batch processing
+        - MỚI: Xử lý BY SEGMENT từ Step 1.5, tận dụng segment insights
+
+        Mỗi segment đã có:
+        - message: Nội dung chính của segment
+        - visual_summary: Mô tả visual cần show
+        - key_elements: Các yếu tố quan trọng
+        - mood: Tone cảm xúc
+        - characters_involved: Nhân vật xuất hiện
+        - image_count: Số scenes cần tạo
+
+        → API chỉ cần quyết định HOW to visualize, không cần re-read toàn bộ story
         """
         self._log("\n" + "="*60)
-        self._log("[STEP 4] Tạo director's plan...")
+        self._log("[STEP 4] Tạo director's plan (Segment-First)...")
         self._log("="*60)
 
         # Check if already done
@@ -537,89 +1102,773 @@ Return JSON only:
         characters = workbook.get_characters()
         locations = workbook.get_locations()
 
+        # Đọc story segments - CORE của segment-first approach
+        story_segments = workbook.get_story_segments() or []
+        if not story_segments:
+            self._log("  WARNING: No story segments! Falling back to character-batch mode.", "WARNING")
+            return self._step_create_director_plan_legacy(project_dir, code, workbook, srt_entries)
+
+        total_planned_images = sum(s.get("image_count", 0) for s in story_segments)
+        self._log(f"  Story segments: {len(story_segments)} segments, {total_planned_images} planned images")
+
         context_lock = story_analysis.get("context_lock", "")
 
-        # Build character locks for prompt
-        char_locks = []
-        for c in characters:
-            if c.character_lock:
-                char_locks.append(f"- {c.id}: {c.character_lock}")
-
-        # Build location locks for prompt
-        loc_locks = []
+        # Build character locks - COMPACT format
+        char_locks = {c.id: c.character_lock for c in characters if c.character_lock}
+        loc_locks = {}
         for loc in locations:
             if hasattr(loc, 'location_lock') and loc.location_lock:
-                loc_locks.append(f"- {loc.id}: {loc.location_lock}")
+                loc_locks[loc.id] = loc.location_lock
 
-        # Format SRT entries
-        srt_text = ""
-        for i, entry in enumerate(srt_entries):
-            srt_text += f"[{i+1}] {entry.start_time} --> {entry.end_time}\n{entry.text}\n\n"
+        all_scenes = []
+        scene_id_counter = 1
+        total_entries = len(srt_entries)
 
-        # Build prompt
-        prompt = f"""Create a director's shooting plan by dividing the SRT into visual scenes.
+        self._log(f"  Total SRT entries: {total_entries}")
+        self._log(f"  Processing {len(story_segments)} segments...")
 
-VISUAL CONTEXT:
-{context_lock}
+        # Process BY SEGMENT - tận dụng segment insights
+        for seg_idx, seg in enumerate(story_segments):
+            seg_id = seg.get("segment_id", seg_idx + 1)
+            seg_name = seg.get("segment_name", f"Segment {seg_id}")
+            message = seg.get("message", "")
+            visual_summary = seg.get("visual_summary", "")
+            key_elements = seg.get("key_elements", [])
+            mood = seg.get("mood", "")
+            chars_involved = seg.get("characters_involved", [])
+            image_count = seg.get("image_count", 3)
+            srt_start = seg.get("srt_range_start", 1)
+            srt_end = seg.get("srt_range_end", total_entries)
 
-CHARACTERS (use these exact descriptions in scenes):
-{chr(10).join(char_locks) if char_locks else 'No characters defined'}
+            self._log(f"  Segment {seg_id}/{len(story_segments)}: {seg_name} ({image_count} images, SRT {srt_start}-{srt_end})")
 
-LOCATIONS (use these exact descriptions in scenes):
-{chr(10).join(loc_locks) if loc_locks else 'No locations defined'}
+            # Lấy SRT entries cho segment này
+            seg_srt_text = self._get_srt_for_range(srt_entries, srt_start, srt_end)
 
-SRT ENTRIES:
-{srt_text[:12000]}
+            # Tính duration của segment
+            seg_duration = 0
+            for i, entry in enumerate(srt_entries, 1):
+                if srt_start <= i <= srt_end:
+                    try:
+                        parts = entry.end_time.replace(',', ':').split(':')
+                        end_sec = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2]) + int(parts[3])/1000
+                        seg_duration = max(seg_duration, end_sec)
+                        if i == srt_start:
+                            parts = entry.start_time.replace(',', ':').split(':')
+                            start_sec = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2]) + int(parts[3])/1000
+                            seg_duration -= start_sec
+                    except:
+                        pass
 
-Rules:
-1. Each scene should be 3-8 seconds
-2. Group SRT entries that belong to the same visual moment
-3. Assign appropriate characters and locations to each scene
-4. Create a visual_moment description (what the viewer sees)
+            if seg_duration <= 0:
+                seg_duration = (srt_end - srt_start + 1) * 3  # Fallback: 3s per entry
+
+            # Build COMPACT character/location info - chỉ những cái liên quan
+            relevant_chars = []
+            if isinstance(chars_involved, list):
+                for char_name in chars_involved:
+                    # Tìm character ID từ tên
+                    for cid, clock in char_locks.items():
+                        if char_name.lower() in clock.lower() or char_name.lower() in cid.lower():
+                            relevant_chars.append(f"- {cid}: {clock}")
+                            break
+
+            if not relevant_chars:
+                relevant_chars = [f"- {cid}: {clock}" for cid, clock in list(char_locks.items())[:5]]
+
+            relevant_locs = [f"- {lid}: {llock}" for lid, llock in list(loc_locks.items())[:3]]
+
+            # Build OPTIMIZED prompt - sử dụng segment insights
+            prompt = f"""Create {image_count} cinematic shots for this story segment.
+
+SEGMENT CONTEXT (from Step 1.5 analysis - this tells you WHAT to show):
+- Name: "{seg_name}"
+- Story: {message}
+- Visuals to show: {visual_summary}
+- Mood/Tone: {mood}
+- Key elements: {', '.join(key_elements) if isinstance(key_elements, list) else key_elements}
+
+VISUAL STYLE: {context_lock}
+
+CHARACTERS (use EXACT IDs):
+{chr(10).join(relevant_chars) if relevant_chars else 'Use generic descriptions'}
+
+LOCATIONS (use EXACT IDs):
+{chr(10).join(relevant_locs) if relevant_locs else 'Use generic descriptions'}
+
+SRT CONTENT ({srt_end - srt_start + 1} entries, ~{seg_duration:.0f}s):
+{seg_srt_text[:4000]}
+
+TASK: Create EXACTLY {image_count} scenes (~{seg_duration/image_count:.1f}s each)
+
+RULES:
+1. Each scene = ONE cinematic shot
+2. visual_moment: What viewer SEES - specific, purposeful
+3. Use character/location IDs from lists above
+4. Vary shot types: close-up, medium, wide, etc.
+5. scene_id starts from {scene_id_counter}
 
 Return JSON only:
 {{
     "scenes": [
         {{
-            "scene_id": 1,
-            "srt_indices": [1, 2],
+            "scene_id": {scene_id_counter},
+            "srt_indices": [list of SRT indices],
             "srt_start": "00:00:00,000",
             "srt_end": "00:00:05,000",
-            "duration": 5.0,
-            "srt_text": "combined text from SRT entries",
-            "visual_moment": "what the viewer sees in this scene",
-            "characters_used": "char_id1, char_id2",
-            "location_used": "loc_id",
-            "camera": "shot type and movement",
-            "lighting": "lighting description"
+            "duration": {seg_duration/image_count:.1f},
+            "srt_text": "narration text",
+            "visual_moment": "specific visual description",
+            "characters_used": "nv_xxx",
+            "location_used": "loc_xxx",
+            "camera": "shot type",
+            "lighting": "lighting style"
         }}
     ]
 }}
 """
 
-        # Call API
-        response = self._call_api(prompt, temperature=0.5, max_tokens=8192)
-        if not response:
-            self._log("  ERROR: API call failed!", "ERROR")
-            return StepResult("create_director_plan", StepStatus.FAILED, "API call failed")
+            # Call API with retry
+            MAX_RETRIES = 3
+            data = None
 
-        # Parse response
-        data = self._extract_json(response)
-        if not data or "scenes" not in data:
-            self._log("  ERROR: Could not parse director plan!", "ERROR")
-            return StepResult("create_director_plan", StepStatus.FAILED, "JSON parse failed")
+            for retry in range(MAX_RETRIES):
+                response = self._call_api(prompt, temperature=0.5, max_tokens=4096)
+                if response:
+                    data = self._extract_json(response)
+                    if data and "scenes" in data:
+                        break
+                time.sleep(2 ** retry)
+
+            if not data or "scenes" not in data:
+                # Fallback: tạo basic scenes
+                self._log(f"     -> API failed, creating {image_count} fallback scenes", "WARNING")
+                entries_per_scene = max(1, (srt_end - srt_start + 1) // image_count)
+
+                for i in range(image_count):
+                    scene_srt_start = srt_start + i * entries_per_scene
+                    scene_srt_end = min(scene_srt_start + entries_per_scene - 1, srt_end)
+
+                    fallback_scene = {
+                        "scene_id": scene_id_counter,
+                        "srt_indices": list(range(scene_srt_start, scene_srt_end + 1)),
+                        "srt_start": srt_entries[scene_srt_start - 1].start_time if scene_srt_start <= len(srt_entries) else "",
+                        "srt_end": srt_entries[scene_srt_end - 1].end_time if scene_srt_end <= len(srt_entries) else "",
+                        "duration": seg_duration / image_count,
+                        "srt_text": " ".join([srt_entries[j-1].text for j in range(scene_srt_start, min(scene_srt_end + 1, len(srt_entries) + 1))]),
+                        "visual_moment": f"[Auto] {seg_name} - Part {i+1}/{image_count}",
+                        "characters_used": "",
+                        "location_used": "",
+                        "camera": "Medium shot",
+                        "lighting": "Natural lighting"
+                    }
+                    all_scenes.append(fallback_scene)
+                    scene_id_counter += 1
+            else:
+                # Thêm scenes từ API
+                seg_scenes = data["scenes"]
+                self._log(f"     -> Got {len(seg_scenes)} scenes from API")
+
+                for scene in seg_scenes:
+                    scene["scene_id"] = scene_id_counter
+                    all_scenes.append(scene)
+                    scene_id_counter += 1
+
+            # Small delay between segments
+            if seg_idx < len(story_segments) - 1:
+                time.sleep(0.5)
+
+        # Kiểm tra có scenes không
+        if not all_scenes:
+            self._log("  ERROR: No scenes created!", "ERROR")
+            return StepResult("create_director_plan", StepStatus.FAILED, "No scenes created")
 
         # Save to Excel
         try:
-            workbook.save_director_plan(data["scenes"])
+            workbook.save_director_plan(all_scenes)
             workbook.save()
-            self._log(f"  -> Saved {len(data['scenes'])} scenes to director_plan")
-            self._log(f"     Total duration: {sum(s.get('duration', 0) for s in data['scenes']):.1f}s")
+            self._log(f"  -> Saved {len(all_scenes)} scenes to director_plan")
+            self._log(f"     Total duration: {sum(s.get('duration', 0) for s in all_scenes):.1f}s")
 
-            return StepResult("create_director_plan", StepStatus.COMPLETED, "Success", data)
+            # TRACKING: Cập nhật và kiểm tra coverage
+            coverage = workbook.update_srt_coverage_scenes(all_scenes)
+            self._log(f"\n  📊 SRT COVERAGE (sau Step 4):")
+            self._log(f"     Total SRT: {coverage['total_srt']}")
+            self._log(f"     Covered by scenes: {coverage['covered_by_scene']} ({coverage['coverage_percent']}%)")
+
+            total_duration = sum(s.get('duration', 0) for s in all_scenes)
+
+            # Determine status based on coverage
+            if coverage['uncovered'] > 0:
+                self._log(f"     ⚠️ UNCOVERED: {coverage['uncovered']} entries", "WARN")
+                uncovered_list = workbook.get_uncovered_srt_entries()
+                if uncovered_list:
+                    self._log(f"     Missing SRT: {[u['srt_index'] for u in uncovered_list[:10]]}...")
+                status = "PARTIAL" if coverage['coverage_percent'] >= 80 else "ERROR"
+                workbook.update_step_status("step_4", status,
+                    coverage['total_srt'], coverage['covered_by_scene'],
+                    f"{len(all_scenes)} scenes, {total_duration:.0f}s, {coverage['uncovered']} SRT uncovered")
+            else:
+                workbook.update_step_status("step_4", "COMPLETED",
+                    coverage['total_srt'], coverage['covered_by_scene'],
+                    f"{len(all_scenes)} scenes, {total_duration:.0f}s total")
+
+            return StepResult("create_director_plan", StepStatus.COMPLETED, "Success", {"scenes": all_scenes})
         except Exception as e:
             self._log(f"  ERROR: Could not save to Excel: {e}", "ERROR")
+            workbook.update_step_status("step_4", "ERROR", 0, 0, str(e)[:100])
             return StepResult("create_director_plan", StepStatus.FAILED, str(e))
+
+    def _step_create_director_plan_legacy(
+        self,
+        project_dir: Path,
+        code: str,
+        workbook: PromptWorkbook,
+        srt_entries: list
+    ) -> StepResult:
+        """
+        Legacy fallback: Xử lý SRT theo character-batch khi không có segments.
+        Chỉ dùng khi Step 1.5 chưa chạy.
+        """
+        self._log("  Using legacy character-batch mode...")
+
+        story_analysis = workbook.get_story_analysis() or {}
+        characters = workbook.get_characters()
+        locations = workbook.get_locations()
+        context_lock = story_analysis.get("context_lock", "")
+
+        char_locks = [f"- {c.id}: {c.character_lock}" for c in characters if c.character_lock]
+        loc_locks = [f"- {loc.id}: {loc.location_lock}" for loc in locations if hasattr(loc, 'location_lock') and loc.location_lock]
+
+        # Chia SRT entries thành batches ~6000 chars
+        MAX_BATCH_CHARS = 6000
+        batches = []
+        current_batch = []
+        current_chars = 0
+
+        for i, entry in enumerate(srt_entries):
+            entry_text = f"[{i+1}] {entry.start_time} --> {entry.end_time}\n{entry.text}\n\n"
+            entry_len = len(entry_text)
+
+            if current_chars + entry_len > MAX_BATCH_CHARS and current_batch:
+                batches.append(current_batch)
+                current_batch = []
+                current_chars = 0
+
+            current_batch.append((i, entry))
+            current_chars += entry_len
+
+        if current_batch:
+            batches.append(current_batch)
+
+        all_scenes = []
+        scene_id_counter = 1
+
+        for batch_idx, batch_entries in enumerate(batches):
+            batch_start = batch_entries[0][0]
+            batch_end = batch_entries[-1][0]
+
+            srt_text = ""
+            for idx, entry in batch_entries:
+                srt_text += f"[{idx+1}] {entry.start_time} --> {entry.end_time}\n{entry.text}\n\n"
+
+            prompt = f"""Create cinematic shots for this content.
+
+CONTEXT: {context_lock}
+
+CHARACTERS:
+{chr(10).join(char_locks[:5]) if char_locks else 'Generic'}
+
+LOCATIONS:
+{chr(10).join(loc_locks[:3]) if loc_locks else 'Generic'}
+
+SRT (entries {batch_start+1}-{batch_end+1}):
+{srt_text}
+
+Create scenes (~8s each). Return JSON:
+{{"scenes": [{{"scene_id": {scene_id_counter}, "srt_indices": [], "srt_start": "", "srt_end": "", "duration": 8, "srt_text": "", "visual_moment": "", "characters_used": "", "location_used": "", "camera": "", "lighting": ""}}]}}
+"""
+
+            response = self._call_api(prompt, temperature=0.5, max_tokens=4096)
+            data = self._extract_json(response) if response else None
+
+            if data and "scenes" in data:
+                for scene in data["scenes"]:
+                    scene["scene_id"] = scene_id_counter
+                    all_scenes.append(scene)
+                    scene_id_counter += 1
+
+        if not all_scenes:
+            return StepResult("create_director_plan", StepStatus.FAILED, "No scenes created")
+
+        workbook.save_director_plan(all_scenes)
+        workbook.save()
+        return StepResult("create_director_plan", StepStatus.COMPLETED, "Success (legacy)", {"scenes": all_scenes})
+
+    # =========================================================================
+    # STEP 4 BASIC: TẠO DIRECTOR'S PLAN (SEGMENT-BASED, NO 8s LIMIT)
+    # =========================================================================
+
+    def step_create_director_plan_basic(
+        self,
+        project_dir: Path,
+        code: str,
+        workbook: PromptWorkbook,
+        srt_entries: list,
+    ) -> StepResult:
+        """
+        Step 4 BASIC: Tạo director's plan dựa trên story segments.
+
+        Khác với phiên bản thường:
+        - KHÔNG giới hạn 8s
+        - Số scenes = tổng image_count từ tất cả segments
+        - Duration = segment_duration / image_count
+        - Dựa hoàn toàn vào kế hoạch từ Step 1.5
+
+        Input: story_segments, characters, locations, SRT
+        Output: director_plan với số scenes = planned images
+        """
+        self._log("\n" + "="*60)
+        self._log("[STEP 4 BASIC] Creating director's plan (segment-based)...")
+        self._log("="*60)
+
+        # Check if already done
+        try:
+            existing_plan = workbook.get_director_plan()
+            if existing_plan and len(existing_plan) > 0:
+                self._log(f"  -> Already has {len(existing_plan)} scenes, skip!")
+                return StepResult("create_director_plan_basic", StepStatus.COMPLETED, "Already done")
+        except:
+            pass
+
+        # Read story segments (REQUIRED for basic mode)
+        story_segments = workbook.get_story_segments() or []
+        if not story_segments:
+            self._log("  ERROR: No story segments! Run step 1.5 first.", "ERROR")
+            return StepResult("create_director_plan_basic", StepStatus.FAILED, "No story segments")
+
+        total_planned_images = sum(s.get("image_count", 0) for s in story_segments)
+        self._log(f"  Story segments: {len(story_segments)} segments, {total_planned_images} planned images")
+
+        # Read context
+        story_analysis = workbook.get_story_analysis() or {}
+        characters = workbook.get_characters()
+        locations = workbook.get_locations()
+
+        context_lock = story_analysis.get("context_lock", "")
+
+        # Build character/location info
+        char_locks = []
+        for c in characters:
+            if c.character_lock:
+                char_locks.append(f"- {c.id}: {c.character_lock}")
+
+        loc_locks = []
+        for loc in locations:
+            if hasattr(loc, 'location_lock') and loc.location_lock:
+                loc_locks.append(f"- {loc.id}: {loc.location_lock}")
+
+        # Process each segment
+        all_scenes = []
+        scene_id_counter = 1
+
+        for seg in story_segments:
+            seg_id = seg.get("segment_id", 0)
+            seg_name = seg.get("segment_name", "")
+            image_count = seg.get("image_count", 1)
+            srt_start = seg.get("srt_range_start", 1)
+            srt_end = seg.get("srt_range_end", len(srt_entries))
+            message = seg.get("message", "")
+
+            self._log(f"  Segment {seg_id}: {seg_name} ({image_count} images, SRT {srt_start}-{srt_end})")
+
+            # Get SRT entries for this segment
+            seg_entries = [e for i, e in enumerate(srt_entries, 1) if srt_start <= i <= srt_end]
+
+            if not seg_entries:
+                self._log(f"     -> No SRT entries for this segment, skip")
+                continue
+
+            # Calculate segment duration
+            try:
+                first_entry = seg_entries[0]
+                last_entry = seg_entries[-1]
+
+                # Parse timestamps
+                def parse_time(ts):
+                    parts = ts.replace(',', ':').split(':')
+                    return int(parts[0])*3600 + int(parts[1])*60 + int(parts[2]) + int(parts[3])/1000
+
+                seg_start_time = parse_time(first_entry.start_time)
+                seg_end_time = parse_time(last_entry.end_time)
+                seg_duration = seg_end_time - seg_start_time
+            except:
+                seg_duration = len(seg_entries) * 5  # Fallback: 5s per entry
+
+            # SEGMENT 1 SPECIAL: Tuân thủ 8s limit như bản worker_pic
+            # Các segment khác: dùng image_count từ Step 1.5
+            if seg_id == 1:
+                # Segment 1: tính số scenes theo 8s limit
+                original_image_count = image_count
+                image_count = max(1, int(seg_duration / 8) + 1)  # Target ~8s per scene
+                self._log(f"     -> Segment 1 special: {original_image_count} planned -> {image_count} scenes (8s limit)")
+
+            # Calculate duration per scene
+            scene_duration = seg_duration / image_count if image_count > 0 else seg_duration
+
+            # Distribute SRT entries among scenes
+            entries_per_scene = len(seg_entries) / image_count if image_count > 0 else len(seg_entries)
+
+            # Build SRT text for API prompt
+            srt_text = ""
+            for i, entry in enumerate(seg_entries):
+                idx = srt_start + i
+                srt_text += f"[{idx}] {entry.start_time} --> {entry.end_time}\n{entry.text}\n\n"
+
+            # Call API to create scenes for this segment
+            prompt = f"""You are a FILM DIRECTOR. Create exactly {image_count} cinematic shots for this story segment.
+
+SEGMENT INFO:
+- Name: "{seg_name}"
+- Message: "{message}"
+- Duration: {seg_duration:.1f} seconds total
+- Required: EXACTLY {image_count} scenes (each ~{scene_duration:.1f}s)
+
+STORY CONTEXT:
+{context_lock}
+
+CHARACTERS:
+{chr(10).join(char_locks) if char_locks else 'No characters defined'}
+
+LOCATIONS:
+{chr(10).join(loc_locks) if loc_locks else 'No locations defined'}
+
+SRT CONTENT FOR THIS SEGMENT:
+{srt_text}
+
+INSTRUCTIONS:
+1. Create EXACTLY {image_count} scenes - no more, no less
+2. Each scene should be ~{scene_duration:.1f} seconds
+3. Distribute the SRT content evenly across all {image_count} scenes
+4. Each scene = one cinematic shot that supports the narration
+5. Use EXACT character/location IDs from the lists above
+6. Think like a film director - what shot best conveys each moment?
+
+Return JSON only:
+{{
+    "scenes": [
+        {{
+            "scene_id": {scene_id_counter},
+            "srt_indices": [list of SRT indices covered],
+            "srt_start": "timestamp",
+            "srt_end": "timestamp",
+            "duration": {scene_duration:.1f},
+            "srt_text": "narration text for this scene",
+            "visual_moment": "what viewer sees - specific and purposeful",
+            "characters_used": "nv_xxx, nv_yyy",
+            "location_used": "loc_xxx",
+            "camera": "shot type (close-up, wide, medium, etc.)",
+            "lighting": "lighting description"
+        }}
+    ]
+}}
+Create exactly {image_count} scenes!"""
+
+            # Call API with retry logic
+            MAX_RETRIES = 3
+            data = None
+
+            for retry in range(MAX_RETRIES):
+                response = self._call_api(prompt, temperature=0.5, max_tokens=8192)
+                if not response:
+                    self._log(f"     Retry {retry+1}/{MAX_RETRIES}: API call failed", "WARNING")
+                    time.sleep(2 ** retry)
+                    continue
+
+                data = self._extract_json(response)
+                if data and "scenes" in data:
+                    break  # Success!
+                else:
+                    self._log(f"     Retry {retry+1}/{MAX_RETRIES}: JSON parse failed", "WARNING")
+                    time.sleep(2 ** retry)
+
+            # If all retries failed, create fallback scenes
+            if not data or "scenes" not in data:
+                self._log(f"     -> All retries failed, creating {image_count} fallback scenes", "WARNING")
+                for i in range(image_count):
+                    start_idx = int(i * entries_per_scene)
+                    end_idx = min(int((i + 1) * entries_per_scene), len(seg_entries))
+                    scene_entries = seg_entries[start_idx:end_idx] if seg_entries else []
+
+                    fallback_scene = {
+                        "scene_id": scene_id_counter,
+                        "srt_indices": list(range(srt_start + start_idx, srt_start + end_idx)),
+                        "srt_start": scene_entries[0].start_time if scene_entries else "",
+                        "srt_end": scene_entries[-1].end_time if scene_entries else "",
+                        "duration": scene_duration,
+                        "srt_text": " ".join([e.text for e in scene_entries]) if scene_entries else "",
+                        "visual_moment": f"[Auto] Scene {i+1}/{image_count} from: {seg_name}",
+                        "characters_used": "",
+                        "location_used": "",
+                        "camera": "Medium shot",
+                        "lighting": "Natural lighting"
+                    }
+                    all_scenes.append(fallback_scene)
+                    scene_id_counter += 1
+                continue
+
+            # Add scenes from API response
+            api_scenes = data["scenes"]
+            self._log(f"     -> Got {len(api_scenes)} scenes from API")
+
+            # Ensure correct scene count
+            if len(api_scenes) != image_count:
+                self._log(f"     -> Warning: Expected {image_count}, got {len(api_scenes)}")
+
+            # Update scene IDs to be continuous
+            for scene in api_scenes:
+                scene["scene_id"] = scene_id_counter
+                all_scenes.append(scene)
+                scene_id_counter += 1
+
+            # Delay between segments
+            time.sleep(0.5)
+
+        # Verify total scene count
+        if len(all_scenes) != total_planned_images:
+            self._log(f"  Note: Created {len(all_scenes)} scenes (planned: {total_planned_images})")
+
+        if not all_scenes:
+            self._log("  ERROR: No scenes created!", "ERROR")
+            return StepResult("create_director_plan_basic", StepStatus.FAILED, "No scenes created")
+
+        # Save to Excel
+        try:
+            workbook.save_director_plan(all_scenes)
+            workbook.save()
+            self._log(f"  -> Saved {len(all_scenes)} scenes to director_plan")
+            self._log(f"     Total duration: {sum(s.get('duration', 0) for s in all_scenes):.1f}s")
+
+            # TRACKING: Cập nhật và kiểm tra coverage
+            coverage = workbook.update_srt_coverage_scenes(all_scenes)
+            self._log(f"\n  📊 SRT COVERAGE (sau Step 4 BASIC):")
+            self._log(f"     Total SRT: {coverage['total_srt']}")
+            self._log(f"     Covered by scenes: {coverage['covered_by_scene']} ({coverage['coverage_percent']}%)")
+            if coverage['uncovered'] > 0:
+                self._log(f"     ⚠️ UNCOVERED: {coverage['uncovered']} entries", "WARN")
+                uncovered_list = workbook.get_uncovered_srt_entries()
+                if uncovered_list:
+                    self._log(f"     Missing SRT: {[u['srt_index'] for u in uncovered_list[:10]]}...")
+
+            return StepResult("create_director_plan_basic", StepStatus.COMPLETED, "Success", {"scenes": all_scenes})
+        except Exception as e:
+            self._log(f"  ERROR: Could not save to Excel: {e}", "ERROR")
+            return StepResult("create_director_plan_basic", StepStatus.FAILED, str(e))
+
+    # =========================================================================
+    # STEP 4.5: LÊN KẾ HOẠCH CHI TIẾT TỪNG SCENE
+    # =========================================================================
+
+    def step_plan_scenes(
+        self,
+        project_dir: Path,
+        code: str,
+        workbook: PromptWorkbook,
+    ) -> StepResult:
+        """
+        Step 4.5: Lên kế hoạch chi tiết cho từng scene TRƯỚC KHI viết prompt.
+
+        Mục đích: Xác định ý đồ nghệ thuật cho mỗi scene
+        - Scene này muốn truyền tải gì?
+        - Góc máy nên thế nào?
+        - Nhân vật đang làm gì, cảm xúc ra sao?
+        - Ánh sáng, màu sắc, mood?
+
+        Input: director_plan, story_segments, characters, locations
+        Output: scene_planning sheet
+        """
+        self._log("\n" + "="*60)
+        self._log("[STEP 4.5] Lên kế hoạch chi tiết từng scene...")
+        self._log("="*60)
+
+        # Check if already done
+        try:
+            existing = workbook.get_scene_planning()
+            if existing and len(existing) > 0:
+                self._log(f"  -> Đã có {len(existing)} scene plans, skip!")
+                return StepResult("plan_scenes", StepStatus.COMPLETED, "Already done")
+        except:
+            pass
+
+        # Read director plan
+        director_plan = workbook.get_director_plan()
+        if not director_plan:
+            self._log("  ERROR: No director plan! Run step 4 first.", "ERROR")
+            return StepResult("plan_scenes", StepStatus.FAILED, "No director plan")
+
+        # Read context
+        story_analysis = workbook.get_story_analysis() or {}
+        story_segments = workbook.get_story_segments() or []
+        characters = workbook.get_characters()
+        locations = workbook.get_locations()
+
+        context_lock = story_analysis.get("context_lock", "")
+
+        # Build character info
+        char_info = "\n".join([f"- {c.id}: {c.character_lock}" for c in characters if c.character_lock])
+        loc_info = "\n".join([f"- {loc.id}: {loc.location_lock}" for loc in locations if hasattr(loc, 'location_lock') and loc.location_lock])
+
+        # Build segments info
+        segments_info = ""
+        for seg in story_segments:
+            segments_info += f"- Segment {seg.get('segment_id')}: {seg.get('segment_name')} ({seg.get('message', '')[:100]})\n"
+
+        self._log(f"  Director plan: {len(director_plan)} scenes")
+        self._log(f"  Story segments: {len(story_segments)}")
+
+        # Process in batches - PARALLEL processing
+        BATCH_SIZE = 15
+        MAX_PARALLEL = self.config.get("max_parallel_api", 6)  # From settings.yaml
+        all_plans = []
+
+        # Prepare all batches
+        batches = []
+        for batch_start in range(0, len(director_plan), BATCH_SIZE):
+            batch = director_plan[batch_start:batch_start + BATCH_SIZE]
+            batch_num = batch_start // BATCH_SIZE + 1
+            batches.append((batch_num, batch_start, batch))
+
+        total_batches = len(batches)
+        self._log(f"  Processing {total_batches} batches in parallel (max {MAX_PARALLEL} concurrent)")
+
+        def process_single_batch(batch_info):
+            """Process a single batch - called in parallel"""
+            batch_num, batch_start, batch = batch_info
+
+            # Format scenes for prompt
+            scenes_text = ""
+            for scene in batch:
+                scenes_text += f"""
+Scene {scene.get('scene_id')}:
+- Time: {scene.get('srt_start')} → {scene.get('srt_end')} ({scene.get('duration', 0):.1f}s)
+- Text: {scene.get('srt_text', '')[:200]}
+- Visual moment: {scene.get('visual_moment', '')}
+- Characters: {scene.get('characters_used', '')}
+- Location: {scene.get('location_used', '')}
+"""
+
+            prompt = f"""You are a film director planning each scene's artistic vision.
+
+STORY CONTEXT:
+{context_lock}
+
+STORY SEGMENTS (narrative structure):
+{segments_info if segments_info else 'Not specified'}
+
+CHARACTERS:
+{char_info if char_info else 'Not specified'}
+
+LOCATIONS:
+{loc_info if loc_info else 'Not specified'}
+
+SCENES TO PLAN:
+{scenes_text}
+
+For EACH scene, create an artistic plan that includes:
+1. artistic_intent: What emotion/message should this scene convey?
+2. shot_type: Camera angle and framing (close-up, medium, wide, etc.)
+3. character_action: What are characters doing? Their body language, expression?
+4. mood: Overall feeling (tense, warm, melancholic, hopeful, etc.)
+5. lighting: Type of lighting (soft, harsh, dramatic, natural, etc.)
+6. color_palette: Dominant colors for the scene
+7. key_focus: What should viewer's eye be drawn to?
+
+Return JSON only:
+{{
+    "scene_plans": [
+        {{
+            "scene_id": 1,
+            "artistic_intent": "Show the protagonist's isolation and loneliness",
+            "shot_type": "Wide shot, slowly pushing in",
+            "character_action": "Sitting alone, shoulders slumped, staring at window",
+            "mood": "Melancholic, contemplative",
+            "lighting": "Soft diffused light from window, shadows on face",
+            "color_palette": "Cool blues and grays, muted tones",
+            "key_focus": "Character's face and empty space around them"
+        }}
+    ]
+}}
+"""
+
+            # Call API with retry logic
+            MAX_RETRIES = 3
+            data = None
+
+            for retry in range(MAX_RETRIES):
+                response = self._call_api(prompt, temperature=0.4, max_tokens=8192)
+                if not response:
+                    time.sleep(2 ** retry)  # Exponential backoff
+                    continue
+
+                # Parse response
+                data = self._extract_json(response)
+                if data and "scene_plans" in data:
+                    break  # Success!
+                else:
+                    time.sleep(2 ** retry)
+
+            if not data or "scene_plans" not in data:
+                # Fallback: create basic plans for this batch
+                fallback_plans = []
+                for scene in batch:
+                    fallback_plan = {
+                        "scene_id": scene.get("scene_id"),
+                        "artistic_intent": f"Convey the moment: {scene.get('visual_moment', '')[:100]}",
+                        "shot_type": scene.get("camera", "Medium shot"),
+                        "character_action": "As described in visual moment",
+                        "mood": "Matches the narration tone",
+                        "lighting": scene.get("lighting", "Natural lighting"),
+                        "color_palette": "Neutral tones",
+                        "key_focus": "Main subject of the scene"
+                    }
+                    fallback_plans.append(fallback_plan)
+                return (batch_num, fallback_plans, True)  # True = fallback used
+
+            return (batch_num, data["scene_plans"], False)  # False = API success
+
+        # Execute batches in parallel
+        batch_results = {}
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL) as executor:
+            future_to_batch = {executor.submit(process_single_batch, b): b[0] for b in batches}
+
+            for future in as_completed(future_to_batch):
+                batch_num = future_to_batch[future]
+                try:
+                    result_batch_num, plans, used_fallback = future.result()
+                    batch_results[result_batch_num] = plans
+                    status = "fallback" if used_fallback else "OK"
+                    self._log(f"     Batch {result_batch_num}/{total_batches}: {len(plans)} plans [{status}]")
+                except Exception as e:
+                    self._log(f"     Batch {batch_num} error: {e}", "ERROR")
+                    batch_results[batch_num] = []
+
+        # Combine results in order
+        for batch_num in sorted(batch_results.keys()):
+            all_plans.extend(batch_results[batch_num])
+
+        if not all_plans:
+            self._log("  ERROR: No scene plans created!", "ERROR")
+            return StepResult("plan_scenes", StepStatus.FAILED, "No plans created")
+
+        # Save to Excel
+        try:
+            workbook.save_scene_planning(all_plans)
+            workbook.save()
+            self._log(f"  -> Saved {len(all_plans)} scene plans to Excel")
+            return StepResult("plan_scenes", StepStatus.COMPLETED, "Success", {"plans": all_plans})
+        except Exception as e:
+            self._log(f"  ERROR: Could not save: {e}", "ERROR")
+            return StepResult("plan_scenes", StepStatus.FAILED, str(e))
 
     # =========================================================================
     # STEP 5: TẠO SCENE PROMPTS (BATCH)
@@ -675,6 +1924,16 @@ Return JSON only:
         characters = workbook.get_characters()
         locations = workbook.get_locations()
 
+        # Đọc scene planning (kế hoạch chi tiết từ step 4.5)
+        scene_planning = {}
+        try:
+            plans = workbook.get_scene_planning() or []
+            for plan in plans:
+                scene_planning[plan.get("scene_id")] = plan
+            self._log(f"  Loaded {len(scene_planning)} scene plans from step 4.5")
+        except:
+            pass
+
         context_lock = story_analysis.get("context_lock", "")
 
         # Build character/location lookup - bao gồm cả image_file cho reference
@@ -696,19 +1955,27 @@ Return JSON only:
             img_file = loc.image_file if hasattr(loc, 'image_file') and loc.image_file else f"{loc.id}.png"
             loc_image_lookup[loc.id] = img_file
 
-        # Process in batches
+        # Process in batches - PARALLEL API calls
         total_created = 0
+        MAX_PARALLEL = self.config.get("max_parallel_api", 6)  # From settings.yaml
 
+        # Prepare all batches
+        all_batches = []
         for batch_start in range(0, len(pending_scenes), batch_size):
             batch = pending_scenes[batch_start:batch_start + batch_size]
             batch_num = batch_start // batch_size + 1
+            all_batches.append((batch_num, batch))
 
-            self._log(f"\n  [Batch {batch_num}] Processing {len(batch)} scenes...")
+        total_batches = len(all_batches)
+        self._log(f"  Processing {total_batches} batches in parallel (max {MAX_PARALLEL} concurrent)")
 
-            # Build batch prompt
+        def process_single_batch(batch_info):
+            """Process a single batch - called in parallel"""
+            batch_num, batch = batch_info
+
+            # Build scenes text for prompt
             scenes_text = ""
             for scene in batch:
-                # Get character/location locks VÀ image files
                 char_ids = [cid.strip() for cid in scene.get("characters_used", "").split(",") if cid.strip()]
                 char_desc_parts = []
                 char_refs = []
@@ -725,8 +1992,22 @@ Return JSON only:
                 if loc_desc and loc_img:
                     loc_desc = f"{loc_desc} ({loc_img})"
 
+                scene_id = scene.get('scene_id')
+                plan = scene_planning.get(scene_id, {})
+                plan_info = ""
+                if plan:
+                    plan_info = f"""
+- [ARTISTIC PLAN from Step 4.5]:
+  * Intent: {plan.get('artistic_intent', '')}
+  * Shot type: {plan.get('shot_type', '')}
+  * Action: {plan.get('character_action', '')}
+  * Mood: {plan.get('mood', '')}
+  * Lighting: {plan.get('lighting', '')}
+  * Colors: {plan.get('color_palette', '')}
+  * Focus: {plan.get('key_focus', '')}"""
+
                 scenes_text += f"""
-Scene {scene.get('scene_id')}:
+Scene {scene_id}:
 - Time: {scene.get('srt_start')} --> {scene.get('srt_end')}
 - Text: {scene.get('srt_text', '')}
 - Visual moment: {scene.get('visual_moment', '')}
@@ -735,93 +2016,121 @@ Scene {scene.get('scene_id')}:
 - Camera: {scene.get('camera', '')}
 - Lighting: {scene.get('lighting', '')}
 - Reference files: {', '.join(char_refs + ([loc_img] if loc_img else []))}
+{plan_info}
 """
 
-            prompt = f"""Create detailed image prompts for these scenes.
+            prompt = f"""Create detailed image prompts for these {len(batch)} scenes.
 
 VISUAL CONTEXT (use as prefix):
 {context_lock}
 
 IMPORTANT - REFERENCE FILE ANNOTATIONS:
-- Each character MUST have their reference file in parentheses: "a man (nvc.png)"
-- Location MUST have reference file: "in the room (loc_room.png)"
-- Format: "Description of person (filename.png) doing action in location (loc_filename.png)"
+- Each character MUST have their reference file in parentheses: "a man (nv_john.png)"
+- Location MUST have reference file: "in the room (loc_office.png)"
+- Format: "Description of person (nv_xxx.png) doing action in location (loc_xxx.png)"
+- Character files always start with "nv_", location files always start with "loc_"
 
-SCENES TO PROCESS:
+SCENES TO PROCESS ({len(batch)} scenes - create EXACTLY {len(batch)} prompts):
 {scenes_text}
 
+CRITICAL REQUIREMENTS:
+1. Create EXACTLY {len(batch)} scene prompts - one for EACH scene listed above
+2. Each img_prompt MUST be UNIQUE - do NOT copy/repeat prompts between scenes
+3. Each prompt should reflect the specific visual_moment and text of that scene
+4. Use the exact scene_id from the input
+
 For each scene, create:
-1. img_prompt: Detailed image generation prompt with REFERENCE ANNOTATIONS for each character and location
+1. img_prompt: UNIQUE detailed image generation prompt with REFERENCE ANNOTATIONS
 2. video_prompt: Motion/video prompt if this becomes a video clip
 
 Example img_prompt:
-"Close-up shot, 85mm lens, a 35-year-old man with tired eyes (nvc.png) sitting at a desk, looking worried, soft window light, in a modern office (loc_office.png), cinematic, 4K"
+"Close-up shot, 85mm lens, a 35-year-old man with tired eyes (nv_john.png) sitting at a desk, looking worried, soft window light, in a modern office (loc_office.png), cinematic, 4K"
 
-Return JSON only:
+Return JSON only with EXACTLY {len(batch)} scenes:
 {{
     "scenes": [
         {{
             "scene_id": 1,
-            "img_prompt": "detailed prompt with (character.png) and (location.png) annotations...",
+            "img_prompt": "UNIQUE detailed prompt with (character.png) and (location.png) annotations...",
             "video_prompt": "camera movement and action description..."
         }}
     ]
 }}
 """
 
-            # Call API
-            response = self._call_api(prompt, temperature=0.7, max_tokens=8192)
-            if not response:
-                self._log(f"  ERROR: API call failed for batch {batch_num}!", "ERROR")
+            # Call API with retry
+            MAX_RETRIES = 3
+            for retry in range(MAX_RETRIES):
+                response = self._call_api(prompt, temperature=0.5, max_tokens=8192)
+                if response:
+                    data = self._extract_json(response)
+                    if data and "scenes" in data:
+                        return (batch_num, batch, data["scenes"], None)  # Success
+                time.sleep(2 ** retry)
+
+            return (batch_num, batch, None, "API failed")  # Failed
+
+        # Execute batches in parallel
+        batch_results = {}
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL) as executor:
+            future_to_batch = {executor.submit(process_single_batch, b): b[0] for b in all_batches}
+
+            for future in as_completed(future_to_batch):
+                batch_num = future_to_batch[future]
+                try:
+                    result = future.result()
+                    batch_results[result[0]] = result  # Store by batch_num
+                    status = "OK" if result[2] else "FAILED"
+                    self._log(f"     Batch {result[0]}/{total_batches}: [{status}]")
+                except Exception as e:
+                    self._log(f"     Batch {batch_num} error: {e}", "ERROR")
+
+        # Process and save results sequentially (Excel not thread-safe)
+        for batch_num in sorted(batch_results.keys()):
+            _, batch, api_scenes, error = batch_results[batch_num]
+
+            if not api_scenes:
+                self._log(f"  Batch {batch_num}: skipped ({error})", "WARNING")
                 continue
 
-            # Parse response
-            data = self._extract_json(response)
-            if not data or "scenes" not in data:
-                self._log(f"  ERROR: Could not parse batch {batch_num}!", "ERROR")
+            # Validate
+            if len(api_scenes) != len(batch):
+                self._log(f"  ⚠️ Batch {batch_num}: API returned {len(api_scenes)}, expected {len(batch)}", "WARN")
+
+            # Check duplicates
+            seen_prompts = set()
+            duplicate_count = sum(1 for s in api_scenes if (p := s.get("img_prompt", "")[:100]) in seen_prompts or seen_prompts.add(p))
+            if duplicate_count > len(api_scenes) * 0.5:
+                self._log(f"  Batch {batch_num}: >50% duplicates, skipped!", "ERROR")
                 continue
 
-            # Save scenes to Excel
+            # Save scenes
             try:
-                for scene_data in data["scenes"]:
-                    scene_id = scene_data.get("scene_id")
-
-                    # Find original scene from director plan
-                    original = next((s for s in batch if s.get("scene_id") == scene_id), None)
+                for scene_data in api_scenes:
+                    scene_id = int(scene_data.get("scene_id", 0))
+                    original = next((s for s in batch if int(s.get("scene_id", 0)) == scene_id), None)
                     if not original:
                         continue
 
-                    # Lấy img_prompt từ AI
                     img_prompt = scene_data.get("img_prompt", "")
 
-                    # POST-PROCESS: Đảm bảo có reference annotations
+                    # Post-process: ensure reference annotations
                     char_ids = [cid.strip() for cid in original.get("characters_used", "").split(",") if cid.strip()]
                     loc_id = original.get("location_used", "")
 
-                    # Kiểm tra và thêm character references nếu thiếu
                     for cid in char_ids:
                         img_file = char_image_lookup.get(cid, f"{cid}.png")
                         if img_file and f"({img_file})" not in img_prompt:
-                            # Thêm reference vào cuối prompt
                             img_prompt = img_prompt.rstrip(". ") + f" ({img_file})."
 
-                    # Kiểm tra và thêm location reference nếu thiếu
                     if loc_id:
                         loc_img = loc_image_lookup.get(loc_id, f"{loc_id}.png")
                         if loc_img and f"({loc_img})" not in img_prompt:
-                            # Thêm reference vào cuối prompt
                             img_prompt = img_prompt.rstrip(". ") + f" (reference: {loc_img})."
 
-                    # Build reference_files list
-                    ref_files = []
-                    for cid in char_ids:
-                        img_file = char_image_lookup.get(cid, f"{cid}.png")
-                        if img_file and img_file not in ref_files:
-                            ref_files.append(img_file)
+                    ref_files = [char_image_lookup.get(cid, f"{cid}.png") for cid in char_ids]
                     if loc_id:
-                        loc_img = loc_image_lookup.get(loc_id, f"{loc_id}.png")
-                        if loc_img and loc_img not in ref_files:
-                            ref_files.append(loc_img)
+                        ref_files.append(loc_image_lookup.get(loc_id, f"{loc_id}.png"))
 
                     scene = Scene(
                         scene_id=scene_id,
@@ -841,11 +2150,8 @@ Return JSON only:
                     total_created += 1
 
                 workbook.save()
-                self._log(f"  -> Saved batch {batch_num} ({len(data['scenes'])} scenes)")
-
             except Exception as e:
-                self._log(f"  ERROR: Could not save batch {batch_num}: {e}", "ERROR")
-                continue
+                self._log(f"  Batch {batch_num} save error: {e}", "ERROR")
 
         self._log(f"\n  -> Total: Created {total_created} scene prompts")
 
@@ -917,6 +2223,12 @@ Return JSON only:
             self._log("Step 1 FAILED! Stopping.", "ERROR")
             return False
 
+        # Step 1.5: Analyze story segments (nội dung con)
+        result = self.step_analyze_story_segments(project_dir, code, workbook, srt_entries, txt_content)
+        if result.status == StepStatus.FAILED:
+            self._log("Step 1.5 FAILED! Stopping.", "ERROR")
+            return False
+
         # Step 2: Create characters
         result = self.step_create_characters(project_dir, code, workbook, srt_entries, txt_content)
         if result.status == StepStatus.FAILED:
@@ -929,13 +2241,19 @@ Return JSON only:
             self._log("Step 3 FAILED! Stopping.", "ERROR")
             return False
 
-        # Step 4: Create director plan
+        # Step 4: Create director plan (sử dụng segments để guide số lượng scenes)
         result = self.step_create_director_plan(project_dir, code, workbook, srt_entries)
         if result.status == StepStatus.FAILED:
             self._log("Step 4 FAILED! Stopping.", "ERROR")
             return False
 
-        # Step 5: Create scene prompts
+        # Step 4.5: Lên kế hoạch chi tiết từng scene (artistic planning)
+        result = self.step_plan_scenes(project_dir, code, workbook)
+        if result.status == StepStatus.FAILED:
+            self._log("Step 4.5 FAILED! Stopping.", "ERROR")
+            return False
+
+        # Step 5: Create scene prompts (đọc từ scene planning)
         result = self.step_create_scene_prompts(project_dir, code, workbook)
         if result.status == StepStatus.FAILED:
             self._log("Step 5 FAILED!", "ERROR")

@@ -27,8 +27,10 @@ CHARACTERS_COLUMNS = [
     "name",             # Tên nhân vật trong truyện
     "english_prompt",   # Prompt tiếng Anh mô tả ngoại hình
     "vietnamese_prompt", # Prompt tiếng Việt (nếu cần)
+    "character_lock",   # Mô tả cố định nhân vật (dùng cho scene prompts)
     "image_file",       # Tên file ảnh tham chiếu (nvc.png, nvp1.png, ...)
-    "status",           # Trạng thái (pending/done/error)
+    "status",           # Trạng thái (pending/done/skip/error) - skip = trẻ em, không tạo ảnh
+    "is_child",         # True nếu là trẻ vị thành niên (bỏ qua tạo ảnh)
     "media_id",         # Media ID từ Google Flow API (dùng cho reference)
 ]
 
@@ -356,10 +358,25 @@ class PromptWorkbook:
     SCENES_SHEET = "scenes"
     DIRECTOR_PLAN_SHEET = "director_plan"
     STORY_ANALYSIS_SHEET = "story_analysis"
+    STORY_SEGMENTS_SHEET = "story_segments"  # Nội dung con của câu chuyện
+    SCENE_PLANNING_SHEET = "scene_planning"  # Kế hoạch chi tiết từng scene
     LOCATIONS_SHEET = "locations"
     BACKUP_CHARACTERS_SHEET = "backup_characters"
     BACKUP_LOCATIONS_SHEET = "backup_locations"
-    
+    SRT_COVERAGE_SHEET = "srt_coverage"  # Đối chiếu SRT entries với segments/scenes
+    PROCESSING_STATUS_SHEET = "processing_status"  # Trạng thái xử lý từng step
+
+    # Step definitions for tracking
+    STEPS = [
+        ("step_1", "Story Analysis", "Phân tích tổng quan câu chuyện"),
+        ("step_1.5", "Story Segments", "Chia câu chuyện thành segments"),
+        ("step_2", "Characters", "Tạo danh sách nhân vật"),
+        ("step_3", "Locations", "Tạo danh sách bối cảnh"),
+        ("step_4", "Director Plan", "Tạo kế hoạch đạo diễn"),
+        ("step_4.5", "Scene Planning", "Lên ý đồ nghệ thuật"),
+        ("step_5", "Scene Prompts", "Tạo prompts cho từng scene"),
+    ]
+
     def __init__(self, path: Union[str, Path]):
         """
         Khởi tạo PromptWorkbook.
@@ -816,7 +833,9 @@ class PromptWorkbook:
         # Thêm scenes
         for scene in scenes_data:
             next_row = ws.max_row + 1
-            ws.cell(row=next_row, column=1, value=scene.get("scene_id", 0))
+            # Đảm bảo scene_id là integer, không phải float (1.0 -> 1)
+            scene_id = scene.get("scene_id", 0)
+            ws.cell(row=next_row, column=1, value=int(scene_id) if scene_id else 0)
             ws.cell(row=next_row, column=2, value=scene.get("srt_start", ""))
             ws.cell(row=next_row, column=3, value=scene.get("srt_end", ""))
             # Duration: handle cả "duration" và "duration_seconds" (3-8s từ SRT timing)
@@ -862,6 +881,7 @@ class PromptWorkbook:
             # Handle both old format (6 cols) and new format (10 cols)
             plans.append({
                 "plan_id": row[0],
+                "scene_id": row[0],  # Alias cho plan_id (step 5 dùng scene_id)
                 "srt_start": row[1] or "",
                 "srt_end": row[2] or "",
                 "duration": row[3] or 0,
@@ -990,6 +1010,199 @@ class PromptWorkbook:
 
         return data
 
+    # ========== STORY SEGMENTS SHEET ==========
+
+    def _ensure_story_segments_sheet(self) -> None:
+        """Đảm bảo sheet story_segments tồn tại."""
+        if self.workbook is None:
+            self.load_or_create()
+
+        if self.STORY_SEGMENTS_SHEET not in self.workbook.sheetnames:
+            self._create_story_segments_sheet()
+            self.save()
+
+    def _create_story_segments_sheet(self) -> None:
+        """Tạo sheet story_segments với header."""
+        ws = self.workbook.create_sheet(self.STORY_SEGMENTS_SHEET)
+
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="9932CC", end_color="9932CC", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center")
+
+        columns = [
+            "segment_id", "segment_name", "message", "key_elements",
+            "image_count", "estimated_duration", "srt_range_start",
+            "srt_range_end", "importance", "status"
+        ]
+        for col, column_name in enumerate(columns, start=1):
+            cell = ws.cell(row=1, column=col, value=column_name)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+
+    def save_story_segments(self, segments: list, total_images: int = 0, summary: str = "") -> None:
+        """
+        Lưu story segments vào Excel.
+
+        Args:
+            segments: List các segment dict
+            total_images: Tổng số ảnh cần tạo
+            summary: Tóm tắt cấu trúc câu chuyện
+        """
+        self._ensure_story_segments_sheet()
+        ws = self.workbook[self.STORY_SEGMENTS_SHEET]
+
+        # Xóa dữ liệu cũ (giữ header)
+        if ws.max_row > 1:
+            ws.delete_rows(2, ws.max_row)
+
+        # Thêm segments
+        for seg in segments:
+            next_row = ws.max_row + 1
+            ws.cell(row=next_row, column=1, value=int(seg.get("segment_id", 0)))
+            ws.cell(row=next_row, column=2, value=seg.get("segment_name", ""))
+            ws.cell(row=next_row, column=3, value=seg.get("message", "")[:500])
+
+            # key_elements - convert list to JSON string
+            key_elements = seg.get("key_elements", [])
+            if isinstance(key_elements, list):
+                key_elements = json.dumps(key_elements)
+            ws.cell(row=next_row, column=4, value=key_elements)
+
+            ws.cell(row=next_row, column=5, value=int(seg.get("image_count", 1)))
+            ws.cell(row=next_row, column=6, value=round(seg.get("estimated_duration", 0), 2))
+            ws.cell(row=next_row, column=7, value=int(seg.get("srt_range_start", 0)))
+            ws.cell(row=next_row, column=8, value=int(seg.get("srt_range_end", 0)))
+            ws.cell(row=next_row, column=9, value=seg.get("importance", "medium"))
+            ws.cell(row=next_row, column=10, value="pending")
+
+        self.logger.info(f"Saved {len(segments)} story segments (total {total_images} images)")
+
+    def get_story_segments(self) -> list:
+        """
+        Đọc story segments từ Excel.
+
+        Returns:
+            List các segment dict
+        """
+        self._ensure_story_segments_sheet()
+        ws = self.workbook[self.STORY_SEGMENTS_SHEET]
+
+        segments = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row[0] is None:
+                continue
+
+            seg = {
+                "segment_id": int(row[0]) if row[0] else 0,
+                "segment_name": row[1] or "",
+                "message": row[2] or "",
+                "key_elements": row[3] or "[]",
+                "image_count": int(row[4]) if row[4] else 1,
+                "estimated_duration": float(row[5]) if row[5] else 0,
+                "srt_range_start": int(row[6]) if row[6] else 0,
+                "srt_range_end": int(row[7]) if row[7] else 0,
+                "importance": row[8] or "medium",
+                "status": row[9] or "pending"
+            }
+
+            # Parse key_elements JSON
+            if isinstance(seg["key_elements"], str) and seg["key_elements"].startswith("["):
+                try:
+                    seg["key_elements"] = json.loads(seg["key_elements"])
+                except:
+                    pass
+
+            segments.append(seg)
+
+        return segments
+
+    # ========== SCENE PLANNING SHEET ==========
+
+    def _ensure_scene_planning_sheet(self) -> None:
+        """Đảm bảo sheet scene_planning tồn tại."""
+        if self.workbook is None:
+            self.load_or_create()
+
+        if self.SCENE_PLANNING_SHEET not in self.workbook.sheetnames:
+            self._create_scene_planning_sheet()
+            self.save()
+
+    def _create_scene_planning_sheet(self) -> None:
+        """Tạo sheet scene_planning với header."""
+        ws = self.workbook.create_sheet(self.SCENE_PLANNING_SHEET)
+
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="FF6347", end_color="FF6347", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center")
+
+        columns = [
+            "scene_id", "artistic_intent", "shot_type", "character_action",
+            "mood", "lighting", "color_palette", "key_focus"
+        ]
+        for col, column_name in enumerate(columns, start=1):
+            cell = ws.cell(row=1, column=col, value=column_name)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+
+    def save_scene_planning(self, plans: list) -> None:
+        """
+        Lưu scene planning vào Excel.
+
+        Args:
+            plans: List các plan dict từ API
+        """
+        self._ensure_scene_planning_sheet()
+        ws = self.workbook[self.SCENE_PLANNING_SHEET]
+
+        # Xóa dữ liệu cũ (giữ header)
+        if ws.max_row > 1:
+            ws.delete_rows(2, ws.max_row)
+
+        # Thêm plans
+        for plan in plans:
+            next_row = ws.max_row + 1
+            ws.cell(row=next_row, column=1, value=int(plan.get("scene_id", 0)))
+            ws.cell(row=next_row, column=2, value=plan.get("artistic_intent", "")[:500])
+            ws.cell(row=next_row, column=3, value=plan.get("shot_type", ""))
+            ws.cell(row=next_row, column=4, value=plan.get("character_action", "")[:500])
+            ws.cell(row=next_row, column=5, value=plan.get("mood", ""))
+            ws.cell(row=next_row, column=6, value=plan.get("lighting", ""))
+            ws.cell(row=next_row, column=7, value=plan.get("color_palette", ""))
+            ws.cell(row=next_row, column=8, value=plan.get("key_focus", "")[:300])
+
+        self.logger.info(f"Saved {len(plans)} scene plans")
+
+    def get_scene_planning(self) -> list:
+        """
+        Đọc scene planning từ Excel.
+
+        Returns:
+            List các plan dict
+        """
+        self._ensure_scene_planning_sheet()
+        ws = self.workbook[self.SCENE_PLANNING_SHEET]
+
+        plans = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row[0] is None:
+                continue
+
+            plan = {
+                "scene_id": int(row[0]) if row[0] else 0,
+                "artistic_intent": row[1] or "",
+                "shot_type": row[2] or "",
+                "character_action": row[3] or "",
+                "mood": row[4] or "",
+                "lighting": row[5] or "",
+                "color_palette": row[6] or "",
+                "key_focus": row[7] or "" if len(row) > 7 else ""
+            }
+            plans.append(plan)
+
+        return plans
+
     # ========== LOCATIONS SHEET ==========
 
     def _ensure_locations_sheet(self) -> None:
@@ -1041,28 +1254,27 @@ class PromptWorkbook:
 
     def get_locations(self) -> List["Location"]:
         """
-        Đọc tất cả locations từ sheet locations.
+        Đọc locations từ sheet characters (role="location" hoặc id bắt đầu bằng "loc_").
 
         Returns:
             List[Location]
         """
-        self._ensure_locations_sheet()
-        ws = self.workbook[self.LOCATIONS_SHEET]
+        # Đọc từ characters sheet thay vì locations sheet riêng
+        characters = self.get_characters()
 
         locations = []
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if row[0] is None:
-                continue
-
-            loc = Location(
-                id=row[0] or "",
-                name=row[1] or "",
-                english_prompt=row[2] or "",
-                location_lock=row[3] or "" if len(row) > 3 else "",
-                lighting_default=row[4] or "" if len(row) > 4 else "",
-                image_file=row[5] or "" if len(row) > 5 else "",
-            )
-            locations.append(loc)
+        for char in characters:
+            # Check nếu là location (role="location" hoặc id bắt đầu bằng "loc_")
+            if char.role == "location" or (char.id and char.id.startswith("loc_")):
+                loc = Location(
+                    id=char.id,
+                    name=char.name,
+                    english_prompt=char.english_prompt,
+                    location_lock=char.character_lock,  # character_lock chứa location_lock
+                    lighting_default=char.vietnamese_prompt,  # vietnamese_prompt chứa lighting_default
+                    image_file=char.image_file,
+                )
+                locations.append(loc)
 
         return locations
 
@@ -1342,9 +1554,409 @@ class PromptWorkbook:
         return gaps
 
     # ========================================================================
+    # SRT COVERAGE TRACKING - Đối chiếu SRT với Segments/Scenes
+    # ========================================================================
+
+    def _ensure_srt_coverage_sheet(self) -> None:
+        """Tạo sheet srt_coverage nếu chưa có."""
+        if self.SRT_COVERAGE_SHEET not in self.workbook.sheetnames:
+            ws = self.workbook.create_sheet(self.SRT_COVERAGE_SHEET)
+            headers = [
+                "srt_index", "start_time", "end_time", "text_preview",
+                "segment_id", "segment_name", "scene_id", "status"
+            ]
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid")
+
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+
+            # Set column widths
+            ws.column_dimensions['A'].width = 10
+            ws.column_dimensions['B'].width = 15
+            ws.column_dimensions['C'].width = 15
+            ws.column_dimensions['D'].width = 50
+            ws.column_dimensions['E'].width = 12
+            ws.column_dimensions['F'].width = 30
+            ws.column_dimensions['G'].width = 12
+            ws.column_dimensions['H'].width = 12
+
+    def init_srt_coverage(self, srt_entries: list) -> None:
+        """
+        Khởi tạo SRT coverage tracking với tất cả SRT entries.
+        Gọi ở đầu quy trình để có baseline.
+
+        Args:
+            srt_entries: List các SRT entry objects
+        """
+        self._ensure_srt_coverage_sheet()
+        ws = self.workbook[self.SRT_COVERAGE_SHEET]
+
+        # Clear existing data (keep header)
+        for row in range(ws.max_row, 1, -1):
+            ws.delete_rows(row)
+
+        # Add all SRT entries
+        uncovered_fill = PatternFill(start_color="FFCDD2", end_color="FFCDD2", fill_type="solid")
+
+        for i, entry in enumerate(srt_entries, 1):
+            row = i + 1  # +1 for header
+            ws.cell(row=row, column=1, value=i)  # srt_index
+            ws.cell(row=row, column=2, value=entry.start_time)
+            ws.cell(row=row, column=3, value=entry.end_time)
+            ws.cell(row=row, column=4, value=entry.text[:50] + "..." if len(entry.text) > 50 else entry.text)
+            ws.cell(row=row, column=5, value="")  # segment_id - empty
+            ws.cell(row=row, column=6, value="")  # segment_name - empty
+            ws.cell(row=row, column=7, value="")  # scene_id - empty
+            status_cell = ws.cell(row=row, column=8, value="UNCOVERED")
+            status_cell.fill = uncovered_fill
+
+        self.save()
+        self.logger.info(f"Initialized SRT coverage tracking for {len(srt_entries)} entries")
+
+    def update_srt_coverage_segments(self, segments: list) -> dict:
+        """
+        Cập nhật coverage sau Step 1.5 (segments).
+
+        Args:
+            segments: List segments từ Step 1.5
+
+        Returns:
+            Dict với coverage statistics
+        """
+        self._ensure_srt_coverage_sheet()
+        ws = self.workbook[self.SRT_COVERAGE_SHEET]
+
+        segment_fill = PatternFill(start_color="FFF9C4", end_color="FFF9C4", fill_type="solid")  # Yellow
+        covered = 0
+        uncovered = 0
+
+        for row in range(2, ws.max_row + 1):
+            srt_index = ws.cell(row=row, column=1).value
+            if srt_index is None:
+                continue
+
+            # Find which segment covers this SRT
+            segment_found = None
+            for seg in segments:
+                start = seg.get("srt_range_start", 0)
+                end = seg.get("srt_range_end", 0)
+                if start <= srt_index <= end:
+                    segment_found = seg
+                    break
+
+            if segment_found:
+                ws.cell(row=row, column=5, value=segment_found.get("segment_id", ""))
+                ws.cell(row=row, column=6, value=segment_found.get("segment_name", ""))
+                ws.cell(row=row, column=8, value="SEGMENT_OK")
+                ws.cell(row=row, column=8).fill = segment_fill
+                covered += 1
+            else:
+                uncovered += 1
+
+        self.save()
+
+        total = covered + uncovered
+        coverage_pct = (covered / total * 100) if total > 0 else 0
+
+        return {
+            "total_srt": total,
+            "covered_by_segment": covered,
+            "uncovered": uncovered,
+            "coverage_percent": round(coverage_pct, 1)
+        }
+
+    def update_srt_coverage_scenes(self, director_plan: list) -> dict:
+        """
+        Cập nhật coverage sau Step 4 (director_plan).
+
+        Args:
+            director_plan: List scenes từ Step 4
+
+        Returns:
+            Dict với coverage statistics
+        """
+        self._ensure_srt_coverage_sheet()
+        ws = self.workbook[self.SRT_COVERAGE_SHEET]
+
+        scene_fill = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")  # Green
+        covered = 0
+        uncovered = 0
+
+        for row in range(2, ws.max_row + 1):
+            srt_index = ws.cell(row=row, column=1).value
+            if srt_index is None:
+                continue
+
+            # Find which scene covers this SRT
+            scene_ids = []
+            for scene in director_plan:
+                indices = scene.get("srt_indices", [])
+                if srt_index in indices:
+                    scene_ids.append(scene.get("scene_id", ""))
+
+            if scene_ids:
+                ws.cell(row=row, column=7, value=", ".join(map(str, scene_ids)))
+                ws.cell(row=row, column=8, value="COVERED")
+                ws.cell(row=row, column=8).fill = scene_fill
+                covered += 1
+            else:
+                current_status = ws.cell(row=row, column=8).value
+                if current_status != "COVERED":
+                    uncovered += 1
+
+        self.save()
+
+        total = covered + uncovered
+        coverage_pct = (covered / total * 100) if total > 0 else 0
+
+        return {
+            "total_srt": total,
+            "covered_by_scene": covered,
+            "uncovered": uncovered,
+            "coverage_percent": round(coverage_pct, 1)
+        }
+
+    def get_srt_coverage_summary(self) -> dict:
+        """
+        Lấy tổng hợp coverage hiện tại.
+
+        Returns:
+            Dict với statistics
+        """
+        self._ensure_srt_coverage_sheet()
+        ws = self.workbook[self.SRT_COVERAGE_SHEET]
+
+        total = 0
+        covered = 0
+        segment_only = 0
+        uncovered = 0
+
+        for row in range(2, ws.max_row + 1):
+            srt_index = ws.cell(row=row, column=1).value
+            if srt_index is None:
+                continue
+
+            total += 1
+            status = ws.cell(row=row, column=8).value
+
+            if status == "COVERED":
+                covered += 1
+            elif status == "SEGMENT_OK":
+                segment_only += 1
+            else:
+                uncovered += 1
+
+        return {
+            "total_srt": total,
+            "fully_covered": covered,
+            "segment_only": segment_only,
+            "uncovered": uncovered,
+            "coverage_percent": round((covered / total * 100) if total > 0 else 0, 1)
+        }
+
+    def get_uncovered_srt_entries(self) -> list:
+        """
+        Lấy danh sách SRT entries chưa được cover.
+
+        Returns:
+            List of dicts với SRT info
+        """
+        self._ensure_srt_coverage_sheet()
+        ws = self.workbook[self.SRT_COVERAGE_SHEET]
+
+        uncovered = []
+        for row in range(2, ws.max_row + 1):
+            status = ws.cell(row=row, column=8).value
+            if status == "UNCOVERED":
+                uncovered.append({
+                    "srt_index": ws.cell(row=row, column=1).value,
+                    "start_time": ws.cell(row=row, column=2).value,
+                    "end_time": ws.cell(row=row, column=3).value,
+                    "text_preview": ws.cell(row=row, column=4).value
+                })
+
+        return uncovered
+
+    # ========================================================================
+    # PROCESSING STATUS - Theo dõi trạng thái từng step
+    # ========================================================================
+
+    def _ensure_processing_status_sheet(self) -> None:
+        """Tạo sheet processing_status nếu chưa có."""
+        if self.PROCESSING_STATUS_SHEET not in self.workbook.sheetnames:
+            ws = self.workbook.create_sheet(self.PROCESSING_STATUS_SHEET)
+            headers = [
+                "step_id", "step_name", "description", "status",
+                "items_total", "items_done", "coverage_pct", "notes", "last_updated"
+            ]
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="1565C0", end_color="1565C0", fill_type="solid")
+
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+
+            # Initialize all steps
+            for i, (step_id, step_name, desc) in enumerate(self.STEPS, 2):
+                ws.cell(row=i, column=1, value=step_id)
+                ws.cell(row=i, column=2, value=step_name)
+                ws.cell(row=i, column=3, value=desc)
+                ws.cell(row=i, column=4, value="PENDING")
+                ws.cell(row=i, column=5, value=0)
+                ws.cell(row=i, column=6, value=0)
+                ws.cell(row=i, column=7, value=0)
+                ws.cell(row=i, column=8, value="")
+                ws.cell(row=i, column=9, value="")
+
+            # Set column widths
+            ws.column_dimensions['A'].width = 10
+            ws.column_dimensions['B'].width = 18
+            ws.column_dimensions['C'].width = 35
+            ws.column_dimensions['D'].width = 12
+            ws.column_dimensions['E'].width = 12
+            ws.column_dimensions['F'].width = 12
+            ws.column_dimensions['G'].width = 12
+            ws.column_dimensions['H'].width = 50
+            ws.column_dimensions['I'].width = 20
+
+    def update_step_status(self, step_id: str, status: str, items_total: int = 0,
+                           items_done: int = 0, notes: str = "") -> None:
+        """
+        Cập nhật trạng thái của một step.
+
+        Args:
+            step_id: ID của step (step_1, step_1.5, etc.)
+            status: PENDING, IN_PROGRESS, COMPLETED, PARTIAL, ERROR
+            items_total: Tổng số items cần xử lý
+            items_done: Số items đã xong
+            notes: Ghi chú
+        """
+        from datetime import datetime
+
+        self._ensure_processing_status_sheet()
+        ws = self.workbook[self.PROCESSING_STATUS_SHEET]
+
+        # Color mapping
+        status_colors = {
+            "PENDING": "E0E0E0",      # Gray
+            "IN_PROGRESS": "FFF9C4",  # Yellow
+            "COMPLETED": "C8E6C9",    # Green
+            "PARTIAL": "FFE0B2",      # Orange
+            "ERROR": "FFCDD2"         # Red
+        }
+
+        # Find the row for this step
+        for row in range(2, ws.max_row + 1):
+            if ws.cell(row=row, column=1).value == step_id:
+                ws.cell(row=row, column=4, value=status)
+                ws.cell(row=row, column=4).fill = PatternFill(
+                    start_color=status_colors.get(status, "FFFFFF"),
+                    end_color=status_colors.get(status, "FFFFFF"),
+                    fill_type="solid"
+                )
+                ws.cell(row=row, column=5, value=items_total)
+                ws.cell(row=row, column=6, value=items_done)
+
+                # Calculate coverage percentage
+                coverage = (items_done / items_total * 100) if items_total > 0 else 0
+                ws.cell(row=row, column=7, value=round(coverage, 1))
+
+                # Add notes
+                if notes:
+                    existing_notes = ws.cell(row=row, column=8).value or ""
+                    if existing_notes and notes not in existing_notes:
+                        notes = f"{existing_notes}; {notes}"
+                    ws.cell(row=row, column=8, value=notes[:500])  # Limit notes length
+
+                ws.cell(row=row, column=9, value=datetime.now().strftime("%Y-%m-%d %H:%M"))
+                break
+
+        self.save()
+
+    def get_step_status(self, step_id: str) -> dict:
+        """Lấy trạng thái của một step."""
+        self._ensure_processing_status_sheet()
+        ws = self.workbook[self.PROCESSING_STATUS_SHEET]
+
+        for row in range(2, ws.max_row + 1):
+            if ws.cell(row=row, column=1).value == step_id:
+                return {
+                    "step_id": step_id,
+                    "step_name": ws.cell(row=row, column=2).value,
+                    "status": ws.cell(row=row, column=4).value,
+                    "items_total": ws.cell(row=row, column=5).value or 0,
+                    "items_done": ws.cell(row=row, column=6).value or 0,
+                    "coverage_pct": ws.cell(row=row, column=7).value or 0,
+                    "notes": ws.cell(row=row, column=8).value or "",
+                    "last_updated": ws.cell(row=row, column=9).value or ""
+                }
+        return {}
+
+    def get_all_step_status(self) -> list:
+        """Lấy trạng thái của tất cả steps."""
+        self._ensure_processing_status_sheet()
+        ws = self.workbook[self.PROCESSING_STATUS_SHEET]
+
+        statuses = []
+        for row in range(2, ws.max_row + 1):
+            step_id = ws.cell(row=row, column=1).value
+            if step_id:
+                statuses.append({
+                    "step_id": step_id,
+                    "step_name": ws.cell(row=row, column=2).value,
+                    "status": ws.cell(row=row, column=4).value,
+                    "items_total": ws.cell(row=row, column=5).value or 0,
+                    "items_done": ws.cell(row=row, column=6).value or 0,
+                    "coverage_pct": ws.cell(row=row, column=7).value or 0,
+                    "notes": ws.cell(row=row, column=8).value or ""
+                })
+        return statuses
+
+    def get_incomplete_steps(self) -> list:
+        """Lấy danh sách các steps chưa hoàn thành (PARTIAL hoặc ERROR)."""
+        statuses = self.get_all_step_status()
+        return [s for s in statuses if s["status"] in ("PENDING", "PARTIAL", "ERROR", "IN_PROGRESS")]
+
+    def get_processing_summary(self) -> dict:
+        """
+        Lấy tổng hợp trạng thái xử lý.
+
+        Returns:
+            Dict với thông tin tổng quan
+        """
+        statuses = self.get_all_step_status()
+
+        completed = sum(1 for s in statuses if s["status"] == "COMPLETED")
+        partial = sum(1 for s in statuses if s["status"] == "PARTIAL")
+        pending = sum(1 for s in statuses if s["status"] == "PENDING")
+        error = sum(1 for s in statuses if s["status"] == "ERROR")
+
+        # Get SRT coverage if available
+        srt_summary = {}
+        try:
+            srt_summary = self.get_srt_coverage_summary()
+        except:
+            pass
+
+        return {
+            "total_steps": len(statuses),
+            "completed": completed,
+            "partial": partial,
+            "pending": pending,
+            "error": error,
+            "completion_pct": round(completed / len(statuses) * 100, 1) if statuses else 0,
+            "srt_coverage": srt_summary,
+            "needs_attention": [s for s in statuses if s["status"] in ("PARTIAL", "ERROR")]
+        }
+
+    # ========================================================================
     # UTILITY METHODS
     # ========================================================================
-    
+
     def has_prompts(self) -> bool:
         """Kiểm tra xem đã có prompt nào chưa."""
         scenes = self.get_scenes()

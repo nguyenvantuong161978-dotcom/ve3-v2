@@ -40,6 +40,11 @@ flow_image_count: 1
 flow_timeout: 120
 flow_delay: 3.0
 
+# Số lượng API calls song song khi tạo prompts (Step 4.5, Step 5)
+# Tăng lên để nhanh hơn, giảm xuống nếu bị rate limit
+# Recommended: 4-8 (default: 6)
+max_parallel_api: 6
+
 # DrissionPage Settings (Image Generation)
 # Sử dụng DrissionPage + Interceptor để tạo ảnh
 # IPv6 proxy đã bị bỏ - chỉ dùng Webshare
@@ -247,7 +252,7 @@ browser_generate_timeout: 120
 # Khi Chrome bị 403 liên tục, tự động đổi IPv6 để bypass
 
 ipv6_rotation:
-  enabled: false              # Bật/tắt tính năng đổi IPv6
+  enabled: true               # Bật/tắt tính năng đổi IPv6
 
   # Interface name (tên adapter mạng)
   # Chạy "netsh interface ipv6 show addresses" để xem tên

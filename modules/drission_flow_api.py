@@ -356,6 +356,16 @@ window._t2vToI2vConfig=null; // Config để convert T2V request thành I2V (th�
                     var data = await cloned.json();
                     console.log('[RESPONSE] Status:', response.status);
 
+                    // === 403 ERROR: Detect ngay và báo lỗi ===
+                    if (response.status === 403 || (data.error && data.error.code === 403)) {
+                        console.log('[RESPONSE] ✗ 403 FORBIDDEN - IP blocked!');
+                        var errorMsg = data.error ? data.error.message : 'Permission denied';
+                        window._response = {error: {code: 403, message: errorMsg}};
+                        window._responseError = 'Error 403: ' + errorMsg;
+                        window._requestPending = false;
+                        return response;
+                    }
+
                     // Check nếu có media MỚI với fifeUrl → trigger ngay
                     if (data.media && data.media.length > 0) {
                         var readyMedia = data.media.filter(function(m) {
@@ -421,8 +431,9 @@ window._t2vToI2vConfig=null; // Config để convert T2V request thành I2V (th�
 
             // ============================================
             // T2V → I2V CONVERSION MODE: Convert Text-to-Video thành Image-to-Video
-            // Chrome gửi T2V request (batchAsyncGenerateVideoText) với model veo_3_1_t2v_fast
-            // Interceptor đổi thành I2V (batchAsyncGenerateVideoReferenceImages) với model veo_3_0_r2v_fast
+            // Chrome gửi T2V request (batchAsyncGenerateVideoText) với model veo_3_1_t2v_fast_landscape_ultra_relaxed
+            // Interceptor chỉ đổi: _t2v_ → _r2v_, GIỮ NGUYÊN phần còn lại
+            // Result: veo_3_1_r2v_fast_landscape_ultra_relaxed (I2V endpoint)
             // ============================================
             if (window._t2vToI2vConfig && chromeVideoBody && urlStr.includes('batchAsyncGenerateVideoText')) {
                 try {
@@ -435,32 +446,44 @@ window._t2vToI2vConfig=null; // Config để convert T2V request thành I2V (th�
                     var newUrl = urlStr.replace('batchAsyncGenerateVideoText', 'batchAsyncGenerateVideoReferenceImages');
                     console.log('[T2V→I2V] New URL:', newUrl);
 
-                    // 2. Thêm referenceImages vào payload
+                    // 2. CHỈ GIỮ 1 REQUEST - API I2V không hỗ trợ batch
+                    if (chromeVideoBody.requests && chromeVideoBody.requests.length > 1) {
+                        console.log('[T2V→I2V] Chrome gửi ' + chromeVideoBody.requests.length + ' requests, chỉ giữ 1');
+                        chromeVideoBody.requests = chromeVideoBody.requests.slice(0, 1);
+                    }
+
+                    // 3. Thêm referenceImages và fix model
                     if (chromeVideoBody.requests && chromeVideoBody.requests.length > 0) {
-                        for (var i = 0; i < chromeVideoBody.requests.length; i++) {
-                            // Thêm reference image với mediaId từ ảnh đã upload
-                            chromeVideoBody.requests[i].referenceImages = [{
-                                "imageUsageType": "IMAGE_USAGE_TYPE_ASSET",
-                                "mediaId": t2vConfig.mediaId
-                            }];
+                        var req = chromeVideoBody.requests[0];
 
-                            // 3. Đổi model từ T2V sang I2V
-                            // T2V: veo_3_1_t2v_fast, veo_3_1_t2v_fast_ultra, veo_3_1_t2v
-                            // I2V: veo_3_0_r2v_fast, veo_3_0_r2v_fast_ultra, veo_3_0_r2v
-                            var currentModel = chromeVideoBody.requests[i].videoModelKey || 'veo_3_1_t2v_fast';
-                            var newModel = currentModel
-                                .replace('veo_3_1_t2v', 'veo_3_0_r2v')
-                                .replace('veo_3_0_t2v', 'veo_3_0_r2v');  // Fallback
+                        // Thêm reference image với mediaId từ ảnh đã upload
+                        req.referenceImages = [{
+                            "imageUsageType": "IMAGE_USAGE_TYPE_ASSET",
+                            "mediaId": t2vConfig.mediaId
+                        }];
 
-                            // Override nếu config có chỉ định
-                            if (t2vConfig.videoModelKey) {
-                                newModel = t2vConfig.videoModelKey;
-                            }
+                        // GIỮ seed - I2V CẦN seed (đã test thủ công OK)
+                        // delete req.seed; // KHÔNG XÓA!
 
-                            chromeVideoBody.requests[i].videoModelKey = newModel;
-                            console.log('[T2V→I2V] Model:', currentModel, '→', newModel);
-                            console.log('[T2V→I2V] MediaId:', t2vConfig.mediaId.substring(0, 50) + '...');
+                        // 4. Đổi model từ T2V sang I2V
+                        // CHỈ đổi _t2v_ → _r2v_, GIỮ NGUYÊN tất cả phần còn lại
+                        // Ví dụ: veo_3_1_t2v_fast_landscape_ultra_relaxed → veo_3_1_r2v_fast_landscape_ultra_relaxed
+                        var currentModel = req.videoModelKey || 'veo_3_1_t2v_fast';
+                        console.log('[T2V→I2V] Original model from Chrome:', currentModel);
+
+                        // FIX: Chỉ đổi t2v → r2v, GIỮ _landscape_, _relaxed, veo_3_1
+                        var newModel = currentModel.replace('_t2v_', '_r2v_');
+
+                        // Override nếu config có chỉ định model cụ thể
+                        if (t2vConfig.videoModelKey) {
+                            newModel = t2vConfig.videoModelKey;
                         }
+
+                        req.videoModelKey = newModel;
+                        console.log('[T2V→I2V] Model converted:', currentModel, '→', newModel);
+                        console.log('[T2V→I2V] MediaId:', t2vConfig.mediaId.substring(0, 50) + '...');
+                        console.log('[T2V→I2V] Seed:', req.seed);
+                        console.log('[T2V→I2V] Final request:', JSON.stringify(req, null, 2));
                     }
 
                     // Update body với payload đã convert
@@ -653,7 +676,7 @@ JS_CLICK_NEW_PROJECT = '''
 })();
 '''
 
-# JS để chọn "Tạo hình ảnh" từ dropdown
+# JS để chọn "Tạo hình ảnh" từ dropdown (dùng ở _create_new_project, _wait_for_project_manual)
 JS_SELECT_IMAGE_MODE = '''
 (async function() {
     // 1. Click dropdown
@@ -1013,10 +1036,24 @@ class DrissionFlowAPI:
         # Model fallback: khi quota exceeded (429), chuyển từ GEM_PIX_2 (Pro) sang GEM_PIX
         self._use_fallback_model = False  # True = dùng nano banana (GEM_PIX) thay vì pro (GEM_PIX_2)
 
-        # IPv6 rotation: TẠM TẮT - đặt 999 để không bao giờ kích hoạt
+        # IPv6 rotation: Đọc từ settings.yaml
         self._consecutive_403 = 0
-        self._max_403_before_ipv6 = 999  # TẠM TẮT IPv6 (đặt 999)
         self._ipv6_activated = False  # True = đã bật IPv6 proxy
+        self._ipv6_rotator = None  # IPv6Rotator instance
+
+        # Đọc max_403_before_rotate từ settings
+        try:
+            import yaml
+            settings_path = Path(__file__).parent.parent / "config" / "settings.yaml"
+            if settings_path.exists():
+                with open(settings_path, 'r', encoding='utf-8') as f:
+                    cfg = yaml.safe_load(f) or {}
+                ipv6_cfg = cfg.get('ipv6_rotation', {})
+                self._max_403_before_ipv6 = ipv6_cfg.get('max_403_before_rotate', 3)
+            else:
+                self._max_403_before_ipv6 = 3
+        except:
+            self._max_403_before_ipv6 = 3
 
         # T2V mode tracking: chỉ chọn mode/model lần đầu khi mới mở Chrome
         # Sau F5 refresh thì trang vẫn giữ mode/model đã chọn, không cần chọn lại
@@ -1112,13 +1149,25 @@ class DrissionFlowAPI:
         """
         self.log("→ Đang tự động tạo dự án mới...")
 
+        # 0. Đợi page load xong trước (tránh ContextLostError)
+        self.log("   Đợi page load...")
+        if not self._wait_for_page_ready(timeout=30):
+            self.log("⚠️ Page chưa sẵn sàng", "WARN")
+
         # 1. Đợi trang load và tìm button "Dự án mới"
         for i in range(15):
-            result = self.driver.run_js(JS_CLICK_NEW_PROJECT)
-            if result == 'CLICKED':
-                self.log("✓ Clicked 'Dự án mới'")
-                time.sleep(2)
-                break
+            try:
+                result = self.driver.run_js(JS_CLICK_NEW_PROJECT)
+                if result == 'CLICKED':
+                    self.log("✓ Clicked 'Dự án mới'")
+                    time.sleep(2)
+                    break
+            except Exception as e:
+                if "ContextLost" in str(type(e).__name__) or "refresh" in str(e).lower():
+                    self.log(f"   Page đang refresh, đợi...")
+                    time.sleep(2)
+                    continue
+                raise
             time.sleep(1)
             if i == 5:
                 self.log("  ... đợi button 'Dự án mới' xuất hiện...")
@@ -1390,10 +1439,10 @@ class DrissionFlowAPI:
         except Exception as e:
             pass
 
-    def clear_chrome_data(self) -> bool:
+    def clear_cookies_only(self) -> bool:
         """
-        Xóa dữ liệu Chrome profile (cookies, cache, localStorage...) để reset reCAPTCHA score.
-        Gọi khi gặp 403 liên tiếp nhiều lần.
+        Chỉ xóa cookies và cache, GIỮA LẠI Login Data.
+        Dùng khi restart sau mỗi ảnh để reset reCAPTCHA mà không mất login.
 
         Returns:
             True nếu xóa thành công
@@ -1401,41 +1450,33 @@ class DrissionFlowAPI:
         import shutil
 
         try:
-            self.log("🗑️ Clearing Chrome profile data...")
+            self.log("🗑️ Clearing cookies & cache (giữ login)...")
 
             # Đóng Chrome trước
             self._kill_chrome()
-            time.sleep(2)
+            time.sleep(1)
 
-            # Tìm profile directory
             profile_path = self.profile_dir
             if not profile_path or not profile_path.exists():
                 self.log("⚠️ Profile directory not found", "WARN")
                 return False
 
-            # Xóa các folder chứa data (giữ lại folder gốc)
-            folders_to_clear = [
-                "Default/Cache",
-                "Default/Code Cache",
-                "Default/GPUCache",
-                "Default/Cookies",
-                "Default/Cookies-journal",
-                "Default/Local Storage",
-                "Default/Session Storage",
-                "Default/IndexedDB",
-                "Default/Service Worker",
-                "Default/Web Data",
-                "Default/Web Data-journal",
-                "Default/History",
-                "Default/History-journal",
-                "Default/Visited Links",
-                "GrShaderCache",
-                "ShaderCache",
+            # Chỉ xóa cookies, cache - KHÔNG xóa Login Data
+            items_to_clear = [
+                "Cookies", "Cookies-journal",
+                "Cache", "Code Cache", "GPUCache",
+                "Session Storage", "Local Storage",
+                "IndexedDB", "Service Worker",
+                # Default/ subfolder
+                "Default/Cookies", "Default/Cookies-journal",
+                "Default/Cache", "Default/Code Cache", "Default/GPUCache",
+                "Default/Session Storage", "Default/Local Storage",
+                "Default/IndexedDB", "Default/Service Worker",
             ]
 
             cleared = 0
-            for folder in folders_to_clear:
-                target = profile_path / folder
+            for item in items_to_clear:
+                target = profile_path / item
                 if target.exists():
                     try:
                         if target.is_dir():
@@ -1443,16 +1484,166 @@ class DrissionFlowAPI:
                         else:
                             target.unlink()
                         cleared += 1
-                    except Exception as e:
-                        pass  # Một số file có thể bị lock
+                    except:
+                        pass
 
-            self.log(f"✓ Cleared {cleared} items from Chrome profile")
-            self.log("⚠️ Cần login lại Google sau khi restart Chrome!")
-
-            # Reset flags
-            self._t2v_mode_selected = False
-
+            self.log(f"✓ Cleared {cleared} items (Login Data kept)")
             return True
+
+        except Exception as e:
+            self.log(f"⚠️ Clear cookies error: {e}", "WARN")
+            return False
+
+    def clear_chrome_data(self) -> bool:
+        """
+        Xóa dữ liệu Chrome bằng UI (giống Ctrl+H → Delete browsing data).
+        Gọi khi gặp 403 liên tiếp nhiều lần.
+
+        Returns:
+            True nếu xóa thành công
+        """
+        try:
+            self.log("🗑️ Clearing Chrome data via UI...")
+
+            if not self.driver:
+                self.log("⚠️ Chrome chưa mở, không thể clear data", "WARN")
+                return False
+
+            # Mở trang Clear browsing data
+            self.driver.get("chrome://settings/clearBrowserData")
+            time.sleep(2)
+
+            # JS để click "All time" và "Delete from this device"
+            JS_CLEAR_DATA = """
+            (function() {
+                // Tìm trong shadow DOM của settings page
+                function queryShadow(root, selector) {
+                    if (!root) return null;
+                    let el = root.querySelector(selector);
+                    if (el) return el;
+
+                    // Tìm trong shadow roots
+                    const elements = root.querySelectorAll('*');
+                    for (let i = 0; i < elements.length; i++) {
+                        if (elements[i].shadowRoot) {
+                            el = queryShadow(elements[i].shadowRoot, selector);
+                            if (el) return el;
+                        }
+                    }
+                    return null;
+                }
+
+                function findInShadow(selector) {
+                    return queryShadow(document, selector);
+                }
+
+                // Click "All time" tab
+                let allTimeTab = findInShadow('[data-value="4"]');  // 4 = All time
+                if (!allTimeTab) {
+                    // Thử tìm bằng text
+                    const tabs = document.querySelectorAll('cr-tabs');
+                    for (let tab of tabs) {
+                        if (tab.shadowRoot) {
+                            const items = tab.shadowRoot.querySelectorAll('.tab');
+                            for (let item of items) {
+                                if (item.textContent.includes('All time')) {
+                                    item.click();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (allTimeTab) allTimeTab.click();
+
+                return 'SETUP';
+            })();
+            """
+
+            JS_CLICK_DELETE = """
+            (function() {
+                function queryShadow(root, selector) {
+                    if (!root) return null;
+                    let el = root.querySelector(selector);
+                    if (el) return el;
+                    const elements = root.querySelectorAll('*');
+                    for (let i = 0; i < elements.length; i++) {
+                        if (elements[i].shadowRoot) {
+                            el = queryShadow(elements[i].shadowRoot, selector);
+                            if (el) return el;
+                        }
+                    }
+                    return null;
+                }
+
+                // Tìm button "Delete from this device" hoặc "Clear data"
+                let deleteBtn = queryShadow(document, '#clearBrowsingDataConfirm');
+                if (!deleteBtn) {
+                    deleteBtn = queryShadow(document, '[id*="clearBrowsingData"]');
+                }
+                if (!deleteBtn) {
+                    // Tìm bằng text
+                    const buttons = document.querySelectorAll('cr-button');
+                    for (let btn of buttons) {
+                        if (btn.textContent.includes('Delete') || btn.textContent.includes('Clear')) {
+                            deleteBtn = btn;
+                            break;
+                        }
+                    }
+                }
+
+                if (deleteBtn) {
+                    deleteBtn.click();
+                    return 'CLICKED';
+                }
+                return 'NOT_FOUND';
+            })();
+            """
+
+            # Setup - click All time
+            try:
+                self.driver.run_js(JS_CLEAR_DATA)
+                time.sleep(1)
+            except Exception as e:
+                self.log(f"  JS setup error: {e}")
+
+            # Click Delete button
+            for attempt in range(5):
+                try:
+                    result = self.driver.run_js(JS_CLICK_DELETE)
+                    if result == 'CLICKED':
+                        self.log("✓ Clicked 'Delete from this device'")
+                        time.sleep(3)  # Đợi xóa xong
+
+                        # Reset flags
+                        self._t2v_mode_selected = False
+                        self.log("✓ Chrome data cleared!")
+                        self.log("⚠️ Cần login lại Google!")
+                        return True
+                    else:
+                        self.log(f"  Attempt {attempt+1}: {result}")
+                        time.sleep(1)
+                except Exception as e:
+                    self.log(f"  Attempt {attempt+1} error: {e}")
+                    time.sleep(1)
+
+            # Fallback: Thử dùng keyboard shortcut
+            self.log("  Trying keyboard shortcut...")
+            try:
+                from DrissionPage.common import Keys
+                # Ctrl+Shift+Delete để mở clear data dialog
+                self.driver.actions.key_down(Keys.CTRL).key_down(Keys.SHIFT).send_keys(Keys.DELETE).key_up(Keys.SHIFT).key_up(Keys.CTRL)
+                time.sleep(2)
+                # Enter để confirm
+                self.driver.actions.send_keys(Keys.ENTER)
+                time.sleep(3)
+                self.log("✓ Chrome data cleared (keyboard)!")
+                return True
+            except Exception as e:
+                self.log(f"  Keyboard shortcut failed: {e}")
+
+            self.log("⚠️ Could not clear Chrome data via UI", "WARN")
+            return False
 
         except Exception as e:
             self.log(f"✗ Clear Chrome data failed: {e}", "ERROR")
@@ -1609,34 +1800,58 @@ class DrissionFlowAPI:
             else:
                 self.log("👁️ Headless mode: OFF (Chrome hiển thị)")
 
-            # === IPv6 MODE - CHỈ BẬT SAU KHI 403 ĐỦ LẦN ===
-            # Ban đầu KHÔNG dùng IPv6, chỉ bật khi bị 403 liên tiếp
+            # === IPv6 MODE - BẬT NGAY KHI MỞ CHROME ===
+            # Dùng IPv6 ngay từ đầu, nếu 403 thì đổi IPv6 khác
+            # QUAN TRỌNG: Dùng local SOCKS5 proxy để ÉP Chrome chỉ dùng IPv6
             _using_ipv6_proxy = False
             try:
                 from modules.ipv6_rotator import get_ipv6_rotator
                 rotator = get_ipv6_rotator()
                 if rotator and rotator.enabled and rotator.ipv6_list:
-                    # KHÔNG bật IPv6 ngay - chỉ log là sẵn sàng
-                    self.log(f"🌐 IPv6 STANDBY: {len(rotator.ipv6_list)} IPs sẵn sàng")
-                    self.log(f"   → Sẽ bật sau {self._max_403_before_ipv6} lần 403 liên tiếp")
-                    # Nếu đã activated trước đó (restart Chrome) → bật lại
-                    if self._ipv6_activated:
-                        self.log(f"🌐 IPv6 đã activated trước đó, bật lại...")
+                    self.log(f"🌐 IPv6 MODE: Có {len(rotator.ipv6_list)} IPs")
+
+                    # Tìm IPv6 hoạt động và bật ngay
+                    if not self._ipv6_activated:
+                        self.log(f"🌐 Activating IPv6 lần đầu...")
                         working_ipv6 = rotator.init_with_working_ipv6()
+                    else:
+                        # Đã activated trước đó → dùng IP hiện tại hoặc rotate
+                        working_ipv6 = rotator.current_ipv6 or rotator.get_next_ipv6()
                         if working_ipv6:
+                            rotator.set_ipv6(working_ipv6)
+
+                    if working_ipv6:
+                        self._ipv6_activated = True
+                        self._ipv6_rotator = rotator
+                        self.log(f"🌐 IPv6 ACTIVE: {working_ipv6}")
+
+                        # === START LOCAL SOCKS5 PROXY - ÉP CHROME DÙNG IPv6 ===
+                        # PC có cả IPv4+IPv6, Chrome mặc định dùng IPv4
+                        # Proxy này ép TẤT CẢ traffic của Chrome đi qua IPv6
+                        # QUAN TRỌNG: Dùng CÙNG port 1088 cho TẤT CẢ workers vì proxy là singleton
+                        try:
                             from modules.ipv6_proxy import start_ipv6_proxy
-                            proxy = start_ipv6_proxy(
+                            proxy_port = 1088  # Fixed port - shared by all workers (singleton proxy)
+                            self._ipv6_proxy = start_ipv6_proxy(
                                 ipv6_address=working_ipv6,
-                                port=1088,
+                                port=proxy_port,
                                 log_func=self.log
                             )
-                            if proxy:
-                                options.set_argument('--proxy-server=socks5://127.0.0.1:1088')
-                                self.log(f"🌐 IPv6 MODE: Chrome → SOCKS5 → IPv6 ONLY")
-                                self.log(f"   IPv6: {working_ipv6}")
+                            if self._ipv6_proxy:
+                                # Chrome dùng SOCKS5 proxy → tất cả traffic qua IPv6
+                                options.set_argument(f'--proxy-server=socks5://127.0.0.1:{proxy_port}')
+                                options.set_argument('--proxy-bypass-list=<-loopback>')
+                                self.log(f"🌐 Chrome → SOCKS5 proxy → IPv6 ONLY")
+                                self.log(f"   Proxy: socks5://127.0.0.1:{proxy_port}")
                                 _using_ipv6_proxy = True
+                            else:
+                                self.log(f"⚠️ IPv6 proxy failed to start", "WARN")
+                        except Exception as proxy_err:
+                            self.log(f"⚠️ IPv6 proxy error: {proxy_err}", "WARN")
+                    else:
+                        self.log(f"⚠️ Không tìm được IPv6 hoạt động!", "WARN")
             except Exception as e:
-                self.log(f"⚠️ IPv6 check error: {e}", "WARN")
+                self.log(f"⚠️ IPv6 activation error: {e}", "WARN")
 
             if not _using_ipv6_proxy and self._use_webshare and self._webshare_proxy:
                 from webshare_proxy import get_proxy_manager
@@ -1793,7 +2008,9 @@ class DrissionFlowAPI:
         for nav_attempt in range(max_nav_retries):
             try:
                 self.driver.get(target_url)
-                time.sleep(3)
+                # IPv6 cần thời gian load lâu hơn
+                wait_time = 6 if getattr(self, '_ipv6_activated', False) else 3
+                time.sleep(wait_time)
 
                 # Kiểm tra xem trang có load được không
                 current_url = self.driver.url
@@ -1958,88 +2175,44 @@ class DrissionFlowAPI:
                         self.log(f"  → New project URL saved")
             else:
                 self.log("✓ Đã ở trong project!")
-                # Chọn "Tạo hình ảnh" từ dropdown - với retry khi page refresh
-                # SKIP nếu skip_mode_selection=True (cho Chrome 2 video - sẽ switch T2V mode sau)
-                if not skip_mode_selection:
-                    time.sleep(1)
-                    select_success = False
-                    for retry_count in range(3):  # Retry tối đa 3 lần nếu page refresh
-                        try:
-                            for j in range(10):
-                                result = self.driver.run_js(JS_SELECT_IMAGE_MODE)
-                                if result == 'CLICKED':
-                                    self.log("✓ Chọn 'Tạo hình ảnh'")
-                                    time.sleep(1)
-                                    select_success = True
-                                    break
-                                time.sleep(0.5)
-                            if select_success:
-                                break
-                        except Exception as e:
-                            if ContextLostError and isinstance(e, ContextLostError):
-                                self.log(f"[PAGE] ⚠️ Page bị refresh, đợi load lại... (retry {retry_count + 1}/3)")
-                                if self._wait_for_page_ready(timeout=30):
-                                    continue  # Retry sau khi page load xong
-                                else:
-                                    self.log("[PAGE] ✗ Timeout đợi page, thử lại...", "WARN")
-                                    continue
-                            else:
-                                self.log(f"[PAGE] ⚠️ Lỗi: {e}", "WARN")
-                                break
-                else:
-                    self.log("⏭️ Skip mode selection (video mode)")
-                    time.sleep(1)
+                # F5 để load lại trang
+                self.log("   → F5 refresh...")
+                self.driver.refresh()
+                time.sleep(3)
 
-        # 5. Đợi textarea sẵn sàng - với xử lý ContextLostError và LOGOUT
-        self.log("Đợi project load...")
-        textarea_ready = False
-        for retry_count in range(3):  # Retry tối đa 3 lần nếu page refresh
+        # 5. Đợi textarea sẵn sàng - TEXTAREA = page đã load xong
+        # IPv6 cần thời gian lâu hơn, tự động F5 nếu không thấy
+        self.log("Đợi project load (textarea = ready)...")
+
+        # Kiểm tra logout trước
+        if self._is_logged_out():
+            self.log("[PROJECT] ⚠️ Phát hiện bị LOGOUT!")
+            if self._auto_login_google():
+                self.log("[PROJECT] ✓ Đã login lại, quay lại project...")
+                self.driver.get(f"https://labs.google/fx/tools/video-fx/projects/{self.project_id}")
+                time.sleep(6 if getattr(self, '_ipv6_activated', False) else 3)
+            else:
+                self.log("[PROJECT] ✗ Login lại thất bại", "ERROR")
+                return False
+
+        # Đợi textarea - tự động F5 nếu không thấy (IPv6 friendly)
+        if not self._wait_for_textarea_visible():
+            # Thử navigate lại project 1 lần nữa
+            self.log("[PROJECT] ⚠️ Không thấy textarea, thử load lại project...")
             try:
-                for i in range(30):
-                    # === KIỂM TRA LOGOUT MỖI 5 GIÂY ===
-                    if i % 5 == 0 and i > 0:
-                        if self._is_logged_out():
-                            self.log("[PROJECT] ⚠️ Phát hiện bị LOGOUT khi đợi project!")
-                            if self._auto_login_google():
-                                self.log("[PROJECT] ✓ Đã login lại, quay lại project...")
-                                # Navigate lại project
-                                self.driver.get(f"https://labs.google/fx/tools/video-fx/projects/{self.project_id}")
-                                time.sleep(3)
-                                continue
-                            else:
-                                self.log("[PROJECT] ✗ Login lại thất bại", "ERROR")
-                                return False
-
-                    if self._find_textarea():
-                        self.log("✓ Project đã sẵn sàng!")
-                        textarea_ready = True
-                        break
-                    time.sleep(1)
-                if textarea_ready:
-                    break
-                else:
-                    # Timeout: check logout lần cuối
-                    if self._is_logged_out():
-                        self.log("[PROJECT] ⚠️ Timeout do bị LOGOUT!")
-                        if self._auto_login_google():
-                            self.log("[PROJECT] ✓ Đã login lại, thử lại...")
-                            self.driver.get(f"https://labs.google/fx/tools/video-fx/projects/{self.project_id}")
-                            time.sleep(3)
-                            continue
-                    self.log("✗ Timeout - không tìm thấy textarea", "ERROR")
+                self.driver.get(f"https://labs.google/fx/tools/video-fx/projects/{self.project_id}")
+                time.sleep(6 if getattr(self, '_ipv6_activated', False) else 3)
+                if not self._wait_for_textarea_visible():
+                    self.log("✗ Không thể tìm textarea sau nhiều lần thử", "ERROR")
                     return False
             except Exception as e:
-                if ContextLostError and isinstance(e, ContextLostError):
-                    self.log(f"[PAGE] ⚠️ Page bị refresh khi đợi textarea (retry {retry_count + 1}/3)")
-                    if self._wait_for_page_ready(timeout=30):
-                        continue
-                else:
-                    self.log(f"[PAGE] Lỗi: {e}", "WARN")
-                    break
+                self.log(f"[PROJECT] Navigate error: {e}", "ERROR")
+                return False
 
-        if not textarea_ready:
-            self.log("✗ Không thể tìm textarea sau khi retry", "ERROR")
-            return False
+        self.log("✓ Project đã sẵn sàng (textarea visible)!")
+
+        # Mode đã được chọn ở _create_new_project() hoặc _wait_for_project_manual()
+        # Không cần chọn lại ở đây
 
         # 6. Warm up session (tạo 1 ảnh trong Chrome để activate)
         if warm_up:
@@ -2077,85 +2250,135 @@ class DrissionFlowAPI:
                 pass
         return None
 
-    def _wait_for_textarea_visible(self, timeout: int = 10, max_refresh: int = 2) -> bool:
+    def _wait_for_textarea_visible(self, timeout: int = None, max_refresh: int = 3) -> bool:
         """
-        Đợi textarea xuất hiện trước khi click.
-        Cách đơn giản: dùng DrissionPage ele() với timeout.
+        Đợi textarea xuất hiện VÀ có thể tương tác.
+        Textarea là dấu hiệu page đã load xong.
+        PHẢI verify textarea thật sự visible, không chỉ có trong DOM.
         """
-        for refresh_count in range(max_refresh + 1):
-            self.log(f"[TEXTAREA] Đợi textarea... (lần {refresh_count + 1})")
+        # Timeout tối đa 10s là đủ
+        if timeout is None:
+            timeout = 10
 
-            try:
-                # Cách đơn giản: dùng DrissionPage tìm textarea
-                textarea = self.driver.ele('tag:textarea', timeout=timeout)
-                if textarea:
-                    self.log(f"[TEXTAREA] ✓ Tìm thấy textarea")
-                    time.sleep(0.5)  # Đợi thêm để chắc chắn ready
-                    return True
-            except Exception as e:
-                self.log(f"[TEXTAREA] Chưa thấy: {e}")
+        for refresh_count in range(max_refresh + 1):
+            self.log(f"[TEXTAREA] Đợi textarea... (timeout={timeout}s, lần {refresh_count + 1}/{max_refresh + 1})")
+
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                try:
+                    # Tìm textarea
+                    textarea = self.driver.ele('tag:textarea', timeout=2)
+                    if textarea:
+                        # === VERIFY: Textarea phải THẬT SỰ visible và có thể tương tác ===
+                        try:
+                            # Check 1: Element phải displayed
+                            is_displayed = textarea.states.is_displayed
+                            if not is_displayed:
+                                time.sleep(0.5)
+                                continue
+
+                            # Check 2: Thử click vào textarea để verify có thể tương tác
+                            textarea.click()
+                            time.sleep(0.3)
+
+                            # Check 3: Verify textarea vẫn còn sau khi click (page không bị redirect)
+                            verify = self.driver.ele('tag:textarea', timeout=1)
+                            if verify:
+                                self.log(f"[TEXTAREA] ✓ Textarea visible và interactive!")
+                                return True
+                        except Exception as verify_err:
+                            self.log(f"[TEXTAREA] Element found but not ready: {verify_err}")
+                            time.sleep(0.5)
+                            continue
+                except Exception as e:
+                    pass
+                time.sleep(0.5)
 
             # Timeout - thử F5 refresh nếu còn lượt
             if refresh_count < max_refresh:
-                self.log(f"[TEXTAREA] ⚠️ Không thấy textarea, F5 refresh...")
+                self.log(f"[TEXTAREA] ⚠️ Không thấy textarea sẵn sàng, F5 refresh...")
                 try:
                     self.driver.refresh()
-                    time.sleep(3)
+                    # IPv6 cần đợi lâu hơn sau F5
+                    wait_time = 6 if getattr(self, '_ipv6_activated', False) else 3
+                    time.sleep(wait_time)
                 except Exception as e:
                     self.log(f"[TEXTAREA] Refresh error: {e}")
 
         self.log("[TEXTAREA] ✗ Không tìm thấy textarea", "ERROR")
         return False
 
-    def _wait_for_page_ready(self, timeout: int = 30) -> bool:
+    def _get_page_load_timeout(self) -> int:
+        """Get appropriate timeout based on connection mode (IPv6 slower than IPv4)."""
+        if getattr(self, '_ipv6_activated', False):
+            return 45  # IPv6 cần thời gian lâu hơn
+        return 30
+
+    def _wait_for_page_ready(self, timeout: int = None, max_refresh: int = 2) -> bool:
         """
         Đợi page load xong sau khi bị refresh.
         Kiểm tra document.readyState và có thể truy cập DOM.
         Nếu phát hiện logout → tự động login lại.
+        IPv6 mode: timeout lâu hơn, tự động F5 nếu không load được.
 
         Args:
-            timeout: Timeout tối đa (giây)
+            timeout: Timeout tối đa (giây), None = auto based on IPv6
+            max_refresh: Số lần F5 tối đa nếu timeout
 
         Returns:
             True nếu page đã sẵn sàng
         """
-        self.log("[PAGE] Đợi page load sau refresh...")
-        for i in range(timeout):
-            try:
-                # === KIỂM TRA LOGOUT TRƯỚC ===
-                if self._is_logged_out():
-                    self.log("[PAGE] ⚠️ Phát hiện bị LOGOUT!")
-                    if self._auto_login_google():
-                        self.log("[PAGE] ✓ Đã login lại thành công!")
-                        # Sau khi login, cần navigate lại trang project
-                        return False  # Return False để trigger retry từ setup()
-                    else:
-                        self.log("[PAGE] ✗ Login lại thất bại", "ERROR")
-                        return False
+        if timeout is None:
+            timeout = self._get_page_load_timeout()
 
-                # Kiểm tra page ready state
-                ready_state = self.driver.run_js("return document.readyState")
-                if ready_state == "complete":
-                    # Thử tìm element cơ bản để đảm bảo DOM sẵn sàng
-                    if self._find_textarea():
-                        self.log("[PAGE] ✓ Page đã sẵn sàng!")
-                        return True
-                    # Nếu không có textarea, đợi thêm
+        for refresh_count in range(max_refresh + 1):
+            self.log(f"[PAGE] Đợi page load... (timeout={timeout}s, lần {refresh_count + 1})")
+
+            for i in range(timeout):
+                try:
+                    # === KIỂM TRA LOGOUT TRƯỚC ===
+                    if self._is_logged_out():
+                        self.log("[PAGE] ⚠️ Phát hiện bị LOGOUT!")
+                        if self._auto_login_google():
+                            self.log("[PAGE] ✓ Đã login lại thành công!")
+                            return False  # Return False để trigger retry từ setup()
+                        else:
+                            self.log("[PAGE] ✗ Login lại thất bại", "ERROR")
+                            return False
+
+                    # Kiểm tra page ready state
+                    ready_state = self.driver.run_js("return document.readyState")
+                    if ready_state == "complete":
+                        # Thử tìm element cơ bản để đảm bảo DOM sẵn sàng
+                        if self._find_textarea():
+                            self.log("[PAGE] ✓ Page đã sẵn sàng!")
+                            return True
+                        # Nếu không có textarea, đợi thêm
+                        time.sleep(1)
+                except Exception as e:
+                    # Page vẫn đang load, đợi tiếp
                     time.sleep(1)
-            except Exception as e:
-                # Page vẫn đang load, đợi tiếp
-                time.sleep(1)
 
-        # === TIMEOUT: Kiểm tra logout lần cuối ===
-        if self._is_logged_out():
-            self.log("[PAGE] ⚠️ Timeout do bị LOGOUT!")
-            if self._auto_login_google():
-                self.log("[PAGE] ✓ Đã login lại!")
-                return False  # Return False để trigger retry
-            else:
-                self.log("[PAGE] ✗ Login lại thất bại", "ERROR")
+            # === TIMEOUT: Kiểm tra logout lần cuối ===
+            if self._is_logged_out():
+                self.log("[PAGE] ⚠️ Timeout do bị LOGOUT!")
+                if self._auto_login_google():
+                    self.log("[PAGE] ✓ Đã login lại!")
+                    return False
+                else:
+                    self.log("[PAGE] ✗ Login lại thất bại", "ERROR")
+                    return False
 
-        self.log("[PAGE] ⚠️ Timeout đợi page load", "WARN")
+            # === TIMEOUT: F5 refresh nếu còn lượt ===
+            if refresh_count < max_refresh:
+                self.log(f"[PAGE] ⚠️ Timeout - F5 refresh để load lại...")
+                try:
+                    self.driver.refresh()
+                    time.sleep(5)  # Đợi sau F5 (IPv6 cần lâu hơn)
+                except Exception as e:
+                    self.log(f"[PAGE] F5 error: {e}")
+
+        self.log("[PAGE] ⚠️ Timeout đợi page load (sau nhiều lần F5)", "WARN")
         return False
 
     def _safe_run_js(self, script: str, max_retries: int = 3, default=None):
@@ -2187,22 +2410,21 @@ class DrissionFlowAPI:
 
     def _paste_prompt_ctrlv(self, textarea, prompt: str) -> bool:
         """
-        Paste prompt bằng Ctrl+V thay vì JS input.
-        Tránh bị 403 do bot detection.
+        Nhập prompt bằng Ctrl+V (pyperclip).
 
         Args:
             textarea: Element textarea đã tìm thấy
-            prompt: Nội dung prompt cần paste
+            prompt: Nội dung prompt cần nhập
 
         Returns:
             True nếu thành công
         """
-        import pyperclip
-
         try:
+            import pyperclip
+
             # 1. Copy prompt vào clipboard
             pyperclip.copy(prompt)
-            self.log(f"→ Copied to clipboard ({len(prompt)} chars)")
+            self.log(f"→ Copied {len(prompt)} chars to clipboard")
 
             # 2. Tìm textarea bằng DrissionPage
             textarea = self.driver.ele('tag:textarea', timeout=10)
@@ -2213,29 +2435,28 @@ class DrissionFlowAPI:
             # 3. Click vào textarea để focus
             try:
                 textarea.click()
-                time.sleep(0.3)
+                time.sleep(0.5)
             except:
                 pass
 
-            # 4. Clear nội dung cũ bằng Ctrl+A + Delete
+            # 4. Clear nội dung cũ bằng Ctrl+A
             from DrissionPage.common import Keys
             try:
                 textarea.input(Keys.CTRL_A)
-                time.sleep(0.1)
-                textarea.input(Keys.DELETE)
                 time.sleep(0.1)
             except:
                 pass
 
             # 5. Paste bằng Ctrl+V
+            self.log("→ Pasting with Ctrl+V...")
             textarea.input(Keys.CTRL_V)
-            time.sleep(0.3)
+            time.sleep(0.5)
 
-            self.log("→ Pasted with Ctrl+V ✓")
+            self.log(f"→ Paste done ✓")
             return True
 
         except Exception as e:
-            self.log(f"⚠️ Ctrl+V failed: {e}", "WARN")
+            self.log(f"⚠️ Paste prompt failed: {e}", "WARN")
             return False
 
     def _paste_prompt_js(self, prompt: str) -> bool:
@@ -2881,11 +3102,15 @@ class DrissionFlowAPI:
 
         last_error = None
 
+        # Số lần retry cho 403 (cần nhiều hơn để đi qua: reset x2 → clear data → IPv6 rotation)
+        effective_max_retries = max_retries
+
         # Log reference images if provided
         if image_inputs:
             self.log(f"→ Using {len(image_inputs)} reference image(s)")
 
-        for attempt in range(max_retries):
+        attempt = 0
+        while attempt < effective_max_retries:
             # SỬ DỤNG FORWARD MODE - không cancel request
             # reCAPTCHA token được dùng ngay (0.05s không bị expired)
             images, error = self.generate_image_forward(
@@ -2909,7 +3134,7 @@ class DrissionFlowAPI:
                         force_model = "GEM_PIX"  # Override cho các lần retry sau
 
                     # Retry với nano banana: đợi 5s → F5 refresh → retry
-                    if attempt < max_retries - 1:
+                    if attempt < effective_max_retries - 1:
                         self.log(f"⚠️ 429 Quota - Đợi 5s, F5 refresh rồi retry...", "WARN")
                         time.sleep(5)
                         # F5 refresh page
@@ -2919,6 +3144,7 @@ class DrissionFlowAPI:
                             self.log(f"  → F5 refreshed, retry...")
                         except Exception as e:
                             self.log(f"  → Refresh failed: {e}", "WARN")
+                        attempt += 1
                         continue
 
                     # Hết retry trong hàm này, nhưng KHÔNG return False
@@ -2928,49 +3154,64 @@ class DrissionFlowAPI:
 
                 # Nếu lỗi 500 (Internal Error), retry với delay
                 if "500" in error:
-                    self.log(f"⚠️ 500 Internal Error (attempt {attempt+1}/{max_retries})", "WARN")
-                    if attempt < max_retries - 1:
+                    self.log(f"⚠️ 500 Internal Error (attempt {attempt+1}/{effective_max_retries})", "WARN")
+                    if attempt < effective_max_retries - 1:
                         self.log(f"  → Đợi 3s rồi retry...")
                         time.sleep(3)
+                        attempt += 1
                         continue
                     else:
                         return False, [], error
 
-                # Nếu lỗi 403, RESET CHROME NGAY (không retry)
+                # === 403 ERROR HANDLING ===
+                # Logic: 403 → Reset Chrome (2 lần) → Lần 3 clear data + login lại → Sau clear vẫn 403 thì đổi IPv6
                 if "403" in error:
-                    # Tăng counter 403 liên tiếp
                     self._consecutive_403 += 1
-                    self.log(f"⚠️ 403 error (lần {self._consecutive_403}/{self._max_403_before_ipv6}) - RESET CHROME!", "WARN")
+                    cleared_flag = getattr(self, '_cleared_data_for_403', False)
 
-                    # Kill Chrome
-                    self._kill_chrome()
-                    self.close()
-                    time.sleep(2)
+                    if self._consecutive_403 < 3 and not cleared_flag:
+                        # Bước 1: Reset Chrome (lần 1 và 2)
+                        self.log(f"⚠️ 403 error (lần {self._consecutive_403}/3) - RESET CHROME!", "WARN")
+                        self._kill_chrome()
+                        self.close()
+                        time.sleep(2)
 
-                    # Đổi proxy nếu có
-                    if self._use_webshare and self._webshare_proxy:
-                        success, msg = self._webshare_proxy.rotate_ip(self.worker_id, "403 reCAPTCHA")
-                        self.log(f"  → Webshare rotate: {msg}", "WARN")
+                    elif self._consecutive_403 >= 3 and not cleared_flag:
+                        # Bước 2: Lần 3 → Xóa dữ liệu + đăng nhập lại NGAY
+                        self.log(f"⚠️ 403 lần {self._consecutive_403} → XÓA DỮ LIỆU + ĐĂNG NHẬP LẠI!", "WARN")
+                        # QUAN TRỌNG: Clear data TRƯỚC khi đóng Chrome (vì cần driver để navigate)
+                        self.clear_chrome_data()
+                        time.sleep(1)
+                        # Login lại (sẽ tự đóng Chrome cũ và login)
+                        self._auto_login_google()
+                        self._cleared_data_for_403 = True
+                        self._consecutive_403 = 0  # Reset counter sau khi clear
 
-                    # === IPv6: Sau N lần 403 liên tiếp, ACTIVATE hoặc ROTATE IPv6 ===
-                    rotate_ipv6 = False
-                    if self._consecutive_403 >= self._max_403_before_ipv6:
-                        self._consecutive_403 = 0  # Reset counter
+                    else:
+                        # Bước 3: Đã clear data vẫn 403 → Đổi IPv6
+                        self.log(f"⚠️ 403 sau khi clear data → ĐỔI IPv6!", "WARN")
+                        self._cleared_data_for_403 = False  # Reset flag
+                        self._consecutive_403 = 0
 
-                        if not self._ipv6_activated:
-                            # Lần đầu: Activate IPv6
-                            self.log(f"  → 🌐 ACTIVATE IPv6 MODE (lần đầu)...")
-                            self._activate_ipv6()
-                        else:
-                            # Đã activate: Rotate sang IP khác
-                            self.log(f"  → 🔄 Rotate sang IPv6 khác...")
-                            rotate_ipv6 = True
+                        if self._ipv6_rotator and self._ipv6_activated:
+                            new_ip = self._ipv6_rotator.rotate()
+                            if new_ip:
+                                self.log(f"  → 🌐 IPv6 mới: {new_ip}")
+                                if hasattr(self, '_ipv6_proxy') and self._ipv6_proxy:
+                                    self._ipv6_proxy.set_ipv6(new_ip)
+                            else:
+                                self.log(f"  → ⚠️ Không rotate được IPv6!", "WARN")
 
-                    # Restart Chrome (có thể kèm IPv6 rotation)
-                    project_url = getattr(self, '_current_project_url', None)
-                    if self.restart_chrome(rotate_ipv6=rotate_ipv6):
+                    # Extend retries để đủ cho cả flow: reset x2 → clear data → IPv6 rotation
+                    if effective_max_retries < 6:
+                        effective_max_retries = 6
+                        self.log(f"  → Extend retries to {effective_max_retries} for 403 handling")
+
+                    # Restart Chrome
+                    if self.restart_chrome(rotate_ipv6=False):
                         self.log("  → Chrome restarted, tiếp tục...")
-                        continue  # Thử lại 1 lần sau khi reset
+                        attempt += 1
+                        continue
                     else:
                         return False, [], "Không restart được Chrome sau 403"
 
@@ -3120,31 +3361,29 @@ class DrissionFlowAPI:
                         except Exception as e:
                             self.log(f"✗ Download failed: {e}", "WARN")
 
-        # F5 refresh sau mỗi ảnh thành công để tránh 403 cho prompt tiếp theo
+        # Restart Chrome sau mỗi ảnh (giống như 403 reset)
+        # restart_chrome() đã có sẵn: navigate + inject JS
+        self.log("🔄 Restarting Chrome...")
         try:
-            if self.driver:
-                self.driver.refresh()
-                # Đợi page load hoàn toàn
-                time.sleep(3)
-                # Đợi textarea xuất hiện (page đã load xong)
-                for _ in range(10):
-                    textarea = self.driver.ele("tag:textarea", timeout=1)
-                    if textarea:
-                        break
-                    time.sleep(0.5)
-                # Re-inject JS Interceptor sau khi refresh (bị mất sau F5)
-                self._reset_tokens()
-                self.driver.run_js(JS_INTERCEPTOR)
-                # Click vào textarea để focus
-                self._click_textarea()
-                self.log("🔄 Refreshed + ready")
+            # Đóng Chrome
+            self._kill_chrome()
+            self.close()
+            time.sleep(2)
+
+            # Restart Chrome (setup() sẽ navigate + inject JS)
+            if self.restart_chrome(rotate_ipv6=False):
+                self.log("✓ Chrome restarted!")
+            else:
+                self.log("⚠️ Restart Chrome failed", "WARN")
+
         except Exception as e:
-            self.log(f"⚠️ Refresh warning: {e}", "WARN")
+            self.log(f"⚠️ Restart error: {e}", "WARN")
 
         # Reset 403 counter khi thành công
-        if self._consecutive_403 > 0:
+        if self._consecutive_403 > 0 or getattr(self, '_cleared_data_for_403', False):
             self.log(f"[IPv6] Reset 403 counter (was {self._consecutive_403})")
             self._consecutive_403 = 0
+            self._cleared_data_for_403 = False
 
         return True, images, None
 
@@ -3800,14 +4039,10 @@ class DrissionFlowAPI:
                 if self.driver:
                     self.log("[VIDEO] 🔄 F5 refresh để tránh 403...")
                     self.driver.refresh()
-                    # Đợi page load hoàn toàn
-                    time.sleep(3)
-                    # Đợi textarea xuất hiện (page đã load xong)
-                    for _ in range(10):
-                        textarea = self.driver.ele("tag:textarea", timeout=1)
-                        if textarea:
-                            break
-                        time.sleep(0.5)
+                    # Đợi textarea xuất hiện = page load xong (tự động F5 nếu không thấy)
+                    if not self._wait_for_textarea_visible():
+                        self.log("[VIDEO] ⚠️ Không thấy textarea sau nhiều lần F5", "WARN")
+
                     # Re-inject JS Interceptor sau khi refresh (bị mất sau F5)
                     self._reset_tokens()
                     self.driver.run_js(JS_INTERCEPTOR)
@@ -4293,7 +4528,8 @@ class DrissionFlowAPI:
         4. Interceptor catch T2V request và convert sang I2V:
            - Đổi URL: batchAsyncGenerateVideoText → batchAsyncGenerateVideoReferenceImages
            - Thêm referenceImages với mediaId
-           - Đổi model: veo_3_1_t2v → veo_3_0_r2v (giữ suffix _fast_ultra)
+           - CHỈ đổi model: _t2v_ → _r2v_ (giữ nguyên _landscape_, _relaxed, veo_3_1, etc.)
+           - GIỮ seed (I2V cần seed)
         5. Chrome gửi I2V request với fresh reCAPTCHA!
 
         Args:
@@ -4327,46 +4563,55 @@ class DrissionFlowAPI:
             )
 
             if success:
-                if self._consecutive_403 > 0:
+                if self._consecutive_403 > 0 or getattr(self, '_cleared_data_for_403', False):
                     self.log(f"[T2V→I2V] Reset 403 counter (was {self._consecutive_403})")
                     self._consecutive_403 = 0
+                    self._cleared_data_for_403 = False
                 return True, result, None
 
             if error:
                 last_error = error
 
-                # === 403 ERROR: RESET CHROME + IPv6 + CLEAR DATA ===
+                # === 403 ERROR HANDLING ===
+                # Logic: 403 → Reset Chrome (3 lần) → Clear data + login lại → Đổi IPv6
                 if "403" in str(error):
                     self._consecutive_403 += 1
-                    self.log(f"[T2V→I2V] ⚠️ 403 error (lần {self._consecutive_403}) - RESET CHROME!", "WARN")
+                    cleared_flag = getattr(self, '_cleared_data_for_403', False)
 
-                    # Sau 3 lần 403 liên tiếp, clear Chrome data để reset reCAPTCHA
-                    if self._consecutive_403 >= 3:
-                        self.log(f"[T2V→I2V] 🗑️ 403 liên tiếp {self._consecutive_403} lần → CLEAR CHROME DATA!")
+                    if self._consecutive_403 <= 3 and not cleared_flag:
+                        # Bước 1: Reset Chrome (tối đa 3 lần)
+                        self.log(f"[T2V→I2V] ⚠️ 403 error (lần {self._consecutive_403}/3) - RESET CHROME!", "WARN")
+                        self._kill_chrome()
+                        self.close()
+                        time.sleep(2)
+
+                    elif self._consecutive_403 == 4 or (self._consecutive_403 > 3 and not cleared_flag):
+                        # Bước 2: Sau 3 lần reset vẫn 403 → Xóa dữ liệu + đăng nhập lại
+                        self.log(f"[T2V→I2V] ⚠️ 403 sau 3 lần reset → XÓA DỮ LIỆU + ĐĂNG NHẬP LẠI!", "WARN")
                         self.clear_chrome_data()
+                        time.sleep(1)
+                        # Login lại (sẽ tự đóng Chrome cũ và login)
+                        self._auto_login_google()
+                        self._cleared_data_for_403 = True
                         self._consecutive_403 = 0
-                        # Sau clear data cần login lại - return để user xử lý
-                        return False, None, "403 liên tiếp - Đã clear Chrome data, cần login lại Google!"
 
-                    self._kill_chrome()
-                    self.close()
-                    time.sleep(2)
-
-                    if self._use_webshare and self._webshare_proxy:
-                        success_rotate, msg = self._webshare_proxy.rotate_ip(self.worker_id, "T2V 403")
-                        self.log(f"[T2V→I2V] → Webshare rotate: {msg}", "WARN")
-
-                    rotate_ipv6 = False
-                    if self._consecutive_403 >= self._max_403_before_ipv6:
+                    else:
+                        # Bước 3: Đã clear data vẫn 403 → Đổi IPv6
+                        self.log(f"[T2V→I2V] ⚠️ 403 sau khi clear data → ĐỔI IPv6!", "WARN")
+                        self._cleared_data_for_403 = False
                         self._consecutive_403 = 0
-                        if not self._ipv6_activated:
-                            self.log(f"[T2V→I2V] → 🌐 ACTIVATE IPv6 MODE (lần đầu)...")
-                            self._activate_ipv6()
-                        else:
-                            self.log(f"[T2V→I2V] → 🔄 Rotate sang IPv6 khác...")
-                            rotate_ipv6 = True
+                        self._kill_chrome()
+                        self.close()
+                        time.sleep(2)
 
-                    if self.restart_chrome(rotate_ipv6=rotate_ipv6):
+                        if self._ipv6_rotator and self._ipv6_activated:
+                            new_ip = self._ipv6_rotator.rotate()
+                            if new_ip:
+                                self.log(f"[T2V→I2V] → 🌐 IPv6 mới: {new_ip}")
+                                if hasattr(self, '_ipv6_proxy') and self._ipv6_proxy:
+                                    self._ipv6_proxy.set_ipv6(new_ip)
+
+                    if self.restart_chrome(rotate_ipv6=False):
                         self.log("[T2V→I2V] → Chrome restarted, tiếp tục...")
                         continue
                     else:
@@ -4387,6 +4632,57 @@ class DrissionFlowAPI:
                         if self.restart_chrome():
                             continue
 
+                # === 400 ERROR: Invalid argument - có thể do mediaId hết hạn hoặc payload sai ===
+                if "400" in str(error):
+                    self._consecutive_403 += 1  # Dùng chung counter với 403
+                    self.log(f"[T2V→I2V] ⚠️ 400 error (lần {self._consecutive_403}) - Invalid argument!", "WARN")
+                    self.log(f"[T2V→I2V] → Error details: {error}", "WARN")
+
+                    # Đợi 3 giây để user thấy lỗi trước khi reset
+                    time.sleep(3)
+
+                    # Sau 3 lần liên tiếp, đổi IPv6 và thử lại
+                    if self._consecutive_403 >= 3:
+                        self.log(f"[T2V→I2V] 🔄 {self._consecutive_403} lỗi liên tiếp → ROTATE IPv6 + RESET CHROME!")
+
+                        self._kill_chrome()
+                        self.close()
+                        time.sleep(2)
+
+                        if self._use_webshare and self._webshare_proxy:
+                            success_rotate, msg = self._webshare_proxy.rotate_ip(self.worker_id, "T2V 400")
+                            self.log(f"[T2V→I2V] → Webshare rotate: {msg}", "WARN")
+
+                        # Rotate IPv6
+                        if not self._ipv6_activated:
+                            self.log(f"[T2V→I2V] → 🌐 ACTIVATE IPv6 MODE (lần đầu)...")
+                            self._activate_ipv6()
+                        else:
+                            self.log(f"[T2V→I2V] → 🔄 Rotate sang IPv6 khác...")
+                            if self._ipv6_rotator:
+                                new_ip = self._ipv6_rotator.rotate()
+                                if new_ip and hasattr(self, '_ipv6_proxy') and self._ipv6_proxy:
+                                    self._ipv6_proxy.set_ipv6(new_ip)
+
+                        self._consecutive_403 = 0
+
+                        if attempt < max_retries - 1:
+                            if self.restart_chrome(rotate_ipv6=True):
+                                self.log("[T2V→I2V] → Chrome restarted, tiếp tục...")
+                                continue
+                    else:
+                        # Chưa đến 3 lần, chỉ reset Chrome mà không đổi IPv6
+                        self._kill_chrome()
+                        self.close()
+                        time.sleep(2)
+
+                        if attempt < max_retries - 1:
+                            if self.restart_chrome():
+                                self.log("[T2V→I2V] → Chrome restarted, thử lại...")
+                                continue
+
+                    return False, None, error
+
                 # === 500 ERROR ===
                 if "500" in str(error):
                     self.log(f"[T2V→I2V] ⚠️ 500 Internal Error (attempt {attempt+1}/{max_retries})", "WARN")
@@ -4394,6 +4690,9 @@ class DrissionFlowAPI:
                         time.sleep(3)
                         continue
 
+                # === OTHER ERROR: Đợi để hiển thị lỗi trước khi return ===
+                self.log(f"[T2V→I2V] ⚠️ Error: {error}", "WARN")
+                time.sleep(2)  # Đợi 2 giây để user thấy lỗi
                 return False, None, error
 
         return False, None, last_error or "Max retries exceeded"
@@ -4408,8 +4707,23 @@ class DrissionFlowAPI:
         timeout: int
     ) -> Tuple[bool, Optional[str], Optional[str]]:
         """Thực hiện tạo video T2V mode một lần (không retry)."""
-        self.log(f"[T2V→I2V] Tạo video từ media: {media_id[:50]}...")
-        self.log(f"[T2V→I2V] Prompt: {prompt[:60]}...")
+
+        # === VALIDATION: Kiểm tra input trước khi gửi ===
+        if not media_id or len(media_id) < 10:
+            return False, None, f"Invalid media_id: '{media_id}' - quá ngắn hoặc rỗng"
+
+        if not prompt or len(prompt.strip()) < 3:
+            return False, None, f"Invalid prompt: '{prompt}' - quá ngắn hoặc rỗng"
+
+        # Kiểm tra format media_id (thường bắt đầu bằng số hoặc có dấu /)
+        if not any(c.isdigit() for c in media_id):
+            self.log(f"[T2V→I2V] ⚠️ Media ID không có số: {media_id[:50]} - có thể sai format!", "WARN")
+
+        self.log(f"[T2V→I2V] ══════════════════════════════════════════")
+        self.log(f"[T2V→I2V] Tạo video với:")
+        self.log(f"[T2V→I2V]   → Media ID: {media_id[:60]}...")
+        self.log(f"[T2V→I2V]   → Prompt: {prompt[:60]}...")
+        self.log(f"[T2V→I2V]   → Model: {video_model}")
 
         # 1. Chuyển sang T2V mode + Lower Priority model
         # CHỈ LÀM LẦN ĐẦU khi mới mở Chrome - sau F5 refresh không cần làm lại
@@ -4442,7 +4756,13 @@ class DrissionFlowAPI:
             "videoModelKey": video_model
         }
         self.driver.run_js(f"window._t2vToI2vConfig = {json.dumps(t2v_config)};")
-        self.log(f"[T2V→I2V] ✓ Config ready (mediaId: {media_id[:40]}...)")
+
+        # Verify config được set đúng
+        verify_config = self.driver.run_js("return window._t2vToI2vConfig;")
+        if not verify_config or not verify_config.get('mediaId'):
+            return False, None, "Failed to set T2V→I2V config in browser"
+
+        self.log(f"[T2V→I2V] ✓ Config verified (mediaId: {verify_config.get('mediaId', '')[:40]}...)")
 
         # 3. Tìm textarea và nhập prompt
         textarea = self._find_textarea()
@@ -5245,6 +5565,10 @@ class DrissionFlowAPI:
                     new_ip = rotator.rotate()
                     if new_ip:
                         self.log(f"✓ IPv6 changed to: {new_ip}")
+                        # Cập nhật SOCKS5 proxy với IPv6 mới
+                        if hasattr(self, '_ipv6_proxy') and self._ipv6_proxy:
+                            self._ipv6_proxy.set_ipv6(new_ip)
+                            self.log(f"✓ SOCKS5 proxy updated")
                     else:
                         self.log("⚠️ IPv6 rotation failed, continuing anyway...")
             except Exception as e:

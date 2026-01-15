@@ -2176,12 +2176,19 @@ Trả về JSON:"""
 
                 # Check if this is a child character
                 is_child = char_data.get("is_child", False)
+                status = char_data.get("status", "pending")
 
                 # If portrait_prompt is DO_NOT_GENERATE, this is a child (no reference image)
                 if portrait_prompt == "DO_NOT_GENERATE":
                     is_child = True
+                    status = "skip"  # Auto set status để bỏ qua tạo ảnh
                     # Keep DO_NOT_GENERATE as marker - don't replace with character_lock
-                    self.logger.info(f"  -> Child character detected: {char_data.get('id', '')} - will use inline description")
+                    self.logger.info(f"  -> Child character detected: {char_data.get('id', '')} - status=skip, will use inline description")
+
+                # Nếu is_child=True nhưng status chưa set, set luôn
+                if is_child and status == "pending":
+                    status = "skip"
+                    self.logger.info(f"  -> Child character: {char_data.get('id', '')} - status=skip (no image generation)")
 
                 characters.append(Character(
                     id=char_data.get("id", ""),
@@ -2191,6 +2198,7 @@ Trả về JSON:"""
                     character_lock=character_lock,    # For scene prompts (IMPORTANT!)
                     vietnamese_prompt=char_data.get("vietnamese_prompt", char_data.get("vietnamese_description", "")),
                     is_child=is_child,
+                    status=status,  # skip cho trẻ em, pending cho người lớn
                 ))
 
             # Extract locations (v5.0 format)

@@ -1084,6 +1084,7 @@ class SmartEngine:
             # Tim cot ID va Prompt
             id_col = None
             prompt_col = None
+            status_col = None  # Thêm cột status để check skip
 
             for i, h in enumerate(headers):
                 if h is None:
@@ -1098,6 +1099,8 @@ class SmartEngine:
                     prompt_col = i
                 elif prompt_col is None and 'prompt' in h_lower and 'video' not in h_lower:
                     prompt_col = i
+                if status_col is None and h_lower == 'status':
+                    status_col = i
 
             if id_col is None or prompt_col is None:
                 continue
@@ -1108,15 +1111,17 @@ class SmartEngine:
 
                 pid = row[id_col]
                 prompt = row[prompt_col]
+                status = row[status_col] if status_col is not None and status_col < len(row) else None
 
                 if not pid or not prompt:
                     continue
 
                 pid_str = str(pid).strip()
                 prompt_str = str(prompt).strip()
+                status_str = str(status).lower().strip() if status else ""
 
-                # Skip children (DO_NOT_GENERATE)
-                if prompt_str == "DO_NOT_GENERATE":
+                # Skip children (status="skip" hoặc DO_NOT_GENERATE)
+                if status_str == "skip" or prompt_str == "DO_NOT_GENERATE":
                     continue
 
                 # CHI lay character/location prompts (nv*, loc*)
@@ -3822,6 +3827,7 @@ class SmartEngine:
             ref_col = None  # reference_files column
             chars_col = None  # characters_used column
             loc_col = None  # location_used column
+            status_col = None  # status column để check skip
 
             for i, h in enumerate(headers):
                 if h is None:
@@ -3862,6 +3868,10 @@ class SmartEngine:
                 if loc_col is None and ('location' in h_lower or 'loc' in h_lower) and 'used' in h_lower:
                     loc_col = i
 
+                # Tim cot status để skip trẻ vị thành niên
+                if status_col is None and h_lower == 'status':
+                    status_col = i
+
             # Debug: Log các cột đã tìm thấy
             self.log(f"  [COLS] chars_col={chars_col}, loc_col={loc_col}, ref_col={ref_col}")
 
@@ -3887,15 +3897,17 @@ class SmartEngine:
 
                 pid = row[id_col]
                 prompt = row[prompt_col]
+                status = row[status_col] if status_col is not None and status_col < len(row) else None
 
                 if not pid or not prompt:
                     continue
 
                 pid_str = str(pid).strip()
                 prompt_str = str(prompt).strip()
+                status_str = str(status).lower().strip() if status else ""
 
-                # Skip DO_NOT_GENERATE markers (child characters, placeholders)
-                if prompt_str == "DO_NOT_GENERATE" or prompt_str.upper() == "DO_NOT_GENERATE":
+                # Skip children (status="skip" hoặc DO_NOT_GENERATE)
+                if status_str == "skip" or prompt_str == "DO_NOT_GENERATE" or prompt_str.upper() == "DO_NOT_GENERATE":
                     continue
 
                 # Get video_prompt if available (for Image-to-Video)

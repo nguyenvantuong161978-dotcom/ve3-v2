@@ -191,7 +191,7 @@ class IPv6SocksProxy:
             return None
 
     def _connect_via_ipv6(self, host: str, port: int) -> Optional[socket.socket]:
-        """Connect to target - CHỈ dùng IPv6, KHÔNG fallback IPv4."""
+        """Connect to target - CHỈ dùng IPv6 và BIND vào source IPv6 cụ thể."""
         try:
             # CHỈ dùng IPv6 - ÉP BUỘC
             addrinfo = socket.getaddrinfo(host, port, socket.AF_INET6, socket.SOCK_STREAM)
@@ -203,8 +203,17 @@ class IPv6SocksProxy:
             family, socktype, proto, canonname, sockaddr = addrinfo[0]
             sock = socket.socket(family, socktype, proto)
             sock.settimeout(30)
+
+            # === QUAN TRỌNG: BIND vào IPv6 cụ thể để ép dùng đúng source IP ===
+            if self.ipv6_address:
+                try:
+                    # Bind socket vào IPv6 address đã chọn (port 0 = OS chọn port tự do)
+                    sock.bind((self.ipv6_address, 0, 0, 0))  # (host, port, flowinfo, scope_id)
+                except Exception as bind_err:
+                    self.log(f"[IPv6-Proxy] Bind warning: {bind_err}")
+                    # Vẫn thử connect dù bind fail
+
             sock.connect(sockaddr)
-            self.log(f"[IPv6-Proxy] ✓ Connected via IPv6: {host}")
             return sock
 
         except Exception as e:
