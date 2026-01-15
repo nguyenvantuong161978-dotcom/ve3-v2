@@ -2981,27 +2981,29 @@ class DrissionFlowAPI:
                     else:
                         return False, [], error
 
-                # Nếu lỗi 403, ROTATE IPv6 NGAY + RESET CHROME
+                # Nếu lỗi 403: Reset Chrome, sau 3 lần thì đổi IPv6
                 if "403" in error:
                     self._consecutive_403 += 1
-                    self.log(f"⚠️ 403 error (lần {self._consecutive_403}) - ROTATE IPv6!", "WARN")
+                    self.log(f"⚠️ 403 error (lần {self._consecutive_403}/3) - RESET CHROME!", "WARN")
 
                     # Kill Chrome
                     self._kill_chrome()
                     self.close()
                     time.sleep(2)
 
-                    # ROTATE IPv6 NGAY (không đợi nhiều lần)
-                    if self._ipv6_rotator and self._ipv6_activated:
-                        self.log(f"  → 🔄 Rotating IPv6...")
-                        new_ip = self._ipv6_rotator.rotate()
-                        if new_ip:
-                            self.log(f"  → 🌐 IPv6 mới: {new_ip}")
-                        else:
-                            self.log(f"  → ⚠️ Không rotate được IPv6!", "WARN")
+                    # Sau 3 lần 403 liên tiếp → đổi IPv6
+                    if self._consecutive_403 >= 3:
+                        self._consecutive_403 = 0
+                        if self._ipv6_rotator and self._ipv6_activated:
+                            self.log(f"  → 🔄 3 lần 403 → Rotating IPv6...")
+                            new_ip = self._ipv6_rotator.rotate()
+                            if new_ip:
+                                self.log(f"  → 🌐 IPv6 mới: {new_ip}")
+                            else:
+                                self.log(f"  → ⚠️ Không rotate được IPv6!", "WARN")
 
                     # Restart Chrome
-                    if self.restart_chrome(rotate_ipv6=False):  # IPv6 đã rotate ở trên
+                    if self.restart_chrome(rotate_ipv6=False):
                         self.log("  → Chrome restarted, tiếp tục...")
                         continue  # Thử lại sau khi reset
                     else:
@@ -4368,13 +4370,13 @@ class DrissionFlowAPI:
             if error:
                 last_error = error
 
-                # === 403 ERROR: ROTATE IPv6 NGAY + RESET CHROME ===
+                # === 403 ERROR: Reset Chrome, sau 3 lần thì đổi IPv6 ===
                 if "403" in str(error):
                     self._consecutive_403 += 1
-                    self.log(f"[T2V→I2V] ⚠️ 403 error (lần {self._consecutive_403}) - ROTATE IPv6!", "WARN")
+                    self.log(f"[T2V→I2V] ⚠️ 403 error (lần {self._consecutive_403}/3) - RESET CHROME!", "WARN")
 
-                    # Sau 5 lần 403 liên tiếp (đã thử hết IPv6), clear Chrome data
-                    if self._consecutive_403 >= 5:
+                    # Sau 9 lần 403 liên tiếp (đã thử 3 vòng IPv6), clear Chrome data
+                    if self._consecutive_403 >= 9:
                         self.log(f"[T2V→I2V] 🗑️ 403 liên tiếp {self._consecutive_403} lần → CLEAR CHROME DATA!")
                         self.clear_chrome_data()
                         self._consecutive_403 = 0
@@ -4384,16 +4386,17 @@ class DrissionFlowAPI:
                     self.close()
                     time.sleep(2)
 
-                    # ROTATE IPv6 NGAY khi gặp 403 (không đợi nhiều lần)
-                    if self._ipv6_rotator and self._ipv6_activated:
-                        self.log(f"[T2V→I2V] → 🔄 Rotating IPv6...")
-                        new_ip = self._ipv6_rotator.rotate()
-                        if new_ip:
-                            self.log(f"[T2V→I2V] → 🌐 IPv6 mới: {new_ip}")
-                        else:
-                            self.log(f"[T2V→I2V] → ⚠️ Không rotate được IPv6!", "WARN")
+                    # Sau 3 lần 403 liên tiếp → đổi IPv6
+                    if self._consecutive_403 >= 3 and self._consecutive_403 % 3 == 0:
+                        if self._ipv6_rotator and self._ipv6_activated:
+                            self.log(f"[T2V→I2V] → 🔄 3 lần 403 → Rotating IPv6...")
+                            new_ip = self._ipv6_rotator.rotate()
+                            if new_ip:
+                                self.log(f"[T2V→I2V] → 🌐 IPv6 mới: {new_ip}")
+                            else:
+                                self.log(f"[T2V→I2V] → ⚠️ Không rotate được IPv6!", "WARN")
 
-                    if self.restart_chrome(rotate_ipv6=False):  # IPv6 đã rotate ở trên
+                    if self.restart_chrome(rotate_ipv6=False):
                         self.log("[T2V→I2V] → Chrome restarted, tiếp tục...")
                         continue
                     else:
