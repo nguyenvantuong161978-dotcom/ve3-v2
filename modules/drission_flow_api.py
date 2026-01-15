@@ -1434,6 +1434,61 @@ class DrissionFlowAPI:
         except Exception as e:
             pass
 
+    def clear_cookies_only(self) -> bool:
+        """
+        Chỉ xóa cookies và cache, GIỮA LẠI Login Data.
+        Dùng khi restart sau mỗi ảnh để reset reCAPTCHA mà không mất login.
+
+        Returns:
+            True nếu xóa thành công
+        """
+        import shutil
+
+        try:
+            self.log("🗑️ Clearing cookies & cache (giữ login)...")
+
+            # Đóng Chrome trước
+            self._kill_chrome()
+            time.sleep(1)
+
+            profile_path = self.profile_dir
+            if not profile_path or not profile_path.exists():
+                self.log("⚠️ Profile directory not found", "WARN")
+                return False
+
+            # Chỉ xóa cookies, cache - KHÔNG xóa Login Data
+            items_to_clear = [
+                "Cookies", "Cookies-journal",
+                "Cache", "Code Cache", "GPUCache",
+                "Session Storage", "Local Storage",
+                "IndexedDB", "Service Worker",
+                # Default/ subfolder
+                "Default/Cookies", "Default/Cookies-journal",
+                "Default/Cache", "Default/Code Cache", "Default/GPUCache",
+                "Default/Session Storage", "Default/Local Storage",
+                "Default/IndexedDB", "Default/Service Worker",
+            ]
+
+            cleared = 0
+            for item in items_to_clear:
+                target = profile_path / item
+                if target.exists():
+                    try:
+                        if target.is_dir():
+                            shutil.rmtree(target)
+                        else:
+                            target.unlink()
+                        cleared += 1
+                    except:
+                        pass
+
+            self.log(f"✓ Cleared {cleared} items (Login Data kept)")
+            return True
+
+        except Exception as e:
+            self.log(f"⚠️ Clear cookies error: {e}", "WARN")
+            return False
+
     def clear_chrome_data(self) -> bool:
         """
         Xóa dữ liệu Chrome profile (cookies, cache, localStorage...) để reset reCAPTCHA score.
@@ -3248,15 +3303,17 @@ class DrissionFlowAPI:
                         except Exception as e:
                             self.log(f"✗ Download failed: {e}", "WARN")
 
-        # Restart Chrome sau mỗi ảnh để tránh 403
-        # (Logic 403 handling: 3 lần fail → clear data → fail nữa → đổi IPv6
-        #  đã có trong phần xử lý 403 error ở trên)
-        self.log("🔄 Restarting Chrome...")
+        # Restart Chrome sau mỗi ảnh - XÓA COOKIES để reset reCAPTCHA
+        # (Giữ lại Login Data để không mất đăng nhập)
+        self.log("🔄 Restarting Chrome (clear cookies)...")
         try:
             # Lưu URL trước khi restart
             current_url = self.driver.url if self.driver else None
 
-            # Restart Chrome bình thường
+            # Xóa cookies TRƯỚC khi restart (giữ Login Data)
+            self.clear_cookies_only()
+
+            # Restart Chrome
             success = self.restart_chrome(rotate_ipv6=False)
 
             if success and current_url:
