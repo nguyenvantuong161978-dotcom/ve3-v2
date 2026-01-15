@@ -842,7 +842,10 @@ Rules:
 1. STRICT: Each scene MUST be 3-8 seconds maximum. No exceptions!
 2. Group SRT entries by visual moment, but if content > 8s, you MUST split with PURPOSE
 3. Follow the STORY SEGMENTS plan for content distribution
-4. Assign appropriate characters and locations to each scene
+4. CRITICAL: characters_used and location_used MUST use EXACT IDs from the lists above!
+   - characters_used: comma-separated IDs like "nv_hoang, nv_linh" (from CHARACTERS list)
+   - location_used: single ID like "loc_office" (from LOCATIONS list)
+   - Do NOT invent new IDs - only use what's provided!
 5. Create visual_moment description (what the viewer sees - be specific!)
 6. scene_id should start from {scene_id_counter}
 7. srt_indices should use the ORIGINAL indices shown in brackets [N]
@@ -870,13 +873,14 @@ Return JSON only:
             "duration": 5.0,
             "srt_text": "combined text from SRT entries",
             "visual_moment": "what the viewer sees in this scene",
-            "characters_used": "char_id1, char_id2",
-            "location_used": "loc_id",
+            "characters_used": "nv_xxx, nv_yyy",
+            "location_used": "loc_xxx",
             "camera": "shot type and movement",
             "lighting": "lighting description"
         }}
     ]
 }}
+NOTE: characters_used and location_used MUST match IDs from CHARACTERS/LOCATIONS lists above!
 """
 
             # Call API
