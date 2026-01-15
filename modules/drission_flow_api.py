@@ -3377,14 +3377,9 @@ class DrissionFlowAPI:
                     else:
                         return False, [], "Không restart được Chrome sau 403"
 
-                # === TIMEOUT ERROR: Reset Chrome và retry ===
+                # === TIMEOUT ERROR: Restart Chrome và retry ===
                 if "timeout" in error.lower():
-                    self.log(f"⚠️ Timeout (attempt {attempt+1}/{effective_max_retries}) - RESET CHROME!", "WARN")
-
-                    # Kill và restart Chrome
-                    self._kill_chrome()
-                    self.close()
-                    time.sleep(2)
+                    self.log(f"⚠️ Timeout (attempt {attempt+1}/{effective_max_retries}) - RESTART CHROME!", "WARN")
 
                     # Đổi proxy nếu có
                     if self._use_webshare and self._webshare_proxy:
@@ -3394,7 +3389,6 @@ class DrissionFlowAPI:
                     # Retry nếu còn lượt
                     if attempt < effective_max_retries - 1:
                         if self.restart_chrome():
-                            self.log("  → Chrome restarted, tiếp tục...")
                             attempt += 1
                             continue
                         else:
