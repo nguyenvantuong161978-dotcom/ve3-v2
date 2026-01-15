@@ -2133,9 +2133,9 @@ class DrissionFlowAPI:
         Textarea là dấu hiệu page đã load xong.
         PHẢI verify textarea thật sự visible, không chỉ có trong DOM.
         """
-        # IPv6 cần timeout dài hơn
+        # Timeout tối đa 10s là đủ
         if timeout is None:
-            timeout = 20 if getattr(self, '_ipv6_activated', False) else 10
+            timeout = 10
 
         for refresh_count in range(max_refresh + 1):
             self.log(f"[TEXTAREA] Đợi textarea... (timeout={timeout}s, lần {refresh_count + 1}/{max_refresh + 1})")
