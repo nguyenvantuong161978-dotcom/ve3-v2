@@ -3324,6 +3324,10 @@ class DrissionFlowAPI:
 
                 # Đợi textarea
                 if self._wait_for_textarea_visible():
+                    # RE-INJECT JS INTERCEPTOR sau khi navigate!
+                    self.log("   → Re-injecting JS Interceptor...")
+                    self._reset_tokens()
+                    self.driver.run_js(JS_INTERCEPTOR)
                     self.log("✓ Chrome restarted!")
                 else:
                     self.log("⚠️ Không thấy textarea sau restart", "WARN")
