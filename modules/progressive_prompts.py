@@ -1434,7 +1434,7 @@ Create exactly {image_count} scenes!"""
 
         # Process in batches - PARALLEL processing
         BATCH_SIZE = 15
-        MAX_PARALLEL = 4  # Max concurrent API calls
+        MAX_PARALLEL = self.config.get("max_parallel_api", 6)  # From settings.yaml
         all_plans = []
 
         # Prepare all batches
@@ -1663,7 +1663,7 @@ Return JSON only:
 
         # Process in batches - PARALLEL API calls
         total_created = 0
-        MAX_PARALLEL = 4  # Max concurrent API calls
+        MAX_PARALLEL = self.config.get("max_parallel_api", 6)  # From settings.yaml
 
         # Prepare all batches
         all_batches = []
