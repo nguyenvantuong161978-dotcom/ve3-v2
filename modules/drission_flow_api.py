@@ -1056,9 +1056,10 @@ class DrissionFlowAPI:
         except:
             self._max_403_before_ipv6 = 3
 
-        # T2V mode tracking: chỉ chọn mode/model lần đầu khi mới mở Chrome
+        # Mode tracking: chỉ chọn mode/model lần đầu khi mới mở Chrome
         # Sau F5 refresh thì trang vẫn giữ mode/model đã chọn, không cần chọn lại
         self._t2v_mode_selected = False  # True = đã chọn T2V mode + Lower Priority model
+        self._image_mode_selected = False  # True = đã chọn Image mode
 
     def log(self, msg: str, level: str = "INFO"):
         """Log message - chỉ dùng 1 trong 2: callback hoặc print."""
@@ -1618,6 +1619,7 @@ class DrissionFlowAPI:
 
                         # Reset flags
                         self._t2v_mode_selected = False
+                        self._image_mode_selected = False
                         self.log("✓ Chrome data cleared!")
                         self.log("⚠️ Cần login lại Google!")
                         return True
@@ -1695,6 +1697,7 @@ class DrissionFlowAPI:
             # 3. Reset tất cả flags
             self._ready = False
             self._t2v_mode_selected = False
+            self._image_mode_selected = False
             self._consecutive_403 = 0
             self._cleared_data_for_403 = False
             self.driver = None
@@ -3198,6 +3201,16 @@ class DrissionFlowAPI:
         """
         if not self._ready:
             return False, [], "API chưa setup! Gọi setup() trước."
+
+        # Chọn mode "Tạo hình ảnh" nếu chưa chọn
+        if not getattr(self, '_image_mode_selected', False):
+            self.log("[Image] Chọn mode 'Tạo hình ảnh'...")
+            if self.switch_to_image_mode():
+                self._image_mode_selected = True
+                self.log("[Image] ✓ Đã chọn Image mode")
+                time.sleep(0.5)
+            else:
+                self.log("[Image] ⚠️ Không chọn được mode, thử tiếp...", "WARN")
 
         # Nếu đang dùng fallback model (do quota), override force_model
         if self._use_fallback_model:
@@ -5599,8 +5612,9 @@ class DrissionFlowAPI:
 
         self._ready = False
 
-        # Reset T2V mode state - cần chọn lại khi mở Chrome mới
+        # Reset mode state - cần chọn lại khi mở Chrome mới
         self._t2v_mode_selected = False
+        self._image_mode_selected = False
 
     def _kill_chrome_using_profile(self):
         """Tắt Chrome đang dùng profile này để tránh conflict."""
