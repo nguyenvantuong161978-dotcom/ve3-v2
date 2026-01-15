@@ -1322,7 +1322,7 @@ class DrissionFlowAPI:
     def _is_logged_out(self) -> bool:
         """
         Kiểm tra xem Chrome có bị logout khỏi Google không.
-        Check cả URL và element trong trang.
+        Chỉ check URL redirect về trang login Google.
         """
         try:
             if not self.driver:
@@ -1330,7 +1330,7 @@ class DrissionFlowAPI:
 
             current_url = self.driver.url or ""
 
-            # 1. Check URL redirect về trang login Google
+            # Check URL redirect về trang login Google
             logout_url_indicators = [
                 "accounts.google.com/signin",
                 "accounts.google.com/v3/signin",
@@ -1341,46 +1341,6 @@ class DrissionFlowAPI:
                 if indicator in current_url:
                     self.log(f"[LOGOUT] Detected via URL: {indicator}")
                     return True
-
-            # 2. Check element "Sign in" button/link trong trang Flow
-            try:
-                # Button hoặc link yêu cầu đăng nhập
-                signin_selectors = [
-                    'text=Sign in',
-                    'text=Đăng nhập',
-                    'button:has-text("Sign in")',
-                    'a:has-text("Sign in")',
-                    '[data-authuser]',  # Google auth element
-                ]
-                for sel in signin_selectors:
-                    el = self.driver.ele(sel, timeout=0.5)
-                    if el:
-                        # Verify không phải element nhỏ/ẩn
-                        try:
-                            if el.rect.get('width', 0) > 50 and el.rect.get('height', 0) > 20:
-                                self.log(f"[LOGOUT] Detected via element: {sel}")
-                                return True
-                        except:
-                            pass
-            except:
-                pass
-
-            # 3. Check page content có "session expired" không
-            try:
-                page_text = self.driver.html or ""
-                expired_indicators = [
-                    "session has expired",
-                    "sign in again",
-                    "phiên đã hết hạn",
-                    "đăng nhập lại",
-                ]
-                page_lower = page_text.lower()
-                for indicator in expired_indicators:
-                    if indicator in page_lower:
-                        self.log(f"[LOGOUT] Detected via text: {indicator}")
-                        return True
-            except:
-                pass
 
         except Exception as e:
             pass
