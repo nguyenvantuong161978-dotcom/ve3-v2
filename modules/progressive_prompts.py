@@ -882,11 +882,13 @@ Return JSON only:
             # Save scenes to Excel
             try:
                 for scene_data in data["scenes"]:
+                    # Đảm bảo scene_id là integer (không phải 1.0, 2.0...)
                     scene_id = scene_data.get("scene_id")
+                    scene_id = int(scene_id) if scene_id else 0
 
                     # Find original scene from director plan
                     # Convert to string để tránh lỗi so sánh int vs string
-                    original = next((s for s in batch if str(s.get("scene_id")) == str(scene_id)), None)
+                    original = next((s for s in batch if str(int(s.get("scene_id", 0))) == str(scene_id)), None)
                     if not original:
                         self._log(f"    WARNING: scene_id {scene_id} not found in batch (batch IDs: {[s.get('scene_id') for s in batch]})", "WARN")
                         continue

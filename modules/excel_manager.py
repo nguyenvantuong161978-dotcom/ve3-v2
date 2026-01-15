@@ -818,7 +818,9 @@ class PromptWorkbook:
         # Thêm scenes
         for scene in scenes_data:
             next_row = ws.max_row + 1
-            ws.cell(row=next_row, column=1, value=scene.get("scene_id", 0))
+            # Đảm bảo scene_id là integer, không phải float (1.0 -> 1)
+            scene_id = scene.get("scene_id", 0)
+            ws.cell(row=next_row, column=1, value=int(scene_id) if scene_id else 0)
             ws.cell(row=next_row, column=2, value=scene.get("srt_start", ""))
             ws.cell(row=next_row, column=3, value=scene.get("srt_end", ""))
             # Duration: handle cả "duration" và "duration_seconds" (3-8s từ SRT timing)
