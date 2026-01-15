@@ -435,40 +435,46 @@ window._t2vToI2vConfig=null; // Config để convert T2V request thành I2V (th�
                     var newUrl = urlStr.replace('batchAsyncGenerateVideoText', 'batchAsyncGenerateVideoReferenceImages');
                     console.log('[T2V→I2V] New URL:', newUrl);
 
-                    // 2. Thêm referenceImages vào payload
+                    // 2. CHỈ GIỮ 1 REQUEST - API I2V không hỗ trợ batch
+                    if (chromeVideoBody.requests && chromeVideoBody.requests.length > 1) {
+                        console.log('[T2V→I2V] Chrome gửi ' + chromeVideoBody.requests.length + ' requests, chỉ giữ 1');
+                        chromeVideoBody.requests = chromeVideoBody.requests.slice(0, 1);
+                    }
+
+                    // 3. Thêm referenceImages và fix model
                     if (chromeVideoBody.requests && chromeVideoBody.requests.length > 0) {
-                        for (var i = 0; i < chromeVideoBody.requests.length; i++) {
-                            // Thêm reference image với mediaId từ ảnh đã upload
-                            chromeVideoBody.requests[i].referenceImages = [{
-                                "imageUsageType": "IMAGE_USAGE_TYPE_ASSET",
-                                "mediaId": t2vConfig.mediaId
-                            }];
+                        var req = chromeVideoBody.requests[0];
 
-                            // 3. Đổi model từ T2V sang I2V
-                            // T2V: veo_3_1_t2v_fast, veo_3_1_t2v_fast_ultra
-                            // I2V ĐÚNG: veo_3_0_r2v_fast_ultra (KHÔNG có _landscape_)
-                            var currentModel = chromeVideoBody.requests[i].videoModelKey || 'veo_3_1_t2v_fast';
+                        // Thêm reference image với mediaId từ ảnh đã upload
+                        req.referenceImages = [{
+                            "imageUsageType": "IMAGE_USAGE_TYPE_ASSET",
+                            "mediaId": t2vConfig.mediaId
+                        }];
 
-                            // Fix model name:
-                            // 1. Loại bỏ _landscape_ (Chrome thêm vào nhưng API không nhận)
-                            // 2. Đổi veo_3_1 → veo_3_0 (I2V chỉ hỗ trợ 3.0)
-                            // 3. Đổi t2v → r2v nếu cần
-                            var newModel = currentModel
-                                .replace('_landscape_', '_')       // Xóa _landscape_
-                                .replace('_portrait_', '_')        // Xóa _portrait_
-                                .replace('veo_3_1_t2v', 'veo_3_0_r2v')  // T2V 3.1 → I2V 3.0
-                                .replace('veo_3_1_r2v', 'veo_3_0_r2v')  // I2V 3.1 → I2V 3.0
-                                .replace('veo_3_0_t2v', 'veo_3_0_r2v'); // T2V 3.0 → I2V 3.0
+                        // 4. Đổi model từ T2V sang I2V
+                        // T2V: veo_3_1_t2v_fast, veo_3_1_t2v_fast_ultra
+                        // I2V ĐÚNG: veo_3_0_r2v_fast_ultra (KHÔNG có _landscape_)
+                        var currentModel = req.videoModelKey || 'veo_3_1_t2v_fast';
 
-                            // Override nếu config có chỉ định model cụ thể
-                            if (t2vConfig.videoModelKey) {
-                                newModel = t2vConfig.videoModelKey;
-                            }
+                        // Fix model name:
+                        // 1. Loại bỏ _landscape_ (Chrome thêm vào nhưng API không nhận)
+                        // 2. Đổi veo_3_1 → veo_3_0 (I2V chỉ hỗ trợ 3.0)
+                        // 3. Đổi t2v → r2v nếu cần
+                        var newModel = currentModel
+                            .replace('_landscape_', '_')       // Xóa _landscape_
+                            .replace('_portrait_', '_')        // Xóa _portrait_
+                            .replace('veo_3_1_t2v', 'veo_3_0_r2v')  // T2V 3.1 → I2V 3.0
+                            .replace('veo_3_1_r2v', 'veo_3_0_r2v')  // I2V 3.1 → I2V 3.0
+                            .replace('veo_3_0_t2v', 'veo_3_0_r2v'); // T2V 3.0 → I2V 3.0
 
-                            chromeVideoBody.requests[i].videoModelKey = newModel;
-                            console.log('[T2V→I2V] Model:', currentModel, '→', newModel);
-                            console.log('[T2V→I2V] MediaId:', t2vConfig.mediaId.substring(0, 50) + '...');
+                        // Override nếu config có chỉ định model cụ thể
+                        if (t2vConfig.videoModelKey) {
+                            newModel = t2vConfig.videoModelKey;
                         }
+
+                        req.videoModelKey = newModel;
+                        console.log('[T2V→I2V] Model:', currentModel, '→', newModel);
+                        console.log('[T2V→I2V] MediaId:', t2vConfig.mediaId.substring(0, 50) + '...');
                     }
 
                     // Update body với payload đã convert
