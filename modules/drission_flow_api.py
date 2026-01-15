@@ -356,6 +356,16 @@ window._t2vToI2vConfig=null; // Config để convert T2V request thành I2V (th�
                     var data = await cloned.json();
                     console.log('[RESPONSE] Status:', response.status);
 
+                    // === 403 ERROR: Detect ngay và báo lỗi ===
+                    if (response.status === 403 || (data.error && data.error.code === 403)) {
+                        console.log('[RESPONSE] ✗ 403 FORBIDDEN - IP blocked!');
+                        var errorMsg = data.error ? data.error.message : 'Permission denied';
+                        window._response = {error: {code: 403, message: errorMsg}};
+                        window._responseError = 'Error 403: ' + errorMsg;
+                        window._requestPending = false;
+                        return response;
+                    }
+
                     // Check nếu có media MỚI với fifeUrl → trigger ngay
                     if (data.media && data.media.length > 0) {
                         var readyMedia = data.media.filter(function(m) {
@@ -2971,41 +2981,29 @@ class DrissionFlowAPI:
                     else:
                         return False, [], error
 
-                # Nếu lỗi 403, RESET CHROME NGAY (không retry)
+                # Nếu lỗi 403, ROTATE IPv6 NGAY + RESET CHROME
                 if "403" in error:
-                    # Tăng counter 403 liên tiếp
                     self._consecutive_403 += 1
-                    self.log(f"⚠️ 403 error (lần {self._consecutive_403}/{self._max_403_before_ipv6}) - RESET CHROME!", "WARN")
+                    self.log(f"⚠️ 403 error (lần {self._consecutive_403}) - ROTATE IPv6!", "WARN")
 
                     # Kill Chrome
                     self._kill_chrome()
                     self.close()
                     time.sleep(2)
 
-                    # Đổi proxy nếu có
-                    if self._use_webshare and self._webshare_proxy:
-                        success, msg = self._webshare_proxy.rotate_ip(self.worker_id, "403 reCAPTCHA")
-                        self.log(f"  → Webshare rotate: {msg}", "WARN")
-
-                    # === IPv6: Sau N lần 403 liên tiếp, ACTIVATE hoặc ROTATE IPv6 ===
-                    rotate_ipv6 = False
-                    if self._consecutive_403 >= self._max_403_before_ipv6:
-                        self._consecutive_403 = 0  # Reset counter
-
-                        if not self._ipv6_activated:
-                            # Lần đầu: Activate IPv6
-                            self.log(f"  → 🌐 ACTIVATE IPv6 MODE (lần đầu)...")
-                            self._activate_ipv6()
+                    # ROTATE IPv6 NGAY (không đợi nhiều lần)
+                    if self._ipv6_rotator and self._ipv6_activated:
+                        self.log(f"  → 🔄 Rotating IPv6...")
+                        new_ip = self._ipv6_rotator.rotate()
+                        if new_ip:
+                            self.log(f"  → 🌐 IPv6 mới: {new_ip}")
                         else:
-                            # Đã activate: Rotate sang IP khác
-                            self.log(f"  → 🔄 Rotate sang IPv6 khác...")
-                            rotate_ipv6 = True
+                            self.log(f"  → ⚠️ Không rotate được IPv6!", "WARN")
 
-                    # Restart Chrome (có thể kèm IPv6 rotation)
-                    project_url = getattr(self, '_current_project_url', None)
-                    if self.restart_chrome(rotate_ipv6=rotate_ipv6):
+                    # Restart Chrome
+                    if self.restart_chrome(rotate_ipv6=False):  # IPv6 đã rotate ở trên
                         self.log("  → Chrome restarted, tiếp tục...")
-                        continue  # Thử lại 1 lần sau khi reset
+                        continue  # Thử lại sau khi reset
                     else:
                         return False, [], "Không restart được Chrome sau 403"
 
