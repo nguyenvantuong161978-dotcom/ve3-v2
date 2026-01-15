@@ -119,7 +119,7 @@ def create_excel_with_api_basic(project_dir: Path, code: str, callback=None) -> 
             return False
 
         log(f"\n[STEP 3] Creating locations...")
-        result = generator.step_create_locations(project_dir, code, workbook)
+        result = generator.step_create_locations(project_dir, code, workbook, srt_entries, txt_content)
         if result.status.value == "failed":
             log(f"  FAILED: {result.message}", "ERROR")
             return False
