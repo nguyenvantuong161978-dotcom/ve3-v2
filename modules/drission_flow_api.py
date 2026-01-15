@@ -2063,6 +2063,10 @@ class DrissionFlowAPI:
                         self.log(f"  → New project URL saved")
             else:
                 self.log("✓ Đã ở trong project!")
+                # F5 để load lại trang
+                self.log("   → F5 refresh...")
+                self.driver.refresh()
+                time.sleep(3)
 
         # 5. Đợi textarea sẵn sàng - TEXTAREA = page đã load xong
         # IPv6 cần thời gian lâu hơn, tự động F5 nếu không thấy
