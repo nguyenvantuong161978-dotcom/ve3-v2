@@ -442,11 +442,9 @@ window._t2vToI2vConfig=null; // Config để convert T2V request thành I2V (th�
                     console.log('[T2V→I2V] Original URL:', urlStr);
                     console.log('[T2V→I2V] Chrome original payload:', JSON.stringify(chromeVideoBody, null, 2));
 
-                    // 1. KHÔNG đổi URL - thử gửi T2V với referenceImages
-                    // Lý do: reCAPTCHA được generate cho endpoint T2V, đổi URL → 403
-                    // Thử xem T2V endpoint có accept referenceImages không
-                    var newUrl = urlStr; // GIỮ NGUYÊN URL
-                    console.log('[T2V→I2V] Keeping original URL (T2V with referenceImages):', newUrl);
+                    // 1. Đổi URL: T2V endpoint → I2V endpoint
+                    var newUrl = urlStr.replace('batchAsyncGenerateVideoText', 'batchAsyncGenerateVideoReferenceImages');
+                    console.log('[T2V→I2V] New URL:', newUrl);
 
                     // 2. CHỈ GIỮ 1 REQUEST - API I2V không hỗ trợ batch
                     if (chromeVideoBody.requests && chromeVideoBody.requests.length > 1) {

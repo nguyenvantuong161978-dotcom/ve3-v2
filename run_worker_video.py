@@ -246,12 +246,13 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
             log(f"  ❌ Failed to setup Chrome for video!")
             return False
 
-        # Chuyển sang mode I2V ("Tạo video từ các thành phần")
-        log(f"  🎬 Switching to I2V mode...")
-        if api.switch_to_video_mode():
-            log(f"  ✓ Switched to I2V mode (Tạo video từ các thành phần)")
+        # Chuyển sang mode T2V ("Từ văn bản sang video")
+        # Interceptor sẽ convert T2V request → I2V request
+        log(f"  🎬 Switching to T2V mode...")
+        if api.switch_to_t2v_mode():
+            log(f"  ✓ Switched to T2V mode (Từ văn bản sang video)")
         else:
-            log(f"  ⚠️ Could not switch to I2V mode, trying anyway...", "WARN")
+            log(f"  ⚠️ Could not switch to T2V mode, trying anyway...", "WARN")
         time.sleep(1)
 
         # Create videos
@@ -287,11 +288,11 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
                     continue
 
             try:
-                # Use I2V MODIFY MODE:
-                # - Chrome ở mode "Tạo video từ các thành phần" (I2V)
-                # - Chrome gửi request I2V với reCAPTCHA đúng endpoint
-                # - Interceptor chỉ inject mediaId vào payload
-                ok, result_path, error = api.generate_video_modify_mode(
+                # Use T2V→I2V MODE:
+                # - Chrome ở mode "Từ văn bản sang video" (T2V)
+                # - Interceptor convert: T2V request → I2V request
+                # - Đổi URL, thêm referenceImages, đổi model
+                ok, result_path, error = api.generate_video_t2v_mode(
                     media_id=media_id,
                     prompt=video_prompt,
                     save_path=mp4_path
