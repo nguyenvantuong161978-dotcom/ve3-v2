@@ -1655,6 +1655,7 @@ class DrissionFlowAPI:
 
             # === IPv6 MODE - BẬT NGAY KHI MỞ CHROME ===
             # Dùng IPv6 ngay từ đầu, nếu 403 thì đổi IPv6 khác
+            # QUAN TRỌNG: Dùng local SOCKS5 proxy để ÉP Chrome chỉ dùng IPv6
             _using_ipv6_proxy = False
             try:
                 from modules.ipv6_rotator import get_ipv6_rotator
@@ -1676,8 +1677,29 @@ class DrissionFlowAPI:
                         self._ipv6_activated = True
                         self._ipv6_rotator = rotator
                         self.log(f"🌐 IPv6 ACTIVE: {working_ipv6}")
-                        # Windows sẽ tự ưu tiên IPv6 do prefix policy đã set
-                        _using_ipv6_proxy = True
+
+                        # === START LOCAL SOCKS5 PROXY - ÉP CHROME DÙNG IPv6 ===
+                        # PC có cả IPv4+IPv6, Chrome mặc định dùng IPv4
+                        # Proxy này ép TẤT CẢ traffic của Chrome đi qua IPv6
+                        try:
+                            from modules.ipv6_proxy import start_ipv6_proxy
+                            proxy_port = 1088 + self.worker_id  # Unique port per worker
+                            self._ipv6_proxy = start_ipv6_proxy(
+                                ipv6_address=working_ipv6,
+                                port=proxy_port,
+                                log_func=self.log
+                            )
+                            if self._ipv6_proxy:
+                                # Chrome dùng SOCKS5 proxy → tất cả traffic qua IPv6
+                                options.set_argument(f'--proxy-server=socks5://127.0.0.1:{proxy_port}')
+                                options.set_argument('--proxy-bypass-list=<-loopback>')
+                                self.log(f"🌐 Chrome → SOCKS5 proxy → IPv6 ONLY")
+                                self.log(f"   Proxy: socks5://127.0.0.1:{proxy_port}")
+                                _using_ipv6_proxy = True
+                            else:
+                                self.log(f"⚠️ IPv6 proxy failed to start", "WARN")
+                        except Exception as proxy_err:
+                            self.log(f"⚠️ IPv6 proxy error: {proxy_err}", "WARN")
                     else:
                         self.log(f"⚠️ Không tìm được IPv6 hoạt động!", "WARN")
             except Exception as e:
@@ -2999,6 +3021,10 @@ class DrissionFlowAPI:
                             new_ip = self._ipv6_rotator.rotate()
                             if new_ip:
                                 self.log(f"  → 🌐 IPv6 mới: {new_ip}")
+                                # Cập nhật SOCKS5 proxy với IPv6 mới
+                                if hasattr(self, '_ipv6_proxy') and self._ipv6_proxy:
+                                    self._ipv6_proxy.set_ipv6(new_ip)
+                                    self.log(f"  → 🌐 SOCKS5 proxy updated")
                             else:
                                 self.log(f"  → ⚠️ Không rotate được IPv6!", "WARN")
 
@@ -4393,6 +4419,10 @@ class DrissionFlowAPI:
                             new_ip = self._ipv6_rotator.rotate()
                             if new_ip:
                                 self.log(f"[T2V→I2V] → 🌐 IPv6 mới: {new_ip}")
+                                # Cập nhật SOCKS5 proxy với IPv6 mới
+                                if hasattr(self, '_ipv6_proxy') and self._ipv6_proxy:
+                                    self._ipv6_proxy.set_ipv6(new_ip)
+                                    self.log(f"[T2V→I2V] → 🌐 SOCKS5 proxy updated")
                             else:
                                 self.log(f"[T2V→I2V] → ⚠️ Không rotate được IPv6!", "WARN")
 
@@ -4445,7 +4475,9 @@ class DrissionFlowAPI:
                         else:
                             self.log(f"[T2V→I2V] → 🔄 Rotate sang IPv6 khác...")
                             if self._ipv6_rotator:
-                                self._ipv6_rotator.rotate()
+                                new_ip = self._ipv6_rotator.rotate()
+                                if new_ip and hasattr(self, '_ipv6_proxy') and self._ipv6_proxy:
+                                    self._ipv6_proxy.set_ipv6(new_ip)
 
                         self._consecutive_403 = 0
 
@@ -5348,6 +5380,10 @@ class DrissionFlowAPI:
                     new_ip = rotator.rotate()
                     if new_ip:
                         self.log(f"✓ IPv6 changed to: {new_ip}")
+                        # Cập nhật SOCKS5 proxy với IPv6 mới
+                        if hasattr(self, '_ipv6_proxy') and self._ipv6_proxy:
+                            self._ipv6_proxy.set_ipv6(new_ip)
+                            self.log(f"✓ SOCKS5 proxy updated")
                     else:
                         self.log("⚠️ IPv6 rotation failed, continuing anyway...")
             except Exception as e:
