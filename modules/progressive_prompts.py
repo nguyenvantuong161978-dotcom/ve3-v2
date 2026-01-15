@@ -787,8 +787,10 @@ Return JSON only:
                     scene_id = scene_data.get("scene_id")
 
                     # Find original scene from director plan
-                    original = next((s for s in batch if s.get("scene_id") == scene_id), None)
+                    # Convert to string để tránh lỗi so sánh int vs string
+                    original = next((s for s in batch if str(s.get("scene_id")) == str(scene_id)), None)
                     if not original:
+                        self._log(f"    WARNING: scene_id {scene_id} not found in batch (batch IDs: {[s.get('scene_id') for s in batch]})", "WARN")
                         continue
 
                     # Lấy img_prompt từ AI
