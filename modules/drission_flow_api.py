@@ -3315,34 +3315,18 @@ class DrissionFlowAPI:
                         except Exception as e:
                             self.log(f"✗ Download failed: {e}", "WARN")
 
-        # Restart Chrome sau mỗi ảnh - XÓA COOKIES để reset reCAPTCHA
-        # (Giữ lại Login Data để không mất đăng nhập)
-        self.log("🔄 Restarting Chrome (clear cookies)...")
+        # Restart Chrome sau mỗi ảnh (giống như 403 reset)
+        # restart_chrome() đã có sẵn: navigate + inject JS
+        self.log("🔄 Restarting Chrome...")
         try:
-            # Lưu URL trước khi restart
-            current_url = self.driver.url if self.driver else None
+            # Đóng Chrome
+            self._kill_chrome()
+            self.close()
+            time.sleep(2)
 
-            # Xóa cookies TRƯỚC khi restart (giữ Login Data)
-            self.clear_cookies_only()
-
-            # Restart Chrome
-            success = self.restart_chrome(rotate_ipv6=False)
-
-            if success and current_url:
-                # Navigate về project URL
-                self.log(f"   → Loading URL: {current_url}")
-                self.driver.get(current_url)
-                time.sleep(3)
-
-                # Đợi textarea
-                if self._wait_for_textarea_visible():
-                    # RE-INJECT JS INTERCEPTOR sau khi navigate!
-                    self.log("   → Re-injecting JS Interceptor...")
-                    self._reset_tokens()
-                    self.driver.run_js(JS_INTERCEPTOR)
-                    self.log("✓ Chrome restarted!")
-                else:
-                    self.log("⚠️ Không thấy textarea sau restart", "WARN")
+            # Restart Chrome (setup() sẽ navigate + inject JS)
+            if self.restart_chrome(rotate_ipv6=False):
+                self.log("✓ Chrome restarted!")
             else:
                 self.log("⚠️ Restart Chrome failed", "WARN")
 
