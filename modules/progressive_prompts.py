@@ -815,14 +815,14 @@ Return JSON only:
                 except:
                     pass
 
-            # Tính expected scenes: mỗi scene ~5s
-            expected_scenes = max(3, int(batch_duration / 5) if batch_duration else len(batch_entries) // 4)
+            # Tính expected scenes: mỗi scene ~6s (để có chỗ cho nghệ thuật)
+            expected_scenes = max(2, int(batch_duration / 6) if batch_duration else len(batch_entries) // 5)
             expected_images_hint = f"""
-CRITICAL - SCENE COUNT:
+SCENE GUIDELINES:
 - This batch spans approximately {batch_duration:.0f} seconds
-- You MUST create approximately {expected_scenes} scenes (target: 5 seconds per scene)
-- Each scene MUST be 3-8 seconds, NEVER longer!
-- If you create fewer scenes, each will be too long (BAD!)"""
+- Expect around {expected_scenes} scenes (target: 5-7 seconds per scene)
+- Each scene MUST be 3-8 seconds maximum
+- Split with PURPOSE, not just to hit a number!"""
 
             prompt = f"""Create a director's shooting plan by dividing the SRT into visual scenes.
 
@@ -840,15 +840,25 @@ SRT ENTRIES (indices {batch_start+1} to {batch_end+1}):
 {expected_images_hint}
 
 Rules:
-1. STRICT: Each scene MUST be 3-8 seconds. Scenes >8s are INVALID and will be rejected!
-2. Create MORE scenes rather than fewer - aim for ~5 seconds per scene
-3. Group SRT entries that belong to the same visual moment
-4. Follow the STORY SEGMENTS plan for content distribution
-5. Assign appropriate characters and locations to each scene
-6. Create a visual_moment description (what the viewer sees)
-7. scene_id should start from {scene_id_counter}
-8. srt_indices should use the ORIGINAL indices shown in brackets [N]
-9. Duration = time from srt_start to srt_end, MUST be <= 8 seconds
+1. STRICT: Each scene MUST be 3-8 seconds maximum. No exceptions!
+2. Group SRT entries by visual moment, but if content > 8s, you MUST split with PURPOSE
+3. Follow the STORY SEGMENTS plan for content distribution
+4. Assign appropriate characters and locations to each scene
+5. Create visual_moment description (what the viewer sees - be specific!)
+6. scene_id should start from {scene_id_counter}
+7. srt_indices should use the ORIGINAL indices shown in brackets [N]
+8. Duration = time from srt_start to srt_end, MUST be <= 8 seconds
+
+CINEMATIC SPLITTING (very important!):
+When content spans > 8 seconds, split into multiple scenes with DISTINCT purposes:
+- DON'T just split time mechanically (Part 1, Part 2 - this is BAD!)
+- DO split by cinematic moments: different angle, emotion, focus
+- Example: Two people talking for 15s →
+  * Scene 1: Close-up on speaker A, their emotion (5s)
+  * Scene 2: Reaction shot on listener B (4s)
+  * Scene 3: Wide shot showing both, environment (6s)
+- Each scene should tell PART of the story from a UNIQUE perspective
+- Think like a film director: what shot would convey this moment best?
 
 Return JSON only:
 {{
@@ -886,32 +896,14 @@ Return JSON only:
             batch_scenes = data["scenes"]
             self._log(f"     -> Got {len(batch_scenes)} scenes from this batch")
 
-            # AUTO-SPLIT: Chia nhỏ scenes có duration > 8s
-            processed_scenes = []
+            # Validate: scenes > 8s sẽ được cảnh báo (API phải tự chia đúng)
             for scene in batch_scenes:
                 duration = scene.get("duration", 0)
                 if duration and duration > 8:
-                    # Tính số scenes cần chia
-                    num_splits = int(duration / 6) + 1  # Target ~6s mỗi scene
-                    split_duration = duration / num_splits
-
-                    self._log(f"     ⚠️ Scene {scene.get('scene_id')}: {duration:.1f}s → chia thành {num_splits} scenes ({split_duration:.1f}s mỗi scene)")
-
-                    # Chia scene thành nhiều scenes nhỏ
-                    for i in range(num_splits):
-                        split_scene = scene.copy()
-                        split_scene["duration"] = round(split_duration, 2)
-                        # Điều chỉnh visual_moment cho mỗi phần
-                        if i == 0:
-                            split_scene["visual_moment"] = f"[Part 1/{num_splits}] " + scene.get("visual_moment", "")
-                        else:
-                            split_scene["visual_moment"] = f"[Part {i+1}/{num_splits}] Continuation - " + scene.get("visual_moment", "")[:100]
-                        processed_scenes.append(split_scene)
-                else:
-                    processed_scenes.append(scene)
+                    self._log(f"     ⚠️ Warning: Scene {scene.get('scene_id')}: {duration:.1f}s > 8s (API should split better)")
 
             # Cập nhật scene_id để liên tục
-            for scene in processed_scenes:
+            for scene in batch_scenes:
                 scene["scene_id"] = scene_id_counter
                 all_scenes.append(scene)
                 scene_id_counter += 1
