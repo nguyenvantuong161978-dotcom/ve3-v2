@@ -3248,47 +3248,38 @@ class DrissionFlowAPI:
                         except Exception as e:
                             self.log(f"✗ Download failed: {e}", "WARN")
 
-        # Mở tab mới với URL, đóng tab cũ
-        self.log("🔄 Opening new tab, closing old...")
+        # Mở tab mới với URL, đóng tab cũ (giống pattern image download)
+        self.log("🔄 Opening new tab...")
         try:
             if self.driver:
-                # Lưu URL và tab ID cũ
+                # Lưu URL và tab cũ
                 current_url = self.driver.url
-                old_tab_id = self.driver.tab_ids[0] if self.driver.tab_ids else None
+                old_tab = self.driver.get_tab()
                 self.log(f"   URL: {current_url}")
-                self.log(f"   Old tab ID: {old_tab_id}")
 
                 # Mở tab mới với URL
-                self.log("   → Opening new tab...")
                 new_tab = self.driver.new_tab(current_url)
-                time.sleep(1)
-
-                # Activate tab mới TRƯỚC KHI đóng tab cũ
-                self.log("   → Activating new tab...")
                 new_tab.set.activate()
-                time.sleep(1)
+                self.log("   → New tab opened & activated")
+                time.sleep(2)
 
-                # ĐÓNG TAB CŨ
-                if old_tab_id:
-                    self.log(f"   → Closing old tab {old_tab_id}...")
-                    try:
-                        self.driver.close_tabs(old_tab_id)
-                    except:
-                        pass
-                    time.sleep(1)
+                # Đóng tab cũ
+                self.log("   → Closing old tab...")
+                old_tab.close()
+                time.sleep(1)
 
                 # Đợi page load
                 self.log("   → Waiting for page load...")
                 time.sleep(3)
 
-                # INJECT JS VÀO TAB MỚI ĐỂ ĐIỀU KHIỂN
-                self.log("   → Injecting JS to new tab...")
+                # Inject JS vào tab mới
+                self.log("   → Injecting JS...")
                 self._reset_tokens()
-                self.driver.run_js(JS_INTERCEPTOR)
+                new_tab.run_js(JS_INTERCEPTOR)
 
-                # Đợi textarea xuất hiện = page load xong
+                # Đợi textarea
                 if not self._wait_for_textarea_visible():
-                    self.log("⚠️ Không thấy textarea sau new tab", "WARN")
+                    self.log("⚠️ Không thấy textarea", "WARN")
 
                 self.log("✓ New tab ready!")
             else:
