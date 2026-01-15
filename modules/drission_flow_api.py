@@ -3186,10 +3186,11 @@ class DrissionFlowAPI:
                     elif self._consecutive_403 >= 3 and not cleared_flag:
                         # Bước 2: Lần 3 → Xóa dữ liệu + đăng nhập lại NGAY
                         self.log(f"⚠️ 403 lần {self._consecutive_403} → XÓA DỮ LIỆU + ĐĂNG NHẬP LẠI!", "WARN")
-                        self._kill_chrome()
-                        self.close()
-                        time.sleep(1)
+                        # QUAN TRỌNG: Clear data TRƯỚC khi đóng Chrome (vì cần driver để navigate)
                         self.clear_chrome_data()
+                        time.sleep(1)
+                        # Login lại (sẽ tự đóng Chrome cũ và login)
+                        self._auto_login_google()
                         self._cleared_data_for_403 = True
                         self._consecutive_403 = 0  # Reset counter sau khi clear
 
@@ -4594,9 +4595,11 @@ class DrissionFlowAPI:
                         # Bước 2: Sau 3 lần reset vẫn 403 → Xóa dữ liệu + đăng nhập lại
                         self.log(f"[T2V→I2V] ⚠️ 403 sau 3 lần reset → XÓA DỮ LIỆU + ĐĂNG NHẬP LẠI!", "WARN")
                         self.clear_chrome_data()
+                        time.sleep(1)
+                        # Login lại (sẽ tự đóng Chrome cũ và login)
+                        self._auto_login_google()
                         self._cleared_data_for_403 = True
                         self._consecutive_403 = 0
-                        return False, None, "403 - Đã clear Chrome data, cần login lại Google!"
 
                     else:
                         # Bước 3: Đã clear data vẫn 403 → Đổi IPv6
