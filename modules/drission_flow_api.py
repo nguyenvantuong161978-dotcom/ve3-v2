@@ -684,46 +684,52 @@ JS_CLICK_NEW_PROJECT = '''
 '''
 
 # JS để chọn "Tạo hình ảnh" từ dropdown
-JS_SELECT_IMAGE_MODE = '''
-(async function() {
-    // 1. Tìm dropdown
-    var dropdown = document.querySelector('button[role="combobox"]');
-    if (!dropdown) {
-        console.log('[AUTO] Dropdown not found');
-        return 'NO_DROPDOWN';
-    }
-
-    // 2. Kiểm tra mode hiện tại - nếu đã là "Tạo hình ảnh" thì không cần chọn lại
-    var currentText = dropdown.textContent || '';
-    if (currentText.includes('Tạo hình ảnh') || currentText.includes('Generate image')) {
-        console.log('[AUTO] Mode already: Tao hinh anh');
-        return 'ALREADY_SELECTED';
-    }
-
-    // 3. Click dropdown để mở menu
-    dropdown.click();
-    console.log('[AUTO] Clicked dropdown');
-
-    // 4. Đợi dropdown mở
-    await new Promise(r => setTimeout(r, 500));
-
-    // 5. Tìm và click "Tạo hình ảnh"
-    var allElements = document.querySelectorAll('*');
-    for (var el of allElements) {
-        var text = el.textContent || '';
-        if (text === 'Tạo hình ảnh' || text.includes('Tạo hình ảnh từ văn bản') ||
-            text === 'Generate image' || text.includes('Generate image from text')) {
-            var rect = el.getBoundingClientRect();
-            if (rect.height > 10 && rect.height < 80 && rect.width > 50) {
-                el.click();
-                console.log('[AUTO] Clicked: Tao hinh anh');
-                return 'CLICKED';
-            }
+# JS bước 1: Kiểm tra mode và click dropdown nếu cần
+JS_SELECT_IMAGE_MODE_CHECK = '''
+(function() {
+    try {
+        var dropdown = document.querySelector('button[role="combobox"]');
+        if (!dropdown) {
+            return 'NO_DROPDOWN';
         }
+        var currentText = dropdown.textContent || dropdown.innerText || '';
+        if (currentText.indexOf('Tạo hình ảnh') >= 0 || currentText.indexOf('Generate image') >= 0) {
+            return 'ALREADY_SELECTED';
+        }
+        dropdown.click();
+        return 'DROPDOWN_CLICKED';
+    } catch(e) {
+        return 'ERROR:' + e.message;
     }
-    return 'NOT_FOUND';
 })();
 '''
+
+# JS bước 2: Chọn option "Tạo hình ảnh" sau khi dropdown mở
+JS_SELECT_IMAGE_MODE_CLICK = '''
+(function() {
+    try {
+        var allElements = document.querySelectorAll('*');
+        for (var i = 0; i < allElements.length; i++) {
+            var el = allElements[i];
+            var text = el.textContent || '';
+            if (text === 'Tạo hình ảnh' || text.indexOf('Tạo hình ảnh từ văn bản') >= 0 ||
+                text === 'Generate image' || text.indexOf('Generate image from text') >= 0) {
+                var rect = el.getBoundingClientRect();
+                if (rect.height > 10 && rect.height < 80 && rect.width > 50) {
+                    el.click();
+                    return 'CLICKED';
+                }
+            }
+        }
+        return 'NOT_FOUND';
+    } catch(e) {
+        return 'ERROR:' + e.message;
+    }
+})();
+'''
+
+# Giữ lại JS cũ để tương thích (dùng cho các chỗ khác)
+JS_SELECT_IMAGE_MODE = JS_SELECT_IMAGE_MODE_CHECK
 
 # JS để chọn "Tạo video từ các thành phần" từ dropdown (cho I2V)
 # Bước 1: Click dropdown 2 lần để mở menu đúng
@@ -2077,28 +2083,34 @@ class DrissionFlowAPI:
             select_success = False
             for retry_count in range(3):  # Retry tối đa 3 lần nếu page refresh
                 try:
-                    for j in range(10):
-                        result = self.driver.run_js(JS_SELECT_IMAGE_MODE)
-                        if result == 'CLICKED':
-                            self.log("✓ Chọn 'Tạo hình ảnh' thành công!")
-                            time.sleep(0.5)
-                            select_success = True
-                            break
-                        elif result == 'ALREADY_SELECTED':
+                    for j in range(5):
+                        # Bước 1: Kiểm tra mode hiện tại và click dropdown nếu cần
+                        result = self.driver.run_js(JS_SELECT_IMAGE_MODE_CHECK)
+
+                        if result == 'ALREADY_SELECTED':
                             self.log("✓ Mode đã là 'Tạo hình ảnh' (OK)")
                             select_success = True
                             break
+                        elif result == 'DROPDOWN_CLICKED':
+                            # Bước 2: Đợi dropdown mở rồi chọn option
+                            time.sleep(0.5)
+                            result2 = self.driver.run_js(JS_SELECT_IMAGE_MODE_CLICK)
+                            if result2 == 'CLICKED':
+                                self.log("✓ Chọn 'Tạo hình ảnh' thành công!")
+                                time.sleep(0.5)
+                                select_success = True
+                                break
+                            else:
+                                self.log(f"  [Mode] Click option: {result2} (lần {j+1}/5)")
                         elif result == 'NO_DROPDOWN':
-                            self.log(f"  [Mode] Không tìm thấy dropdown (lần {j+1}/10)")
-                        elif result == 'NOT_FOUND':
-                            self.log(f"  [Mode] Không tìm thấy option 'Tạo hình ảnh' (lần {j+1}/10)")
+                            self.log(f"  [Mode] Không tìm thấy dropdown (lần {j+1}/5)")
                         else:
-                            self.log(f"  [Mode] Result: {result} (lần {j+1}/10)")
+                            self.log(f"  [Mode] Check: {result} (lần {j+1}/5)")
                         time.sleep(0.5)
                     if select_success:
                         break
                     else:
-                        self.log(f"[Mode] ⚠️ Không chọn được mode sau 10 lần thử (retry {retry_count+1}/3)", "WARN")
+                        self.log(f"[Mode] ⚠️ Không chọn được mode (retry {retry_count+1}/3)", "WARN")
                 except Exception as e:
                     if ContextLostError and isinstance(e, ContextLostError):
                         self.log(f"[PAGE] ⚠️ Page bị refresh, đợi load lại... (retry {retry_count + 1}/3)")
