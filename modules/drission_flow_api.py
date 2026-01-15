@@ -1643,34 +1643,35 @@ class DrissionFlowAPI:
             else:
                 self.log("👁️ Headless mode: OFF (Chrome hiển thị)")
 
-            # === IPv6 MODE - CHỈ BẬT SAU KHI 403 ĐỦ LẦN ===
-            # Ban đầu KHÔNG dùng IPv6, chỉ bật khi bị 403 liên tiếp
+            # === IPv6 MODE - BẬT NGAY KHI MỞ CHROME ===
+            # Dùng IPv6 ngay từ đầu, nếu 403 thì đổi IPv6 khác
             _using_ipv6_proxy = False
             try:
                 from modules.ipv6_rotator import get_ipv6_rotator
                 rotator = get_ipv6_rotator()
                 if rotator and rotator.enabled and rotator.ipv6_list:
-                    # KHÔNG bật IPv6 ngay - chỉ log là sẵn sàng
-                    self.log(f"🌐 IPv6 STANDBY: {len(rotator.ipv6_list)} IPs sẵn sàng")
-                    self.log(f"   → Sẽ bật sau {self._max_403_before_ipv6} lần 403 liên tiếp")
-                    # Nếu đã activated trước đó (restart Chrome) → bật lại
-                    if self._ipv6_activated:
-                        self.log(f"🌐 IPv6 đã activated trước đó, bật lại...")
+                    self.log(f"🌐 IPv6 MODE: Có {len(rotator.ipv6_list)} IPs")
+
+                    # Tìm IPv6 hoạt động và bật ngay
+                    if not self._ipv6_activated:
+                        self.log(f"🌐 Activating IPv6 lần đầu...")
                         working_ipv6 = rotator.init_with_working_ipv6()
+                    else:
+                        # Đã activated trước đó → dùng IP hiện tại hoặc rotate
+                        working_ipv6 = rotator.current_ipv6 or rotator.get_next_ipv6()
                         if working_ipv6:
-                            from modules.ipv6_proxy import start_ipv6_proxy
-                            proxy = start_ipv6_proxy(
-                                ipv6_address=working_ipv6,
-                                port=1088,
-                                log_func=self.log
-                            )
-                            if proxy:
-                                options.set_argument('--proxy-server=socks5://127.0.0.1:1088')
-                                self.log(f"🌐 IPv6 MODE: Chrome → SOCKS5 → IPv6 ONLY")
-                                self.log(f"   IPv6: {working_ipv6}")
-                                _using_ipv6_proxy = True
+                            rotator.set_ipv6(working_ipv6)
+
+                    if working_ipv6:
+                        self._ipv6_activated = True
+                        self._ipv6_rotator = rotator
+                        self.log(f"🌐 IPv6 ACTIVE: {working_ipv6}")
+                        # Windows sẽ tự ưu tiên IPv6 do prefix policy đã set
+                        _using_ipv6_proxy = True
+                    else:
+                        self.log(f"⚠️ Không tìm được IPv6 hoạt động!", "WARN")
             except Exception as e:
-                self.log(f"⚠️ IPv6 check error: {e}", "WARN")
+                self.log(f"⚠️ IPv6 activation error: {e}", "WARN")
 
             if not _using_ipv6_proxy and self._use_webshare and self._webshare_proxy:
                 from webshare_proxy import get_proxy_manager
@@ -4369,38 +4370,32 @@ class DrissionFlowAPI:
             if error:
                 last_error = error
 
-                # === 403 ERROR: RESET CHROME + IPv6 + CLEAR DATA ===
+                # === 403 ERROR: ROTATE IPv6 NGAY + RESET CHROME ===
                 if "403" in str(error):
                     self._consecutive_403 += 1
-                    self.log(f"[T2V→I2V] ⚠️ 403 error (lần {self._consecutive_403}) - RESET CHROME!", "WARN")
+                    self.log(f"[T2V→I2V] ⚠️ 403 error (lần {self._consecutive_403}) - ROTATE IPv6!", "WARN")
 
-                    # Sau 3 lần 403 liên tiếp, clear Chrome data để reset reCAPTCHA
-                    if self._consecutive_403 >= 3:
+                    # Sau 5 lần 403 liên tiếp (đã thử hết IPv6), clear Chrome data
+                    if self._consecutive_403 >= 5:
                         self.log(f"[T2V→I2V] 🗑️ 403 liên tiếp {self._consecutive_403} lần → CLEAR CHROME DATA!")
                         self.clear_chrome_data()
                         self._consecutive_403 = 0
-                        # Sau clear data cần login lại - return để user xử lý
                         return False, None, "403 liên tiếp - Đã clear Chrome data, cần login lại Google!"
 
                     self._kill_chrome()
                     self.close()
                     time.sleep(2)
 
-                    if self._use_webshare and self._webshare_proxy:
-                        success_rotate, msg = self._webshare_proxy.rotate_ip(self.worker_id, "T2V 403")
-                        self.log(f"[T2V→I2V] → Webshare rotate: {msg}", "WARN")
-
-                    rotate_ipv6 = False
-                    if self._consecutive_403 >= self._max_403_before_ipv6:
-                        self._consecutive_403 = 0
-                        if not self._ipv6_activated:
-                            self.log(f"[T2V→I2V] → 🌐 ACTIVATE IPv6 MODE (lần đầu)...")
-                            self._activate_ipv6()
+                    # ROTATE IPv6 NGAY khi gặp 403 (không đợi nhiều lần)
+                    if self._ipv6_rotator and self._ipv6_activated:
+                        self.log(f"[T2V→I2V] → 🔄 Rotating IPv6...")
+                        new_ip = self._ipv6_rotator.rotate()
+                        if new_ip:
+                            self.log(f"[T2V→I2V] → 🌐 IPv6 mới: {new_ip}")
                         else:
-                            self.log(f"[T2V→I2V] → 🔄 Rotate sang IPv6 khác...")
-                            rotate_ipv6 = True
+                            self.log(f"[T2V→I2V] → ⚠️ Không rotate được IPv6!", "WARN")
 
-                    if self.restart_chrome(rotate_ipv6=rotate_ipv6):
+                    if self.restart_chrome(rotate_ipv6=False):  # IPv6 đã rotate ở trên
                         self.log("[T2V→I2V] → Chrome restarted, tiếp tục...")
                         continue
                     else:
