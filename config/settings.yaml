@@ -16,6 +16,10 @@ project_root: "./VE3_TOOL"
 #   3. Documents/ve3/ve3.exe (legacy)
 chrome_portable: ""
 
+# Chrome portable thứ 2 - Dùng cho run_worker_pic_basic_2 (2 Chrome song song)
+# VD: "C:\Users\Administrator\Documents\KA5-T1\ve3-tool-simple\GoogleChromePortable - Copy\GoogleChromePortable.exe"
+chrome_portable_2: ""
+
 # Parallel Chrome - Chạy nhiều Chrome song song
 # Format: "worker/total" - VD: "1/2", "2/4"
 # Ví dụ 2 Chrome: Terminal 1 = "1/2", Terminal 2 = "2/2"
