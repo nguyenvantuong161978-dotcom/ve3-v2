@@ -680,6 +680,35 @@ def scan_incomplete_local_projects() -> list:
     return sorted(need_processing)
 
 
+def safe_path_exists(path: Path) -> bool:
+    """
+    Safely check if a path exists, handling network disconnection errors.
+    Returns False if path doesn't exist OR if network is disconnected.
+    """
+    try:
+        return path.exists()
+    except (OSError, PermissionError) as e:
+        # WinError 1167: The device is not connected
+        # WinError 53: The network path was not found
+        # WinError 64: The specified network name is no longer available
+        print(f"  ⚠️ Network error checking path: {e}")
+        return False
+
+
+def safe_iterdir(path: Path) -> list:
+    """
+    Safely iterate over a directory, handling network disconnection errors.
+    Returns empty list if path doesn't exist OR if network is disconnected.
+    """
+    try:
+        if not path.exists():
+            return []
+        return list(path.iterdir())
+    except (OSError, PermissionError) as e:
+        print(f"  ⚠️ Network error listing directory: {e}")
+        return []
+
+
 def scan_master_projects() -> list:
     """Scan master PROJECTS folder for pending projects."""
     pending = []
@@ -687,12 +716,12 @@ def scan_master_projects() -> list:
     print(f"  [DEBUG] Checking: {MASTER_PROJECTS}")
     print(f"  [DEBUG] Worker channel: {WORKER_CHANNEL or 'ALL (no filter)'}")
 
-    if not MASTER_PROJECTS.exists():
+    if not safe_path_exists(MASTER_PROJECTS):
         print(f"  ⚠️ Master PROJECTS not accessible: {MASTER_PROJECTS}")
         return pending
 
     # List all folders
-    all_folders = [item for item in MASTER_PROJECTS.iterdir() if item.is_dir()]
+    all_folders = [item for item in safe_iterdir(MASTER_PROJECTS) if item.is_dir()]
     print(f"  [DEBUG] Found {len(all_folders)} folders in MASTER_PROJECTS")
 
     for item in all_folders:
@@ -821,7 +850,7 @@ def run_scan_loop():
     print(f"{'='*60}")
 
     # Check network paths
-    if not AUTO_PATH or not MASTER_PROJECTS.exists():
+    if not AUTO_PATH or not safe_path_exists(MASTER_PROJECTS):
         print(f"\n❌ Cannot access master PROJECTS!")
         print(f"   Tried paths:")
         for p in POSSIBLE_AUTO_PATHS:
