@@ -132,6 +132,7 @@ class IPv6Rotator:
         # State
         self.consecutive_403 = 0
         self.current_ipv6 = None
+        self.current_gateway = None  # Track gateway đang dùng để xóa đúng route
         self.last_rotated = None
         self._ipv4_disabled = False  # Track trạng thái IPv4
         self._local_proxy = None  # Local SOCKS5 proxy
@@ -413,17 +414,24 @@ class IPv6Rotator:
             # Bước 3: Set gateway
             # Ưu tiên custom gateway từ file, nếu không có thì tự tính
             if new_ipv6 in self.ipv6_gateways:
-                auto_gateway = self.ipv6_gateways[new_ipv6]
-                self.log(f"[IPv6] Using custom gateway: {auto_gateway}")
+                new_gateway = self.ipv6_gateways[new_ipv6]
+                self.log(f"[IPv6] Using custom gateway: {new_gateway}")
             else:
-                auto_gateway = _get_gateway_for_ipv6(new_ipv6)
-                self.log(f"[IPv6] Auto gateway: {auto_gateway}")
+                new_gateway = _get_gateway_for_ipv6(new_ipv6)
+                self.log(f"[IPv6] Auto gateway: {new_gateway}")
 
-            if auto_gateway:
-                # Xóa route cũ trước (ignore error nếu không có)
-                commands.append(f'netsh interface ipv6 delete route ::/0 "{self.interface_name}"')
-                # Thêm route mới
-                commands.append(f'netsh interface ipv6 add route ::/0 "{self.interface_name}" {auto_gateway}')
+            if new_gateway:
+                # Xóa route cũ trước - phải chỉ định cả gateway cũ nếu có
+                # Nếu không chỉ định gateway cũ, Windows có thể không xóa đúng route
+                if self.current_gateway:
+                    self.log(f"[IPv6] Deleting old route with gateway: {self.current_gateway}")
+                    commands.append(f'netsh interface ipv6 delete route ::/0 "{self.interface_name}" {self.current_gateway}')
+                else:
+                    # Fallback: xóa tất cả default routes (có thể có nhiều)
+                    commands.append(f'netsh interface ipv6 delete route ::/0 "{self.interface_name}"')
+
+                # Thêm route mới với gateway MỚI
+                commands.append(f'netsh interface ipv6 add route ::/0 "{self.interface_name}" {new_gateway}')
 
             # Bước 4: Set Windows prefer IPv6 over IPv4 (quan trọng!)
             # Đây là cách ép Windows dùng IPv6 cho outgoing connections
@@ -457,9 +465,11 @@ class IPv6Rotator:
             current = self.get_current_ipv6()
             if current:
                 self.log(f"[IPv6] ✓ Now using: {current}")
+                self.log(f"[IPv6] ✓ Gateway: {new_gateway}")
                 if self.disable_ipv4:
                     self.log("[IPv6] ✓ IPv4 disabled - Chrome sẽ dùng IPv6")
                 self.current_ipv6 = current
+                self.current_gateway = new_gateway  # Track gateway để lần sau xóa đúng
                 return True
             else:
                 self.log("[IPv6] ✗ Failed to verify new IP")

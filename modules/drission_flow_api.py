@@ -1711,98 +1711,156 @@ class DrissionFlowAPI:
             self.log(f"✗ Clear Chrome data failed: {e}", "ERROR")
             return False
 
+    def _force_kill_all_chrome(self):
+        """
+        Kill TẤT CẢ Chrome processes một cách mạnh mẽ.
+        Dùng khi cần xóa sạch data.
+        """
+        import subprocess
+        import platform
+
+        self.log("  🔪 Force killing ALL Chrome processes...")
+
+        try:
+            # 1. Đóng driver trước
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except:
+                    pass
+                self.driver = None
+
+            # 2. Stop proxy bridge
+            if hasattr(self, '_proxy_bridge') and self._proxy_bridge:
+                try:
+                    from proxy_bridge import stop_proxy_bridge
+                    stop_proxy_bridge(self._proxy_bridge)
+                except:
+                    pass
+                self._proxy_bridge = None
+
+            time.sleep(1)
+
+            # 3. Force kill tất cả Chrome processes bằng system command
+            if platform.system() == 'Windows':
+                # Windows: taskkill /F /IM chrome.exe
+                for _ in range(3):  # Retry 3 lần
+                    subprocess.run(
+                        ['taskkill', '/F', '/IM', 'chrome.exe'],
+                        capture_output=True, timeout=10
+                    )
+                    time.sleep(1)
+            else:
+                # Linux/Mac: killall hoặc pkill
+                for _ in range(3):
+                    subprocess.run(['pkill', '-9', '-f', 'chrome'], capture_output=True, timeout=10)
+                    subprocess.run(['pkill', '-9', '-f', 'chromium'], capture_output=True, timeout=10)
+                    time.sleep(1)
+
+            self.log("  ✓ Killed all Chrome processes")
+            time.sleep(2)  # Đợi processes thực sự tắt
+
+        except Exception as e:
+            self.log(f"  ⚠️ Kill Chrome error (không sao): {e}")
+
+    def _delete_with_retry(self, path: Path, max_retries: int = 3) -> bool:
+        """
+        Xóa file/folder với retry và force.
+        """
+        import shutil
+
+        if not path.exists():
+            return True
+
+        for attempt in range(max_retries):
+            try:
+                if path.is_file():
+                    path.unlink()
+                else:
+                    shutil.rmtree(str(path), ignore_errors=True)
+
+                # Verify deletion
+                if not path.exists():
+                    return True
+
+            except Exception as e:
+                self.log(f"    Retry {attempt + 1}/{max_retries}: {e}")
+                time.sleep(1)
+
+        # Final attempt: xóa từng file bên trong
+        if path.is_dir():
+            try:
+                for item in path.rglob('*'):
+                    try:
+                        if item.is_file():
+                            item.unlink()
+                    except:
+                        pass
+                shutil.rmtree(str(path), ignore_errors=True)
+            except:
+                pass
+
+        return not path.exists()
+
     def reset_chrome_profile(self) -> bool:
         """
-        Xóa TRIỆT ĐỂ Chrome profile - Chrome sẽ trắng như mới.
+        Xóa dữ liệu Chrome profile để Chrome trắng như mới.
 
-        Với Chrome Portable: Xóa thư mục Data cùng cấp với exe.
-        Với Chrome thường: Xóa thư mục profile_dir.
+        Đơn giản: Tắt Chrome → Xóa files trong Data/profile/Default/
+        File nào không xóa được thì bỏ qua (không sao).
 
         Returns:
             True nếu xóa thành công
         """
         import shutil
 
-        self.log("🗑️ RESET Chrome Profile (xóa triệt để)...")
+        self.log("🗑️ RESET Chrome Profile...")
 
         try:
-            # 1. Đóng Chrome trước
-            self._kill_chrome()
-            self.close()
+            # 1. Tắt Chrome
+            self._force_kill_all_chrome()
             time.sleep(2)
 
-            deleted = False
+            # 2. Tìm thư mục Default
+            default_dir = None
 
-            # 2. Nếu dùng Chrome Portable → xóa thư mục Data
-            data_dir = None
             if hasattr(self, '_chrome_portable') and self._chrome_portable:
                 chrome_exe = Path(os.path.expandvars(self._chrome_portable))
-                data_dir = chrome_exe.parent / "Data"
-                if data_dir.exists():
-                    self.log(f"  Deleting Chrome Portable Data: {data_dir}")
+                default_dir = chrome_exe.parent / "Data" / "profile" / "Default"
+            elif self.profile_dir:
+                # Chrome thường: profile_dir thường là Default folder
+                if self.profile_dir.name == "Default":
+                    default_dir = self.profile_dir
+                else:
+                    default_dir = self.profile_dir / "Default"
+
+            # 3. Xóa các file trong Default (bỏ qua file không xóa được)
+            if default_dir and default_dir.exists():
+                self.log(f"  📁 Xóa files trong: {default_dir}")
+
+                deleted_count = 0
+                skipped_count = 0
+
+                for item in default_dir.iterdir():
                     try:
-                        shutil.rmtree(str(data_dir))
-                        self.log(f"  ✓ Deleted Data folder")
-                        deleted = True
-                    except Exception as e:
-                        self.log(f"  ⚠️ Could not delete Data: {e}", "WARN")
+                        if item.is_file():
+                            item.unlink()
+                            deleted_count += 1
+                        elif item.is_dir():
+                            shutil.rmtree(str(item), ignore_errors=True)
+                            if not item.exists():
+                                deleted_count += 1
+                            else:
+                                skipped_count += 1
+                    except:
+                        skipped_count += 1
+                        pass  # Bỏ qua file không xóa được
 
-            # 3. Fallback: xóa profile_dir (Chrome thường)
-            if not deleted and self.profile_dir and self.profile_dir.exists():
-                self.log(f"  Deleting: {self.profile_dir}")
-                try:
-                    shutil.rmtree(str(self.profile_dir))
-                    self.log(f"  ✓ Deleted profile directory")
-                    deleted = True
-                except Exception as e:
-                    self.log(f"  ⚠️ Could not delete profile: {e}", "WARN")
+                self.log(f"  ✓ Đã xóa {deleted_count} items" + (f", bỏ qua {skipped_count}" if skipped_count else ""))
+            else:
+                self.log(f"  ⚠️ Không tìm thấy thư mục Default")
 
-            # 4. Tạo lại cấu trúc tối thiểu để skip first-run dialogs
-            if deleted and data_dir:
-                try:
-                    import json
-                    # Tạo thư mục Data và profile
-                    profile_path = data_dir / "profile" / "Default"
-                    profile_path.mkdir(parents=True, exist_ok=True)
-
-                    # File First Run - để Chrome biết đã chạy lần đầu
-                    (data_dir / "profile" / "First Run").touch()
-
-                    # Local State - disable các popup
-                    local_state = {
-                        "browser": {
-                            "enabled_labs_experiments": [],
-                            "has_seen_welcome_page": True
-                        },
-                        "privacy_sandbox": {
-                            "m1": {
-                                "prompt_suppressed": True,
-                                "row_notice_acknowledged": True
-                            }
-                        }
-                    }
-                    (data_dir / "profile" / "Local State").write_text(json.dumps(local_state))
-
-                    # Preferences - skip các dialogs
-                    prefs = {
-                        "browser": {
-                            "has_seen_welcome_page": True,
-                            "show_home_button": False
-                        },
-                        "signin": {
-                            "allowed": False
-                        },
-                        "profile": {
-                            "default_content_setting_values": {}
-                        }
-                    }
-                    (profile_path / "Preferences").write_text(json.dumps(prefs))
-
-                    self.log("  ✓ Created minimal profile (skip first-run dialogs)")
-                except Exception as e:
-                    self.log(f"  ⚠️ Could not create minimal profile: {e}", "WARN")
-
-            # 5. Reset tất cả flags
+            # 4. Reset flags
             self._ready = False
             self._t2v_mode_selected = False
             self._image_mode_selected = False
@@ -1810,8 +1868,7 @@ class DrissionFlowAPI:
             self._cleared_data_for_403 = False
             self.driver = None
 
-            self.log("✓ Chrome profile RESET thành công!")
-            self.log("⚠️ Cần khởi động lại Chrome và login Google!")
+            self.log("✓ Chrome TRẮNG - cần đăng nhập lại!")
             return True
 
         except Exception as e:
@@ -1953,6 +2010,8 @@ class DrissionFlowAPI:
                             if data_path.exists():
                                 user_data = data_path
                                 break
+                        # LƯU LẠI để reset_chrome_profile() có thể tìm đúng Data folder
+                        self._chrome_portable = chrome_exe
                         self.log(f"[AUTO] Phat hien Chrome: {chrome_exe}")
                         break
 
@@ -2018,6 +2077,8 @@ class DrissionFlowAPI:
             # === IPv6 MODE - BẬT NGAY KHI MỞ CHROME ===
             # Dùng IPv6 ngay từ đầu, nếu 403 thì đổi IPv6 khác
             # QUAN TRỌNG: Dùng local SOCKS5 proxy để ÉP Chrome chỉ dùng IPv6
+            # CHỈ Chrome 1 (worker_id=0) mới activate/quản lý IPv6
+            # Chrome 2+ chỉ dùng proxy đã có (Chrome 1 khởi động)
             _using_ipv6_proxy = False
             try:
                 from modules.ipv6_rotator import get_ipv6_rotator
@@ -2025,16 +2086,24 @@ class DrissionFlowAPI:
                 if rotator and rotator.enabled and rotator.ipv6_list:
                     self.log(f"🌐 IPv6 MODE: Có {len(rotator.ipv6_list)} IPs")
 
-                    # Tìm IPv6 hoạt động và bật ngay
-                    if not self._ipv6_activated:
-                        self.log(f"🌐 Activating IPv6 lần đầu...")
-                        working_ipv6 = rotator.init_with_working_ipv6()
+                    # Chrome 2+: Chỉ dùng proxy, KHÔNG activate IPv6
+                    if self.worker_id > 0:
+                        self.log(f"🌐 [Worker{self.worker_id}] Dùng IPv6 proxy từ Chrome 1 (port 1088)")
+                        working_ipv6 = rotator.current_ipv6  # Lấy IP hiện tại (Chrome 1 đã set)
+                        if not working_ipv6:
+                            # Nếu Chrome 1 chưa set, dùng IP đầu tiên
+                            working_ipv6 = rotator.ipv6_list[0] if rotator.ipv6_list else None
+                            self.log(f"🌐 [Worker{self.worker_id}] Fallback to: {working_ipv6}")
                     else:
-                        # Đã activated trước đó → giữ nguyên IP hiện tại (KHÔNG đổi)
-                        # Chỉ đổi IPv6 khi gặp 403 nhiều lần (xử lý ở chỗ khác)
-                        working_ipv6 = rotator.current_ipv6
-                        if working_ipv6:
-                            self.log(f"🌐 Giữ nguyên IPv6: {working_ipv6}")
+                        # Chrome 1: Activate IPv6
+                        if not self._ipv6_activated:
+                            self.log(f"🌐 Activating IPv6 lần đầu...")
+                            working_ipv6 = rotator.init_with_working_ipv6()
+                        else:
+                            # Đã activated trước đó → giữ nguyên IP hiện tại
+                            working_ipv6 = rotator.current_ipv6
+                            if working_ipv6:
+                                self.log(f"🌐 Giữ nguyên IPv6: {working_ipv6}")
 
                     if working_ipv6:
                         self._ipv6_activated = True
@@ -2045,23 +2114,30 @@ class DrissionFlowAPI:
                         # PC có cả IPv4+IPv6, Chrome mặc định dùng IPv4
                         # Proxy này ép TẤT CẢ traffic của Chrome đi qua IPv6
                         # QUAN TRỌNG: Dùng CÙNG port 1088 cho TẤT CẢ workers vì proxy là singleton
+                        proxy_port = 1088  # Fixed port - shared by all workers
                         try:
-                            from modules.ipv6_proxy import start_ipv6_proxy
-                            proxy_port = 1088  # Fixed port - shared by all workers (singleton proxy)
-                            self._ipv6_proxy = start_ipv6_proxy(
-                                ipv6_address=working_ipv6,
-                                port=proxy_port,
-                                log_func=self.log
-                            )
-                            if self._ipv6_proxy:
-                                # Chrome dùng SOCKS5 proxy → tất cả traffic qua IPv6
-                                options.set_argument(f'--proxy-server=socks5://127.0.0.1:{proxy_port}')
-                                options.set_argument('--proxy-bypass-list=<-loopback>')
-                                self.log(f"🌐 Chrome → SOCKS5 proxy → IPv6 ONLY")
-                                self.log(f"   Proxy: socks5://127.0.0.1:{proxy_port}")
-                                _using_ipv6_proxy = True
+                            # CHỈ Chrome 1 mới start proxy, Chrome 2+ dùng proxy đã có
+                            if self.worker_id == 0:
+                                from modules.ipv6_proxy import start_ipv6_proxy
+                                self._ipv6_proxy = start_ipv6_proxy(
+                                    ipv6_address=working_ipv6,
+                                    port=proxy_port,
+                                    log_func=self.log
+                                )
+                                if self._ipv6_proxy:
+                                    self.log(f"🌐 Chrome 1 started IPv6 proxy on port {proxy_port}")
+                                else:
+                                    self.log(f"⚠️ IPv6 proxy failed to start", "WARN")
                             else:
-                                self.log(f"⚠️ IPv6 proxy failed to start", "WARN")
+                                self.log(f"🌐 [Worker{self.worker_id}] Dùng IPv6 proxy từ Chrome 1")
+                                self._ipv6_proxy = True  # Mark as using proxy
+
+                            # Cả 2 Chrome đều dùng proxy
+                            options.set_argument(f'--proxy-server=socks5://127.0.0.1:{proxy_port}')
+                            options.set_argument('--proxy-bypass-list=<-loopback>')
+                            self.log(f"🌐 Chrome → SOCKS5 proxy → IPv6 ONLY")
+                            self.log(f"   Proxy: socks5://127.0.0.1:{proxy_port}")
+                            _using_ipv6_proxy = True
                         except Exception as proxy_err:
                             self.log(f"⚠️ IPv6 proxy error: {proxy_err}", "WARN")
                     else:
@@ -3946,8 +4022,9 @@ class DrissionFlowAPI:
                             self.log(f"[I2V] → Webshare rotate: {msg}", "WARN")
 
                         # === IPv6: Sau N lần 403 liên tiếp, ACTIVATE hoặc ROTATE IPv6 ===
+                        # CHỈ Chrome 1 (worker_id=0) mới activate/rotate IPv6
                         rotate_ipv6 = False
-                        if self._consecutive_403 >= self._max_403_before_ipv6:
+                        if self._consecutive_403 >= self._max_403_before_ipv6 and self.worker_id == 0:
                             self._consecutive_403 = 0  # Reset counter
 
                             if not self._ipv6_activated:
@@ -3958,6 +4035,9 @@ class DrissionFlowAPI:
                                 # Đã activate: Rotate sang IP khác
                                 self.log(f"[I2V] → 🔄 Rotate sang IPv6 khác...")
                                 rotate_ipv6 = True
+                        elif self._consecutive_403 >= self._max_403_before_ipv6:
+                            self.log(f"[Worker{self.worker_id}] Skip IPv6 (Chrome 1 quản lý)")
+                            self._consecutive_403 = 0
 
                         # Restart Chrome (có thể kèm IPv6 rotation)
                         if self.restart_chrome(rotate_ipv6=rotate_ipv6):
@@ -4129,9 +4209,9 @@ class DrissionFlowAPI:
                         success_rotate, msg = self._webshare_proxy.rotate_ip(self.worker_id, "I2V-Chrome 403")
                         self.log(f"[I2V-Chrome] → Webshare rotate: {msg}", "WARN")
 
-                    # === IPv6: Sau N lần 403 liên tiếp, ACTIVATE hoặc ROTATE IPv6 ===
+                    # === IPv6: CHỈ Chrome 1 (worker_id=0) mới activate/rotate ===
                     rotate_ipv6 = False
-                    if self._consecutive_403 >= self._max_403_before_ipv6:
+                    if self._consecutive_403 >= self._max_403_before_ipv6 and self.worker_id == 0:
                         self._consecutive_403 = 0  # Reset counter
 
                         if not self._ipv6_activated:
@@ -4140,6 +4220,9 @@ class DrissionFlowAPI:
                         else:
                             self.log(f"[I2V-Chrome] → 🔄 Rotate sang IPv6 khác...")
                             rotate_ipv6 = True
+                    elif self._consecutive_403 >= self._max_403_before_ipv6:
+                        self.log(f"[Worker{self.worker_id}] Skip IPv6 (Chrome 1 quản lý)")
+                        self._consecutive_403 = 0
 
                     # Restart Chrome
                     if self.restart_chrome(rotate_ipv6=rotate_ipv6):
@@ -4575,9 +4658,9 @@ class DrissionFlowAPI:
                         success_rotate, msg = self._webshare_proxy.rotate_ip(self.worker_id, "I2V-FORCE 403")
                         self.log(f"[I2V-FORCE] → Webshare rotate: {msg}", "WARN")
 
-                    # === IPv6: Sau N lần 403 liên tiếp, ACTIVATE hoặc ROTATE IPv6 ===
+                    # === IPv6: CHỈ Chrome 1 (worker_id=0) mới activate/rotate ===
                     rotate_ipv6 = False
-                    if self._consecutive_403 >= self._max_403_before_ipv6:
+                    if self._consecutive_403 >= self._max_403_before_ipv6 and self.worker_id == 0:
                         self._consecutive_403 = 0  # Reset counter
 
                         if not self._ipv6_activated:
@@ -4588,6 +4671,9 @@ class DrissionFlowAPI:
                             # Đã activate: Rotate sang IP khác
                             self.log(f"[I2V-FORCE] → 🔄 Rotate sang IPv6 khác...")
                             rotate_ipv6 = True
+                    elif self._consecutive_403 >= self._max_403_before_ipv6:
+                        self.log(f"[Worker{self.worker_id}] Skip IPv6 (Chrome 1 quản lý)")
+                        self._consecutive_403 = 0
 
                     # Restart Chrome (có thể kèm IPv6 rotation)
                     if self.restart_chrome(rotate_ipv6=rotate_ipv6):
@@ -5411,8 +5497,9 @@ class DrissionFlowAPI:
                         success_rotate, msg = self._webshare_proxy.rotate_ip(self.worker_id, "T2V-PURE 403")
                         self.log(f"[T2V-PURE] → Webshare rotate: {msg}", "WARN")
 
+                    # CHỈ Chrome 1 (worker_id=0) mới activate/rotate IPv6
                     rotate_ipv6 = False
-                    if self._consecutive_403 >= self._max_403_before_ipv6:
+                    if self._consecutive_403 >= self._max_403_before_ipv6 and self.worker_id == 0:
                         self._consecutive_403 = 0
                         if not self._ipv6_activated:
                             self.log(f"[T2V-PURE] → 🌐 ACTIVATE IPv6 MODE (lần đầu)...")
@@ -5420,6 +5507,9 @@ class DrissionFlowAPI:
                         else:
                             self.log(f"[T2V-PURE] → 🔄 Rotate sang IPv6 khác...")
                             rotate_ipv6 = True
+                    elif self._consecutive_403 >= self._max_403_before_ipv6:
+                        self.log(f"[Worker{self.worker_id}] Skip IPv6 (Chrome 1 quản lý)")
+                        self._consecutive_403 = 0
 
                     if self.restart_chrome(rotate_ipv6=rotate_ipv6):
                         self.log("[T2V-PURE] → Chrome restarted, tiếp tục...")
@@ -5630,8 +5720,9 @@ class DrissionFlowAPI:
                         success_rotate, msg = self._webshare_proxy.rotate_ip(self.worker_id, "I2V-MODIFY 403")
                         self.log(f"[I2V-MODIFY] → Webshare rotate: {msg}", "WARN")
 
+                    # CHỈ Chrome 1 (worker_id=0) mới activate/rotate IPv6
                     rotate_ipv6 = False
-                    if self._consecutive_403 >= self._max_403_before_ipv6:
+                    if self._consecutive_403 >= self._max_403_before_ipv6 and self.worker_id == 0:
                         self._consecutive_403 = 0
                         if not self._ipv6_activated:
                             self.log(f"[I2V-MODIFY] → 🌐 ACTIVATE IPv6 MODE (lần đầu)...")
@@ -5639,6 +5730,9 @@ class DrissionFlowAPI:
                         else:
                             self.log(f"[I2V-MODIFY] → 🔄 Rotate sang IPv6 khác...")
                             rotate_ipv6 = True
+                    elif self._consecutive_403 >= self._max_403_before_ipv6:
+                        self.log(f"[Worker{self.worker_id}] Skip IPv6 (Chrome 1 quản lý)")
+                        self._consecutive_403 = 0
 
                     if self.restart_chrome(rotate_ipv6=rotate_ipv6):
                         self.log("[I2V-MODIFY] → Chrome restarted, tiếp tục...")

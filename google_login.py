@@ -339,6 +339,11 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         time.sleep(5)  # Đợi 5s cho login xong
         log("Login completed!", "OK")
 
+        # Đợi thêm để trang load đầy đủ trước khi tắt
+        log("Waiting for page to fully load...")
+        time.sleep(10)  # Đợi thêm 10s cho trang load xong
+        log("Page loaded, closing browser...", "OK")
+
         # Đóng Chrome (drission_flow_api.py sẽ tự navigate đến project)
         try:
             driver.quit()
