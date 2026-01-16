@@ -164,7 +164,12 @@ class BrowserFlowGenerator:
                 "error": "[ERROR]",
                 "warn": "[WARN]",
             }
-            print(f"[{timestamp}] {icons.get(level, '')} {message}")
+            full_msg = f"[{timestamp}] {icons.get(level, '')} {message}"
+            # Handle encoding issues on Windows console
+            try:
+                print(full_msg)
+            except UnicodeEncodeError:
+                print(full_msg.encode('ascii', 'replace').decode('ascii'))
 
     def _get_profile_path(self) -> Optional[str]:
         """

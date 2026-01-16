@@ -104,13 +104,12 @@ def run_chrome2_worker(excel_path: str):
         from modules.smart_engine import SmartEngine
 
         # Create engine with worker_id=1 (Chrome 2)
+        # Truyền chrome_portable vào constructor để KHÔNG bị override
         engine = SmartEngine(
             worker_id=1,
-            total_workers=2
+            total_workers=2,
+            chrome_portable=chrome2  # Override settings.yaml
         )
-
-        # Override chrome_portable với chrome2
-        engine.chrome_portable = chrome2
 
         print(f"[Chrome2] Running engine...")
 

@@ -107,7 +107,7 @@ class SmartEngine:
     # Chi refresh khi API tra loi 401 (authentication error)
     # Dieu nay toi uu hon vi token thuong valid lau hon 50 phut
 
-    def __init__(self, config_path: str = None, assigned_profile: str = None, worker_id: int = 0, total_workers: int = 1):
+    def __init__(self, config_path: str = None, assigned_profile: str = None, worker_id: int = 0, total_workers: int = 1, chrome_portable: str = None):
         """
         Initialize SmartEngine.
 
@@ -116,6 +116,7 @@ class SmartEngine:
             assigned_profile: Specific Chrome profile name to use (for parallel processing)
             worker_id: Worker ID for parallel processing (affects proxy selection, Chrome port)
             total_workers: Total number of workers (for window layout: 1=full, 2=split, ...)
+            chrome_portable: Path to Chrome Portable exe (overrides settings.yaml)
         """
         # Support VE3_CONFIG_DIR environment variable
         if config_path:
@@ -131,7 +132,9 @@ class SmartEngine:
         self.tokens_path = self.config_path.parent / "tokens.json"
 
         self.chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-        self.chrome_portable = ""  # Chrome portable đã đăng nhập sẵn
+        # Chrome portable - nếu truyền vào constructor thì KHÔNG bị override bởi settings.yaml
+        self.chrome_portable = chrome_portable or ""
+        self._chrome_portable_override = bool(chrome_portable)  # Flag để không bị override
 
         # Assigned profile for parallel processing
         self.assigned_profile = assigned_profile
@@ -234,10 +237,14 @@ class SmartEngine:
                 self.verbose_log = settings.get('verbose_log', False)
 
                 # Chrome portable - ưu tiên cao nhất (KHÔNG check exists)
-                chrome_portable = settings.get('chrome_portable', '')
-                if chrome_portable:
-                    self.chrome_portable = chrome_portable
-                    self.log(f"[Config] Chrome portable: {chrome_portable}", "INFO")
+                # Nếu đã được truyền vào constructor thì KHÔNG override
+                if not self._chrome_portable_override:
+                    chrome_portable = settings.get('chrome_portable', '')
+                    if chrome_portable:
+                        self.chrome_portable = chrome_portable
+                        self.log(f"[Config] Chrome portable: {chrome_portable}", "INFO")
+                else:
+                    self.log(f"[Config] Chrome portable (override): {self.chrome_portable}", "INFO")
 
                 # Chrome path fallback
                 chrome_path = settings.get('chrome_path', '')
@@ -246,8 +253,8 @@ class SmartEngine:
             except:
                 pass
 
-        # === AUTO-DETECT CHROME PORTABLE (nếu chưa có từ settings) ===
-        if not self.chrome_portable:
+        # === AUTO-DETECT CHROME PORTABLE (nếu chưa có từ settings và không override) ===
+        if not self.chrome_portable and not self._chrome_portable_override:
             import platform
             if platform.system() == 'Windows':
                 chrome_locations = [
