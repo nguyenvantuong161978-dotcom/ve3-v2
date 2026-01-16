@@ -3618,20 +3618,24 @@ class BrowserFlowGenerator:
             self._log(f"[INFO] Reference images (nv/loc): {ref_ids}")
 
         # === PARALLEL CHROME: chia scene cho nhiều Chrome ===
-        # Cách dùng: python run_worker.py 1 (hoặc 2)
-        # Terminal 1 → Chrome 1 làm scenes 1,3,5,... + ảnh nv*/loc*
-        # Terminal 2 → Chrome 2 làm scenes 2,4,6,...
-        # Format: "1/2", "2/4", etc.
-        parallel_chrome = os.environ.get('PARALLEL_CHROME', '') or str(self.config.get('parallel_chrome', ''))
-        worker_id, total_workers = 0, 1
-        if parallel_chrome and '/' in parallel_chrome:
-            try:
-                parts = parallel_chrome.split('/')
-                worker_id = int(parts[0])
-                total_workers = int(parts[1])
-                self._log(f"[PARALLEL] Chrome {worker_id}/{total_workers} - Scenes: {worker_id},{worker_id+total_workers},{worker_id+2*total_workers}...")
-            except:
-                worker_id, total_workers = 0, 1
+        # Ưu tiên 1: self.worker_id và self.total_workers (từ constructor - Chrome 2 mode)
+        # Ưu tiên 2: PARALLEL_CHROME env/config (format "1/2", "2/4", etc.)
+        worker_id = getattr(self, 'worker_id', 0) or 0
+        total_workers = getattr(self, 'total_workers', 1) or 1
+
+        # Fallback to PARALLEL_CHROME env/config nếu chưa set từ constructor
+        if total_workers <= 1:
+            parallel_chrome = os.environ.get('PARALLEL_CHROME', '') or str(self.config.get('parallel_chrome', ''))
+            if parallel_chrome and '/' in parallel_chrome:
+                try:
+                    parts = parallel_chrome.split('/')
+                    worker_id = int(parts[0])
+                    total_workers = int(parts[1])
+                except:
+                    pass
+
+        if total_workers > 1:
+            self._log(f"[PARALLEL] Chrome {worker_id}/{total_workers} - Worker sẽ xử lý scenes theo modulo")
 
         for i, prompt_data in enumerate(prompts):
             pid = str(prompt_data.get('id', i + 1))
