@@ -244,8 +244,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                         log(f"Using default profile: {data_path}")
                         break
 
-        # Mở Chrome mới (không kết nối vào Chrome đang chạy)
-        options.auto_port(False)  # Không tự động tìm port
+        # Mở Chrome mới
         driver = ChromiumPage(options)
 
         # Đi đến trang đăng nhập Google
