@@ -1203,27 +1203,41 @@ class DrissionFlowAPI:
             self.log("⚠️ Page chưa sẵn sàng", "WARN")
 
         # 1. Đợi trang load và tìm button "Dự án mới"
-        for i in range(15):
-            try:
-                result = self.driver.run_js(JS_CLICK_NEW_PROJECT)
-                if result == 'CLICKED':
-                    self.log("✓ Clicked 'Dự án mới'")
-                    time.sleep(2)
-                    break
-            except Exception as e:
-                if "ContextLost" in str(type(e).__name__) or "refresh" in str(e).lower():
-                    self.log(f"   Page đang refresh, đợi...")
-                    time.sleep(2)
-                    continue
-                raise
-            time.sleep(1)
-            if i == 5:
-                self.log("  ... đợi button 'Dự án mới' xuất hiện...")
+        # Nếu không tìm thấy → F5 refresh và thử lại (mỗi 10s)
+        MAX_REFRESH = 6  # Tối đa 6 lần refresh (60s)
+        for refresh_count in range(MAX_REFRESH):
+            # Thử tìm button trong 10s
+            for i in range(10):
+                try:
+                    result = self.driver.run_js(JS_CLICK_NEW_PROJECT)
+                    if result == 'CLICKED':
+                        self.log("✓ Clicked 'Dự án mới'")
+                        time.sleep(2)
+                        break
+                except Exception as e:
+                    if "ContextLost" in str(type(e).__name__) or "refresh" in str(e).lower():
+                        self.log(f"   Page đang refresh, đợi...")
+                        time.sleep(2)
+                        continue
+                    raise
+                time.sleep(1)
+                if i == 4:
+                    self.log("  ... đợi button 'Dự án mới' xuất hiện...")
+            else:
+                # Không tìm thấy button → F5 refresh
+                self.log(f"⚠️ Không tìm thấy button - F5 refresh (lần {refresh_count + 1}/{MAX_REFRESH})...")
+                try:
+                    self.driver.refresh()
+                    time.sleep(3)  # Đợi page load sau refresh
+                    if not self._wait_for_page_ready(timeout=15):
+                        self.log("⚠️ Page chưa sẵn sàng sau refresh", "WARN")
+                except Exception as e:
+                    self.log(f"  → F5 error: {e}", "WARN")
+                continue
+            break  # Đã click thành công
         else:
-            self.log("✗ Không tìm thấy button 'Dự án mới'", "ERROR")
-            self.log("→ Hãy click thủ công vào dự án", "WARN")
-            # Fallback: đợi user click thủ công
-            return self._wait_for_project_manual(timeout)
+            self.log(f"✗ Không tìm thấy button 'Dự án mới' sau {MAX_REFRESH} lần refresh", "ERROR")
+            return False
 
         # 2. Chọn "Tạo hình ảnh" từ dropdown
         time.sleep(1)
@@ -1250,57 +1264,6 @@ class DrissionFlowAPI:
 
         self.log("✗ Timeout - chưa vào được dự án", "ERROR")
         return False
-
-    def _wait_for_project_manual(self, timeout: int = 60) -> bool:
-        """
-        Fallback: đợi user chọn project thủ công.
-        Nếu quá lâu (30s) → tự động F5 refresh.
-        Nếu vẫn không được (60s) → restart Chrome với IP mới.
-        """
-        self.log("Đợi chọn dự án thủ công...")
-        self.log("→ Click vào dự án có sẵn hoặc tạo dự án mới")
-
-        REFRESH_TIMEOUT = 30  # Sau 30s không click được → F5
-        refreshed = False
-
-        for i in range(timeout):
-            current_url = self.driver.url
-            if "/project/" in current_url:
-                self.log(f"✓ Đã vào dự án!")
-
-                # Quan trọng: Chọn "Tạo hình ảnh" từ dropdown
-                time.sleep(1)
-                for j in range(10):
-                    result = self.driver.run_js(JS_SELECT_IMAGE_MODE)
-                    if result == 'CLICKED':
-                        self.log("✓ Chọn 'Tạo hình ảnh'")
-                        time.sleep(1)
-                        break
-                    time.sleep(0.5)
-                else:
-                    self.log("⚠️ Không tìm thấy dropdown 'Tạo hình ảnh'", "WARN")
-
-                return True
-            time.sleep(1)
-
-            # Sau 30s → tự động F5 refresh
-            if i == REFRESH_TIMEOUT and not refreshed:
-                self.log(f"⚠️ Đợi quá lâu ({REFRESH_TIMEOUT}s) - Tự động F5 refresh...")
-                try:
-                    self.driver.refresh()
-                    refreshed = True
-                    time.sleep(3)  # Đợi page load
-                except Exception as e:
-                    self.log(f"  → F5 error: {e}", "WARN")
-
-            if i % 15 == 14:
-                self.log(f"... đợi {i+1}s - hãy click chọn dự án")
-
-        self.log("✗ Timeout - chưa chọn dự án", "ERROR")
-
-        # Timeout → gợi ý restart với IP mới
-        self.log("→ Sẽ restart Chrome với IP mới...", "WARN")
-        return False  # Trả về False để trigger restart ở layer trên
 
     def _warm_up_session(self, dummy_prompt: str = "a simple test image") -> bool:
         """
@@ -2521,7 +2484,7 @@ class DrissionFlowAPI:
 
         self.log("✓ Project đã sẵn sàng (textarea visible)!")
 
-        # Mode đã được chọn ở _create_new_project() hoặc _wait_for_project_manual()
+        # Mode đã được chọn ở _auto_setup_project()
         # Không cần chọn lại ở đây
 
         # 6. Warm up session (tạo 1 ảnh trong Chrome để activate)
