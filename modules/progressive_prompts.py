@@ -164,8 +164,11 @@ class ProgressivePromptsGenerator:
             return None
 
     def _extract_json(self, text: str) -> Optional[dict]:
-        """Extract JSON từ response text."""
+        """Extract JSON từ response text - với repair cho truncated JSON."""
         import re
+
+        if not text:
+            return None
 
         # Loại bỏ <think>...</think> tags (DeepSeek)
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
@@ -182,17 +185,85 @@ class ProgressivePromptsGenerator:
             try:
                 return json.loads(match.group(1))
             except:
-                pass
+                # Thử repair
+                repaired = self._repair_truncated_json(match.group(1))
+                if repaired:
+                    try:
+                        return json.loads(repaired)
+                    except:
+                        pass
 
         # Tìm JSON object
         match = re.search(r'\{[\s\S]*\}', text)
         if match:
+            json_str = match.group(0)
             try:
-                return json.loads(match.group(0))
+                return json.loads(json_str)
             except:
-                pass
+                # Thử repair truncated JSON
+                repaired = self._repair_truncated_json(json_str)
+                if repaired:
+                    try:
+                        return json.loads(repaired)
+                    except:
+                        pass
+
+        # Tìm JSON bắt đầu bằng { nhưng có thể bị cắt cuối
+        start_idx = text.find('{')
+        if start_idx != -1:
+            json_str = text[start_idx:]
+            repaired = self._repair_truncated_json(json_str)
+            if repaired:
+                try:
+                    return json.loads(repaired)
+                except:
+                    pass
 
         return None
+
+    def _repair_truncated_json(self, json_str: str) -> Optional[str]:
+        """Repair JSON bị truncated (thiếu closing brackets)."""
+        if not json_str:
+            return None
+
+        # Đếm brackets
+        open_braces = json_str.count('{')
+        close_braces = json_str.count('}')
+        open_brackets = json_str.count('[')
+        close_brackets = json_str.count(']')
+
+        # Nếu balanced thì return nguyên
+        if open_braces == close_braces and open_brackets == close_brackets:
+            return json_str
+
+        # Nếu có nhiều close hơn open -> JSON không valid
+        if close_braces > open_braces or close_brackets > open_brackets:
+            return None
+
+        # Cắt bỏ phần dở dang cuối và thêm closing brackets
+        # Tìm vị trí cuối cùng có thể là kết thúc hợp lệ
+        for i in range(len(json_str) - 1, max(0, len(json_str) - 200), -1):
+            char = json_str[i]
+            if char in '}]"':
+                test_str = json_str[:i+1]
+                # Đếm lại
+                ob = test_str.count('{')
+                cb = test_str.count('}')
+                oB = test_str.count('[')
+                cB = test_str.count(']')
+                # Thêm closing cần thiết
+                suffix = ']' * max(0, oB - cB) + '}' * max(0, ob - cb)
+                repaired = test_str + suffix
+                try:
+                    json.loads(repaired)
+                    return repaired
+                except:
+                    continue
+
+        # Fallback: Thêm closing brackets đơn giản
+        suffix = ']' * max(0, open_brackets - close_brackets)
+        suffix += '}' * max(0, open_braces - close_braces)
+        return json_str + suffix
 
     def _sample_text(self, text: str, total_chars: int = 8000) -> str:
         """
