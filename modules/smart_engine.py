@@ -4060,7 +4060,14 @@ class SmartEngine:
 
                 # Xac dinh output folder
                 # Characters (nv*) and Locations (loc*) -> nv/ folder
-                if pid_str.startswith('nv') or pid_str.startswith('loc'):
+                is_reference = pid_str.startswith('nv') or pid_str.startswith('loc')
+
+                # === SKIP REFERENCES nếu là Chrome 2 (skip_references=True) ===
+                if is_reference and getattr(self, '_skip_references', False):
+                    # Chrome 2: Bỏ qua nv/loc, chỉ Chrome 1 tạo
+                    continue
+
+                if is_reference:
                     out_path = proj_dir / "nv" / f"{pid_str}.png"
                 else:
                     out_path = proj_dir / "img" / f"{pid_str}.png"
