@@ -166,13 +166,20 @@ def run_chrome2_pic_worker(excel_path: str):
 
     print(f"[Chrome2-PIC] Project URL: {project_url[:60]}...", flush=True)
 
+    # Safe print function to handle encoding errors on Windows
+    def safe_print(msg):
+        try:
+            print(msg, flush=True)
+        except UnicodeEncodeError:
+            print(msg.encode('ascii', 'replace').decode('ascii'), flush=True)
+
     # Create DrissionFlowAPI with Chrome 2 settings
     from modules.drission_flow_api import DrissionFlowAPI
 
     api = DrissionFlowAPI(
         profile_dir="./chrome_profiles/chrome2",  # Profile RIÊNG cho Chrome 2
         verbose=True,
-        log_callback=lambda msg, lvl="INFO": print(f"[Chrome2-PIC] {msg}", flush=True),
+        log_callback=lambda msg, lvl="INFO": safe_print(f"[Chrome2-PIC] {msg}"),
         webshare_enabled=False,
         worker_id=1,  # Chrome 2 = bên phải
         total_workers=2,  # Chia đôi màn hình
