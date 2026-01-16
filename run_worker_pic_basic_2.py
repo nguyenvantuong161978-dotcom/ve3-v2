@@ -3,7 +3,7 @@
 VE3 Tool - Worker PIC BASIC 2 Chrome Mode
 ==========================================
 Chạy 2 Chrome SONG SONG để tạo ảnh nhanh hơn.
-Giống run_worker_pic_basic nhưng dùng 2 Chrome portable.
+Dùng subprocess như run_worker đã làm.
 
 Config trong settings.yaml:
   chrome_portable: "path/to/GoogleChromePortable/GoogleChromePortable.exe"
@@ -12,12 +12,15 @@ Config trong settings.yaml:
 Usage:
     python run_worker_pic_basic_2.py                     (quét và xử lý tự động)
     python run_worker_pic_basic_2.py AR47-0028           (chạy 1 project cụ thể)
+    python run_worker_pic_basic_2.py --chrome-id 0      (chạy Chrome 1 - internal)
+    python run_worker_pic_basic_2.py --chrome-id 1      (chạy Chrome 2 - internal)
 """
 
 import sys
 import os
 import time
 import threading
+import subprocess
 from pathlib import Path
 
 # Add current directory to path
@@ -82,23 +85,21 @@ def load_chrome_paths() -> tuple:
     return chrome1, chrome2
 
 
-def run_engine_thread(chrome_id: int, chrome_path: str, excel_path: str, callback, results: dict, lock: threading.Lock):
+def run_single_chrome(chrome_id: int, chrome_path: str, excel_path: str, callback=None):
     """
-    Run SmartEngine in a thread with specific Chrome path.
-    Both threads process same Excel - they skip images that already exist.
+    Run image generation with a specific Chrome (called as subprocess or direct).
     """
-    thread_name = f"Chrome{chrome_id + 1}"
+    def log(msg, level="INFO"):
+        prefix = f"[Chrome{chrome_id + 1}]"
+        if callback:
+            callback(f"{prefix} {msg}", level)
+        else:
+            print(f"{prefix} {msg}")
 
     try:
         from modules.smart_engine import SmartEngine
 
-        def thread_log(msg, level="INFO"):
-            if callback:
-                callback(f"[{thread_name}] {msg}", level)
-            else:
-                print(f"[{thread_name}] {msg}")
-
-        thread_log(f"Starting with Chrome: {chrome_path}")
+        log(f"Starting with Chrome: {chrome_path}")
 
         # Create engine with specific Chrome path
         engine = SmartEngine(
@@ -108,24 +109,20 @@ def run_engine_thread(chrome_id: int, chrome_path: str, excel_path: str, callbac
         engine.chrome_portable = chrome_path
 
         # Run engine - images only
-        result = engine.run(excel_path, callback=lambda msg, lvl="INFO": thread_log(msg, lvl), skip_compose=True, skip_video=True)
+        result = engine.run(excel_path, callback=log, skip_compose=True, skip_video=True)
 
-        with lock:
-            results[f"chrome{chrome_id + 1}"] = result
-
-        thread_log(f"Done!")
+        log(f"Done! Result: {result}")
+        return result
 
     except Exception as e:
-        if callback:
-            callback(f"[{thread_name}] Error: {e}", "ERROR")
-        else:
-            print(f"[{thread_name}] Error: {e}")
+        log(f"Error: {e}", "ERROR")
         import traceback
         traceback.print_exc()
+        return {"error": str(e)}
 
 
 def process_project_pic_basic_2(code: str, callback=None) -> bool:
-    """Process a single project using 2 Chrome instances in parallel."""
+    """Process a single project using 2 Chrome instances in parallel (subprocess)."""
 
     def log(msg, level="INFO"):
         if callback:
@@ -182,34 +179,51 @@ def process_project_pic_basic_2(code: str, callback=None) -> bool:
             log(f"  Failed to recreate Excel, skip!", "ERROR")
             return False
 
-    # Step 4: Run 2 Chrome in parallel
+    # Step 4: Run 2 Chrome in parallel using subprocess (like run_worker)
     log(f"\n{'='*60}")
-    log(f"  Starting 2 Chrome instances in PARALLEL")
+    log(f"  Starting 2 Chrome instances in PARALLEL (subprocess)")
     log(f"{'='*60}")
 
-    results = {}
-    lock = threading.Lock()
+    # Start Chrome 2 as subprocess
+    chrome2_cmd = [
+        sys.executable,
+        str(TOOL_DIR / "run_worker_pic_basic_2.py"),
+        "--chrome-id", "1",
+        "--chrome-path", chrome2,
+        "--excel", str(excel_path)
+    ]
 
-    # Create threads
-    t1 = threading.Thread(
-        target=run_engine_thread,
-        args=(0, chrome1, str(excel_path), callback, results, lock),
-        name="Chrome1"
+    log(f"\n[PARALLEL] Starting Chrome2 in background...")
+    chrome2_process = subprocess.Popen(
+        chrome2_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
     )
-    t2 = threading.Thread(
-        target=run_engine_thread,
-        args=(1, chrome2, str(excel_path), callback, results, lock),
-        name="Chrome2"
-    )
 
-    # Start threads
-    t1.start()
-    time.sleep(3)  # Delay to avoid Chrome startup conflicts
-    t2.start()
+    # Thread to print Chrome2 output
+    def print_chrome2_output():
+        try:
+            for line in chrome2_process.stdout:
+                print(f"[Chrome2] {line.rstrip()}")
+        except:
+            pass
 
-    # Wait for both to finish
-    t1.join()
-    t2.join()
+    chrome2_thread = threading.Thread(target=print_chrome2_output, daemon=True)
+    chrome2_thread.start()
+
+    # Run Chrome 1 in main process
+    log(f"\n[PARALLEL] Starting Chrome1 (main)...")
+    run_single_chrome(0, chrome1, str(excel_path), callback)
+
+    # Wait for Chrome 2 to finish
+    log(f"\n[PARALLEL] Chrome1 done. Waiting for Chrome2...")
+    try:
+        chrome2_process.wait(timeout=600)  # 10 min timeout
+    except subprocess.TimeoutExpired:
+        log(f"Chrome2 timeout, terminating...", "WARN")
+        chrome2_process.terminate()
 
     log(f"\n{'='*60}")
     log(f"  Both Chrome finished!")
@@ -295,7 +309,7 @@ def run_scan_loop():
     print(f"{'='*60}")
     print(f"  Worker folder:   {TOOL_DIR.parent.name}")
     print(f"  Channel filter:  {WORKER_CHANNEL or 'ALL'}")
-    print(f"  Mode:            2-CHROME PARALLEL")
+    print(f"  Mode:            2-CHROME PARALLEL (subprocess)")
     print(f"{'='*60}")
 
     chrome1, chrome2 = load_chrome_paths()
@@ -352,8 +366,18 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description='VE3 Worker PIC BASIC 2-Chrome')
     parser.add_argument('project', nargs='?', default=None, help='Project code')
+    parser.add_argument('--chrome-id', type=int, default=None, help='Chrome ID (0 or 1) - internal use')
+    parser.add_argument('--chrome-path', type=str, default=None, help='Chrome path - internal use')
+    parser.add_argument('--excel', type=str, default=None, help='Excel path - internal use')
     args = parser.parse_args()
 
+    # Internal mode: run single Chrome (called by subprocess)
+    if args.chrome_id is not None and args.chrome_path and args.excel:
+        print(f"[Chrome{args.chrome_id + 1}] Starting subprocess mode...")
+        run_single_chrome(args.chrome_id, args.chrome_path, args.excel)
+        return
+
+    # Normal mode
     if args.project:
         process_project_pic_basic_2(args.project)
     else:
