@@ -690,8 +690,38 @@ Return JSON only:
         # Parse response
         data = self._extract_json(response)
         if not data or "segments" not in data:
-            self._log("  ERROR: Could not parse segments!", "ERROR")
-            return StepResult("analyze_story_segments", StepStatus.FAILED, "JSON parse failed")
+            self._log("  ERROR: Could not parse segments from API!", "ERROR")
+            self._log(f"  API Response (first 500 chars): {response[:500] if response else 'None'}", "DEBUG")
+
+            # === FALLBACK: Tạo segments đơn giản dựa trên SRT ===
+            self._log("  -> Creating FALLBACK segments based on SRT duration...")
+            total_srt = len(srt_entries)
+            total_duration = srt_entries[-1].end if srt_entries else 300
+
+            # Tính số segments (~60s mỗi segment, ~12 ảnh)
+            num_segments = max(1, int(total_duration / 60))
+            entries_per_seg = max(1, total_srt // num_segments)
+            images_per_seg = max(1, int(60 / 5))  # ~12 ảnh per 60s
+
+            segments = []
+            for i in range(num_segments):
+                seg_start = i * entries_per_seg + 1
+                seg_end = min((i + 1) * entries_per_seg, total_srt)
+                if i == num_segments - 1:
+                    seg_end = total_srt  # Last segment gets all remaining
+
+                segments.append({
+                    "segment_id": i + 1,
+                    "segment_name": f"Part {i + 1}",
+                    "message": f"Story segment {i + 1}",
+                    "key_elements": [],
+                    "image_count": images_per_seg,
+                    "srt_range_start": seg_start,
+                    "srt_range_end": seg_end
+                })
+
+            self._log(f"  -> Created {len(segments)} fallback segments")
+            data = {"segments": segments}
 
         segments = data["segments"]
         total_srt = len(srt_entries)
