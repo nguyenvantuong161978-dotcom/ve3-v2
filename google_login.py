@@ -208,8 +208,8 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         # Chrome 1 (worker_id=0): port 9222
         # Chrome 2 (worker_id=1): port 9223
         base_port = 9222 + worker_id
-        options.set_local_port(base_port)
-        log(f"Using port: {base_port} (worker_id={worker_id})")
+        options.set_address(f"127.0.0.1:{base_port}")
+        log(f"Using port: 127.0.0.1:{base_port} (worker_id={worker_id})")
 
         # Ưu tiên chrome_portable được truyền vào (cho Chrome 2 song song)
         chrome_exe = None
