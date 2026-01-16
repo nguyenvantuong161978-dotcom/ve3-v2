@@ -1711,9 +1711,101 @@ class DrissionFlowAPI:
             self.log(f"✗ Clear Chrome data failed: {e}", "ERROR")
             return False
 
+    def _force_kill_all_chrome(self):
+        """
+        Kill TẤT CẢ Chrome processes một cách mạnh mẽ.
+        Dùng khi cần xóa sạch data.
+        """
+        import subprocess
+        import platform
+
+        self.log("  🔪 Force killing ALL Chrome processes...")
+
+        try:
+            # 1. Đóng driver trước
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except:
+                    pass
+                self.driver = None
+
+            # 2. Stop proxy bridge
+            if hasattr(self, '_proxy_bridge') and self._proxy_bridge:
+                try:
+                    from proxy_bridge import stop_proxy_bridge
+                    stop_proxy_bridge(self._proxy_bridge)
+                except:
+                    pass
+                self._proxy_bridge = None
+
+            time.sleep(1)
+
+            # 3. Force kill tất cả Chrome processes bằng system command
+            if platform.system() == 'Windows':
+                # Windows: taskkill /F /IM chrome.exe
+                for _ in range(3):  # Retry 3 lần
+                    subprocess.run(
+                        ['taskkill', '/F', '/IM', 'chrome.exe'],
+                        capture_output=True, timeout=10
+                    )
+                    time.sleep(1)
+            else:
+                # Linux/Mac: killall hoặc pkill
+                for _ in range(3):
+                    subprocess.run(['pkill', '-9', '-f', 'chrome'], capture_output=True, timeout=10)
+                    subprocess.run(['pkill', '-9', '-f', 'chromium'], capture_output=True, timeout=10)
+                    time.sleep(1)
+
+            self.log("  ✓ Killed all Chrome processes")
+            time.sleep(2)  # Đợi processes thực sự tắt
+
+        except Exception as e:
+            self.log(f"  ⚠️ Kill Chrome error (không sao): {e}")
+
+    def _delete_with_retry(self, path: Path, max_retries: int = 3) -> bool:
+        """
+        Xóa file/folder với retry và force.
+        """
+        import shutil
+
+        if not path.exists():
+            return True
+
+        for attempt in range(max_retries):
+            try:
+                if path.is_file():
+                    path.unlink()
+                else:
+                    shutil.rmtree(str(path), ignore_errors=True)
+
+                # Verify deletion
+                if not path.exists():
+                    return True
+
+            except Exception as e:
+                self.log(f"    Retry {attempt + 1}/{max_retries}: {e}")
+                time.sleep(1)
+
+        # Final attempt: xóa từng file bên trong
+        if path.is_dir():
+            try:
+                for item in path.rglob('*'):
+                    try:
+                        if item.is_file():
+                            item.unlink()
+                    except:
+                        pass
+                shutil.rmtree(str(path), ignore_errors=True)
+            except:
+                pass
+
+        return not path.exists()
+
     def reset_chrome_profile(self) -> bool:
         """
         Xóa TRIỆT ĐỂ Chrome profile - Chrome sẽ trắng như mới.
+        MẠNH TAY: Kill all Chrome → Xóa toàn bộ Data → Tạo profile sạch.
 
         Với Chrome Portable: Xóa thư mục Data cùng cấp với exe.
         Với Chrome thường: Xóa thư mục profile_dir.
@@ -1723,42 +1815,121 @@ class DrissionFlowAPI:
         """
         import shutil
 
-        self.log("🗑️ RESET Chrome Profile (xóa triệt để)...")
+        self.log("🗑️ RESET Chrome Profile (XÓA TRIỆT ĐỂ - MẠNH TAY)...")
 
         try:
-            # 1. Đóng Chrome trước
-            self._kill_chrome()
-            self.close()
-            time.sleep(2)
+            # 1. FORCE KILL tất cả Chrome processes
+            self._force_kill_all_chrome()
+            time.sleep(3)  # Đợi lâu hơn để processes thực sự tắt và file được giải phóng
 
             deleted = False
-
-            # 2. Nếu dùng Chrome Portable → xóa thư mục Data
             data_dir = None
+
+            # 2. Xác định thư mục cần xóa
             if hasattr(self, '_chrome_portable') and self._chrome_portable:
                 chrome_exe = Path(os.path.expandvars(self._chrome_portable))
                 data_dir = chrome_exe.parent / "Data"
-                if data_dir.exists():
-                    self.log(f"  Deleting Chrome Portable Data: {data_dir}")
-                    try:
-                        shutil.rmtree(str(data_dir))
-                        self.log(f"  ✓ Deleted Data folder")
-                        deleted = True
-                    except Exception as e:
-                        self.log(f"  ⚠️ Could not delete Data: {e}", "WARN")
+            elif self.profile_dir:
+                data_dir = self.profile_dir.parent  # Thường là User Data folder
 
-            # 3. Fallback: xóa profile_dir (Chrome thường)
+            # 3. XÓA TRIỆT ĐỂ - từng phần quan trọng
+            if data_dir and data_dir.exists():
+                self.log(f"  📁 Target: {data_dir}")
+
+                # Danh sách các items cần xóa TRIỆT ĐỂ (chứa login, history, cookies)
+                critical_items = [
+                    # Profile data
+                    "profile/Default/Login Data",
+                    "profile/Default/Login Data-journal",
+                    "profile/Default/History",
+                    "profile/Default/History-journal",
+                    "profile/Default/Cookies",
+                    "profile/Default/Cookies-journal",
+                    "profile/Default/Web Data",
+                    "profile/Default/Web Data-journal",
+                    "profile/Default/Visited Links",
+                    "profile/Default/Favicons",
+                    "profile/Default/Top Sites",
+                    "profile/Default/Network Action Predictor",
+                    "profile/Default/QuotaManager",
+                    "profile/Default/QuotaManager-journal",
+                    # Cache
+                    "profile/Default/Cache",
+                    "profile/Default/Code Cache",
+                    "profile/Default/GPUCache",
+                    "profile/Default/Service Worker",
+                    # Session
+                    "profile/Default/Session Storage",
+                    "profile/Default/Local Storage",
+                    "profile/Default/IndexedDB",
+                    "profile/Default/Sessions",
+                    "profile/Default/Current Session",
+                    "profile/Default/Current Tabs",
+                    "profile/Default/Last Session",
+                    "profile/Default/Last Tabs",
+                    # Extensions data
+                    "profile/Default/Extension State",
+                    "profile/Default/Extension Cookies",
+                    "profile/Default/Local Extension Settings",
+                    # Sync
+                    "profile/Default/Sync Data",
+                    "profile/Default/Sync Extension Settings",
+                    # Safe Browsing
+                    "profile/Safe Browsing",
+                    # Crash
+                    "profile/Crash Reports",
+                    # Shortcuts
+                    "profile/Default/Shortcuts",
+                    "profile/Default/Shortcuts-journal",
+                ]
+
+                deleted_count = 0
+                for item in critical_items:
+                    item_path = data_dir / item
+                    if item_path.exists():
+                        if self._delete_with_retry(item_path):
+                            deleted_count += 1
+                        else:
+                            self.log(f"    ⚠️ Không xóa được: {item}")
+
+                self.log(f"  ✓ Đã xóa {deleted_count} critical items")
+
+                # 4. Xóa toàn bộ thư mục Default nếu còn tồn tại
+                default_profile = data_dir / "profile" / "Default"
+                if default_profile.exists():
+                    self.log(f"  🗑️ Xóa toàn bộ Default profile...")
+                    if self._delete_with_retry(default_profile):
+                        self.log(f"  ✓ Deleted Default profile")
+                        deleted = True
+                    else:
+                        # Fallback: xóa từng file quan trọng
+                        self.log(f"  ⚠️ Không xóa được folder, thử xóa từng file...")
+                        for f in default_profile.glob('*'):
+                            try:
+                                if f.is_file():
+                                    f.unlink()
+                                elif f.is_dir():
+                                    shutil.rmtree(str(f), ignore_errors=True)
+                            except:
+                                pass
+                        deleted = True
+
+                # 5. Backup: Nếu chưa xóa được, thử xóa cả Data folder
+                if not deleted:
+                    self.log(f"  🔥 Xóa TOÀN BỘ Data folder...")
+                    if self._delete_with_retry(data_dir):
+                        self.log(f"  ✓ Deleted entire Data folder")
+                        deleted = True
+
+            # 6. Fallback: xóa profile_dir (Chrome thường)
             if not deleted and self.profile_dir and self.profile_dir.exists():
-                self.log(f"  Deleting: {self.profile_dir}")
-                try:
-                    shutil.rmtree(str(self.profile_dir))
+                self.log(f"  Deleting profile_dir: {self.profile_dir}")
+                if self._delete_with_retry(self.profile_dir):
                     self.log(f"  ✓ Deleted profile directory")
                     deleted = True
-                except Exception as e:
-                    self.log(f"  ⚠️ Could not delete profile: {e}", "WARN")
 
-            # 4. Tạo lại cấu trúc tối thiểu để skip first-run dialogs
-            if deleted and data_dir:
+            # 7. Tạo lại cấu trúc tối thiểu để skip first-run dialogs
+            if data_dir:
                 try:
                     import json
                     # Tạo thư mục Data và profile
@@ -1783,7 +1954,7 @@ class DrissionFlowAPI:
                     }
                     (data_dir / "profile" / "Local State").write_text(json.dumps(local_state))
 
-                    # Preferences - skip các dialogs
+                    # Preferences - skip các dialogs (KHÔNG lưu signin)
                     prefs = {
                         "browser": {
                             "has_seen_welcome_page": True,
@@ -1794,6 +1965,9 @@ class DrissionFlowAPI:
                         },
                         "profile": {
                             "default_content_setting_values": {}
+                        },
+                        "savefile": {
+                            "default_directory": ""
                         }
                     }
                     (profile_path / "Preferences").write_text(json.dumps(prefs))
@@ -1802,7 +1976,7 @@ class DrissionFlowAPI:
                 except Exception as e:
                     self.log(f"  ⚠️ Could not create minimal profile: {e}", "WARN")
 
-            # 5. Reset tất cả flags
+            # 8. Reset tất cả flags
             self._ready = False
             self._t2v_mode_selected = False
             self._image_mode_selected = False
@@ -1810,7 +1984,7 @@ class DrissionFlowAPI:
             self._cleared_data_for_403 = False
             self.driver = None
 
-            self.log("✓ Chrome profile RESET thành công!")
+            self.log("✓ Chrome profile RESET thành công (TRẮNG SẠCH)!")
             self.log("⚠️ Cần khởi động lại Chrome và login Google!")
             return True
 
