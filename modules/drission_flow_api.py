@@ -2252,18 +2252,24 @@ class DrissionFlowAPI:
             self._kill_chrome_using_profile()
 
             # Clean up profile lock trước khi start (tránh conflict)
-            try:
-                lock_file = self.profile_dir / "SingletonLock"
-                if lock_file.exists():
-                    lock_file.unlink()
-                    self.log("  Đã xóa SingletonLock cũ")
-            except:
-                pass
-
             # === AUTO KILL CHROME CŨ TRƯỚC KHI START ===
             # Kill Chrome đang dùng profile này hoặc port này
             self.log("🔪 Kiểm tra và kill Chrome cũ nếu có...")
             self._auto_kill_conflicting_chrome()
+
+            # === XÓA TẤT CẢ LOCK FILES ===
+            try:
+                lock_files = ["SingletonLock", "SingletonSocket", "SingletonCookie", "lockfile"]
+                for lock_name in lock_files:
+                    lock_file = self.profile_dir / lock_name
+                    if lock_file.exists():
+                        try:
+                            lock_file.unlink()
+                            self.log(f"  → Đã xóa {lock_name}")
+                        except:
+                            pass
+            except:
+                pass
 
             # Thử khởi tạo Chrome với retry
             max_retries = 3
@@ -5985,7 +5991,7 @@ class DrissionFlowAPI:
         """
         Tự động kill Chrome đang conflict với profile hoặc port.
         Gọi trước khi start Chrome mới.
-        MẠNH: Kill TẤT CẢ Chrome portable để tránh conflict.
+        MẠNH: Kill TẤT CẢ Chrome có remote-debugging-port để tránh conflict.
         """
         import subprocess
         import platform
@@ -5994,8 +6000,8 @@ class DrissionFlowAPI:
 
         if platform.system() == 'Windows':
             try:
-                # === CÁCH 1: Kill TẤT CẢ Chrome Portable (mạnh nhất) ===
-                # Tìm tất cả chrome.exe có chứa "GoogleChromePortable" hoặc "ve3" trong command line
+                # === CÁCH 1: Kill TẤT CẢ Chrome có remote-debugging-port (tool Chrome) ===
+                # Chrome của tool luôn có --remote-debugging-port, Chrome user thường không có
                 result = subprocess.run(
                     ['wmic', 'process', 'where', "name='chrome.exe'", 'get', 'commandline,processid'],
                     capture_output=True, text=True, timeout=15
@@ -6004,8 +6010,15 @@ class DrissionFlowAPI:
                 if result.returncode == 0:
                     lines = result.stdout.strip().split('\n')
                     for line in lines:
-                        # Tìm Chrome portable hoặc Chrome dùng profile của tool
-                        if any(x in line for x in ['GoogleChromePortable', 've3', 'chrome_profile', str(self.profile_dir)]):
+                        # Kill Chrome có remote-debugging-port (tool Chrome)
+                        # HOẶC Chrome portable/ve3
+                        if any(x in line for x in [
+                            'remote-debugging-port',  # Tool Chrome
+                            'GoogleChromePortable',
+                            've3',
+                            'chrome_profile',
+                            str(self.profile_dir).replace('/', '\\')
+                        ]):
                             # Lấy PID ở cuối dòng
                             parts = line.strip().split()
                             if parts:
@@ -6013,7 +6026,7 @@ class DrissionFlowAPI:
                                 if pid.isdigit():
                                     subprocess.run(['taskkill', '/F', '/PID', pid],
                                                  capture_output=True, timeout=5)
-                                    self.log(f"  → Killed Chrome cũ (PID: {pid})")
+                                    self.log(f"  → Killed Chrome (PID: {pid})")
                                     killed_any = True
 
                 # === CÁCH 2: Kill Chrome trên port 9222 (backup) ===
