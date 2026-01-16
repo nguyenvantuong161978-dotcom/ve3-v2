@@ -2357,9 +2357,11 @@ class DrissionFlowAPI:
                     self.close()
                     time.sleep(3)
 
-                    # Restart với cùng config
+                    # Restart với cùng config - dùng setup() thay vì _start_chrome()
                     try:
-                        if not self._start_chrome():
+                        saved_project_url = getattr(self, '_current_project_url', None)
+                        skip_mode = getattr(self, '_skip_mode_selection', False)
+                        if not self.setup(project_url=saved_project_url, skip_mode_selection=skip_mode):
                             self.log("  → Không restart được Chrome", "ERROR")
                             continue
                         self.log("  → Chrome restarted, thử lại...")
@@ -2412,8 +2414,10 @@ class DrissionFlowAPI:
                             if not self._is_random_ip_mode:
                                 self.log(f"  → Sticky Session ID: {self._rotating_session_id}")
 
-                            # Restart với mode mới
-                            if self._start_chrome():
+                            # Restart với mode mới - dùng setup() thay vì _start_chrome()
+                            saved_project_url = getattr(self, '_current_project_url', None)
+                            skip_mode = getattr(self, '_skip_mode_selection', False)
+                            if self.setup(project_url=saved_project_url, skip_mode_selection=skip_mode):
                                 # Retry navigation
                                 try:
                                     self.driver.get(target_url)
