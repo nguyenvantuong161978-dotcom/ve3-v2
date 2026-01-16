@@ -12,10 +12,27 @@ Dùng file lock để tránh race condition giữa các process.
 
 import json
 import time
-import fcntl
+import sys
 from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime
+
+# fcntl chỉ có trên Linux, Windows dùng msvcrt
+if sys.platform == 'win32':
+    import msvcrt
+    def lock_file(f, exclusive=True):
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK if exclusive else msvcrt.LK_NBRLCK, 1)
+    def unlock_file(f):
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except:
+            pass
+else:
+    import fcntl
+    def lock_file(f, exclusive=True):
+        fcntl.flock(f, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+    def unlock_file(f):
+        fcntl.flock(f, fcntl.LOCK_UN)
 
 
 class Shared403Tracker:
@@ -55,25 +72,32 @@ class Shared403Tracker:
         """Read state with file lock."""
         try:
             with open(self.state_file, 'r') as f:
-                fcntl.flock(f, fcntl.LOCK_SH)
                 try:
+                    lock_file(f, exclusive=False)
                     state = json.load(f)
                 except json.JSONDecodeError:
                     state = self._default_state()
+                except:
+                    state = self._default_state()
                 finally:
-                    fcntl.flock(f, fcntl.LOCK_UN)
+                    unlock_file(f)
             return state
         except FileNotFoundError:
+            return self._default_state()
+        except:
             return self._default_state()
 
     def _write_state(self, state: Dict):
         """Write state with file lock."""
-        with open(self.state_file, 'w') as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            try:
-                json.dump(state, f, indent=2, default=str)
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
+        try:
+            with open(self.state_file, 'w') as f:
+                try:
+                    lock_file(f, exclusive=True)
+                    json.dump(state, f, indent=2, default=str)
+                finally:
+                    unlock_file(f)
+        except:
+            pass  # Ignore lock errors on Windows
 
     def mark_403(self, worker_id: int) -> Dict:
         """
