@@ -1804,179 +1804,63 @@ class DrissionFlowAPI:
 
     def reset_chrome_profile(self) -> bool:
         """
-        Xóa TRIỆT ĐỂ Chrome profile - Chrome sẽ trắng như mới.
-        MẠNH TAY: Kill all Chrome → Xóa toàn bộ Data → Tạo profile sạch.
+        Xóa dữ liệu Chrome profile để Chrome trắng như mới.
 
-        Với Chrome Portable: Xóa thư mục Data cùng cấp với exe.
-        Với Chrome thường: Xóa thư mục profile_dir.
+        Đơn giản: Tắt Chrome → Xóa files trong Data/profile/Default/
+        File nào không xóa được thì bỏ qua (không sao).
 
         Returns:
             True nếu xóa thành công
         """
         import shutil
 
-        self.log("🗑️ RESET Chrome Profile (XÓA TRIỆT ĐỂ - MẠNH TAY)...")
+        self.log("🗑️ RESET Chrome Profile...")
 
         try:
-            # 1. FORCE KILL tất cả Chrome processes
+            # 1. Tắt Chrome
             self._force_kill_all_chrome()
-            time.sleep(3)  # Đợi lâu hơn để processes thực sự tắt và file được giải phóng
+            time.sleep(2)
 
-            deleted = False
-            data_dir = None
+            # 2. Tìm thư mục Default
+            default_dir = None
 
-            # 2. Xác định thư mục cần xóa
             if hasattr(self, '_chrome_portable') and self._chrome_portable:
                 chrome_exe = Path(os.path.expandvars(self._chrome_portable))
-                data_dir = chrome_exe.parent / "Data"
+                default_dir = chrome_exe.parent / "Data" / "profile" / "Default"
             elif self.profile_dir:
-                data_dir = self.profile_dir.parent  # Thường là User Data folder
+                # Chrome thường: profile_dir thường là Default folder
+                if self.profile_dir.name == "Default":
+                    default_dir = self.profile_dir
+                else:
+                    default_dir = self.profile_dir / "Default"
 
-            # 3. XÓA TRIỆT ĐỂ - từng phần quan trọng
-            if data_dir and data_dir.exists():
-                self.log(f"  📁 Target: {data_dir}")
-
-                # Danh sách các items cần xóa TRIỆT ĐỂ (chứa login, history, cookies)
-                critical_items = [
-                    # Profile data
-                    "profile/Default/Login Data",
-                    "profile/Default/Login Data-journal",
-                    "profile/Default/History",
-                    "profile/Default/History-journal",
-                    "profile/Default/Cookies",
-                    "profile/Default/Cookies-journal",
-                    "profile/Default/Web Data",
-                    "profile/Default/Web Data-journal",
-                    "profile/Default/Visited Links",
-                    "profile/Default/Favicons",
-                    "profile/Default/Top Sites",
-                    "profile/Default/Network Action Predictor",
-                    "profile/Default/QuotaManager",
-                    "profile/Default/QuotaManager-journal",
-                    # Cache
-                    "profile/Default/Cache",
-                    "profile/Default/Code Cache",
-                    "profile/Default/GPUCache",
-                    "profile/Default/Service Worker",
-                    # Session
-                    "profile/Default/Session Storage",
-                    "profile/Default/Local Storage",
-                    "profile/Default/IndexedDB",
-                    "profile/Default/Sessions",
-                    "profile/Default/Current Session",
-                    "profile/Default/Current Tabs",
-                    "profile/Default/Last Session",
-                    "profile/Default/Last Tabs",
-                    # Extensions data
-                    "profile/Default/Extension State",
-                    "profile/Default/Extension Cookies",
-                    "profile/Default/Local Extension Settings",
-                    # Sync
-                    "profile/Default/Sync Data",
-                    "profile/Default/Sync Extension Settings",
-                    # Safe Browsing
-                    "profile/Safe Browsing",
-                    # Crash
-                    "profile/Crash Reports",
-                    # Shortcuts
-                    "profile/Default/Shortcuts",
-                    "profile/Default/Shortcuts-journal",
-                ]
+            # 3. Xóa các file trong Default (bỏ qua file không xóa được)
+            if default_dir and default_dir.exists():
+                self.log(f"  📁 Xóa files trong: {default_dir}")
 
                 deleted_count = 0
-                for item in critical_items:
-                    item_path = data_dir / item
-                    if item_path.exists():
-                        if self._delete_with_retry(item_path):
+                skipped_count = 0
+
+                for item in default_dir.iterdir():
+                    try:
+                        if item.is_file():
+                            item.unlink()
                             deleted_count += 1
-                        else:
-                            self.log(f"    ⚠️ Không xóa được: {item}")
+                        elif item.is_dir():
+                            shutil.rmtree(str(item), ignore_errors=True)
+                            if not item.exists():
+                                deleted_count += 1
+                            else:
+                                skipped_count += 1
+                    except:
+                        skipped_count += 1
+                        pass  # Bỏ qua file không xóa được
 
-                self.log(f"  ✓ Đã xóa {deleted_count} critical items")
+                self.log(f"  ✓ Đã xóa {deleted_count} items" + (f", bỏ qua {skipped_count}" if skipped_count else ""))
+            else:
+                self.log(f"  ⚠️ Không tìm thấy thư mục Default")
 
-                # 4. XÓA TOÀN BỘ thư mục profile (chứa Default, cache, local storage...)
-                profile_folder = data_dir / "profile"
-                if profile_folder.exists():
-                    self.log(f"  🔥 XÓA TOÀN BỘ profile folder: {profile_folder}")
-                    if self._delete_with_retry(profile_folder):
-                        self.log(f"  ✓ Deleted entire profile folder!")
-                        deleted = True
-                    else:
-                        # Fallback: xóa từng subfolder
-                        self.log(f"  ⚠️ Không xóa được folder, thử xóa từng thư mục con...")
-                        for f in profile_folder.glob('*'):
-                            try:
-                                if f.is_file():
-                                    f.unlink()
-                                elif f.is_dir():
-                                    shutil.rmtree(str(f), ignore_errors=True)
-                            except:
-                                pass
-                        deleted = True
-
-                # 5. Backup: Nếu chưa xóa được profile, thử xóa cả Data folder
-                if not deleted:
-                    self.log(f"  🔥 Xóa TOÀN BỘ Data folder...")
-                    if self._delete_with_retry(data_dir):
-                        self.log(f"  ✓ Deleted entire Data folder")
-                        deleted = True
-
-            # 6. Fallback: xóa profile_dir (Chrome thường)
-            if not deleted and self.profile_dir and self.profile_dir.exists():
-                self.log(f"  Deleting profile_dir: {self.profile_dir}")
-                if self._delete_with_retry(self.profile_dir):
-                    self.log(f"  ✓ Deleted profile directory")
-                    deleted = True
-
-            # 7. Tạo lại cấu trúc tối thiểu để skip first-run dialogs
-            if data_dir:
-                try:
-                    import json
-                    # Tạo thư mục Data và profile
-                    profile_path = data_dir / "profile" / "Default"
-                    profile_path.mkdir(parents=True, exist_ok=True)
-
-                    # File First Run - để Chrome biết đã chạy lần đầu
-                    (data_dir / "profile" / "First Run").touch()
-
-                    # Local State - disable các popup
-                    local_state = {
-                        "browser": {
-                            "enabled_labs_experiments": [],
-                            "has_seen_welcome_page": True
-                        },
-                        "privacy_sandbox": {
-                            "m1": {
-                                "prompt_suppressed": True,
-                                "row_notice_acknowledged": True
-                            }
-                        }
-                    }
-                    (data_dir / "profile" / "Local State").write_text(json.dumps(local_state))
-
-                    # Preferences - skip các dialogs (KHÔNG lưu signin)
-                    prefs = {
-                        "browser": {
-                            "has_seen_welcome_page": True,
-                            "show_home_button": False
-                        },
-                        "signin": {
-                            "allowed": False
-                        },
-                        "profile": {
-                            "default_content_setting_values": {}
-                        },
-                        "savefile": {
-                            "default_directory": ""
-                        }
-                    }
-                    (profile_path / "Preferences").write_text(json.dumps(prefs))
-
-                    self.log("  ✓ Created minimal profile (skip first-run dialogs)")
-                except Exception as e:
-                    self.log(f"  ⚠️ Could not create minimal profile: {e}", "WARN")
-
-            # 8. Reset tất cả flags
+            # 4. Reset flags
             self._ready = False
             self._t2v_mode_selected = False
             self._image_mode_selected = False
@@ -1984,8 +1868,7 @@ class DrissionFlowAPI:
             self._cleared_data_for_403 = False
             self.driver = None
 
-            self.log("✓ Chrome profile RESET thành công (TRẮNG SẠCH)!")
-            self.log("⚠️ Cần khởi động lại Chrome và login Google!")
+            self.log("✓ Chrome TRẮNG - cần đăng nhập lại!")
             return True
 
         except Exception as e:
