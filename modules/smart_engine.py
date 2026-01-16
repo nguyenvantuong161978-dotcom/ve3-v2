@@ -4023,6 +4023,10 @@ class SmartEngine:
                 if not pid or not prompt:
                     continue
 
+                # === FIX: Convert float to int for numeric IDs ===
+                # Excel often stores numbers as float (1.0, 2.0), need to convert to int first
+                if isinstance(pid, float) and pid == int(pid):
+                    pid = int(pid)
                 pid_str = str(pid).strip()
                 prompt_str = str(prompt).strip()
                 status_str = str(status).lower().strip() if status else ""
