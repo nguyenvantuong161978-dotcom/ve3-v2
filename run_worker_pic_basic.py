@@ -150,7 +150,7 @@ def create_excel_with_api_basic(project_dir: Path, code: str, callback=None) -> 
 
 
 def is_local_pic_complete(project_dir: Path, name: str) -> bool:
-    """Check if local project has images created."""
+    """Check if local project has ALL images created (both Chrome 1 and 2)."""
     img_dir = project_dir / "img"
     if not img_dir.exists():
         return False
@@ -178,6 +178,63 @@ def is_local_pic_complete(project_dir: Path, name: str) -> bool:
         print(f"    [{name}] Warning: {e}")
 
     return len(img_files) > 0
+
+
+def wait_for_all_images(project_dir: Path, name: str, timeout: int = 600) -> bool:
+    """
+    Đợi tất cả ảnh hoàn thành (Chrome 1 + Chrome 2).
+    Timeout mặc định 10 phút.
+    """
+    import time
+    start = time.time()
+    while time.time() - start < timeout:
+        if is_local_pic_complete(project_dir, name):
+            return True
+        print(f"    Đợi Chrome 2 hoàn thành... ({int(time.time() - start)}s)")
+        time.sleep(10)
+    return False
+
+
+def create_videos_for_project(project_dir: Path, code: str, callback=None) -> bool:
+    """Tạo video cho project đã có ảnh."""
+    def log(msg, level="INFO"):
+        if callback:
+            callback(msg, level)
+        else:
+            print(msg)
+
+    try:
+        from modules.smart_engine import SmartEngine
+
+        excel_path = project_dir / f"{code}_prompts.xlsx"
+        if not excel_path.exists():
+            log(f"  No Excel found for video creation!", "ERROR")
+            return False
+
+        log(f"\n[VIDEO] Creating videos for {code}...")
+        engine = SmartEngine(worker_id=0, total_workers=1)
+
+        # Run với skip_video=False để tạo video
+        # SmartEngine sẽ tự động skip ảnh đã tồn tại
+        result = engine.run(
+            str(excel_path),
+            callback=callback,
+            skip_compose=True,
+            skip_video=False  # Tạo video
+        )
+
+        if result.get('error'):
+            log(f"  Video error: {result.get('error')}", "ERROR")
+            return False
+
+        log(f"  ✅ Videos created!")
+        return True
+
+    except Exception as e:
+        log(f"  Video exception: {e}", "ERROR")
+        import traceback
+        traceback.print_exc()
+        return False
 
 
 def process_project_pic_basic(code: str, callback=None) -> bool:
@@ -251,13 +308,36 @@ def process_project_pic_basic(code: str, callback=None) -> bool:
         traceback.print_exc()
         return False
 
-    # Step 5: Check completion
+    # Step 5: Đợi tất cả ảnh hoàn thành (Chrome 2 có thể chưa xong)
+    log(f"\n[STEP 5] Checking all images...")
+    if not is_local_pic_complete(local_dir, code):
+        log(f"  Chrome 2 chưa xong, đợi tối đa 10 phút...")
+        if not wait_for_all_images(local_dir, code, timeout=600):
+            log(f"  Timeout! Chrome 2 chưa hoàn thành, tiếp tục...", "WARN")
+            # Không return False, để có thể retry sau
+
+    # Step 6: Tạo video (sau khi có đủ ảnh)
     if is_local_pic_complete(local_dir, code):
-        log(f"  Images complete!")
-        return True
-    else:
-        log(f"  Images incomplete", "WARN")
-        return False
+        log(f"\n[STEP 6] Creating videos...")
+        if create_videos_for_project(local_dir, code, callback):
+            log(f"  ✅ Videos created!")
+        else:
+            log(f"  ⚠️ Video creation failed, nhưng ảnh đã xong", "WARN")
+
+        # Step 7: Copy to VISUAL
+        log(f"\n[STEP 7] Copying to VISUAL...")
+        if copy_to_visual(code):
+            log(f"  ✅ Copied to VISUAL!")
+            # Xóa local project sau khi copy
+            delete_local_project(code)
+            log(f"  ✅ Deleted local project")
+            return True
+        else:
+            log(f"  ⚠️ Failed to copy to VISUAL", "WARN")
+            return True  # Vẫn return True vì ảnh đã xong
+
+    log(f"  Images incomplete", "WARN")
+    return False
 
 
 def scan_incomplete_local_projects() -> list:
