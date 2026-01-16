@@ -968,10 +968,12 @@ class DrissionFlowAPI:
         self._skip_portable_detection = skip_portable_detection  # Bỏ qua auto-detect Chrome Portable
         # Unique port cho mỗi worker (không random để tránh conflict)
         # Worker 0 → 9222, Worker 1 → 9223, ...
+        # CHROME_PORT_OFFSET từ environment (cho parallel mode - tránh conflict)
+        port_offset = int(os.environ.get('CHROME_PORT_OFFSET', '0'))
         if chrome_port == 0:
-            self.chrome_port = 9222 + worker_id
+            self.chrome_port = 9222 + worker_id + port_offset
         else:
-            self.chrome_port = chrome_port
+            self.chrome_port = chrome_port + port_offset
         self.verbose = verbose
         self.log_callback = log_callback
 
