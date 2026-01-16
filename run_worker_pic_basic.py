@@ -229,22 +229,14 @@ def process_project_pic_basic(code: str, callback=None) -> bool:
     try:
         from modules.smart_engine import SmartEngine
 
-        # Read parallel mode from environment (set by run_worker_pic_basic_2.py)
-        worker_id = int(os.environ.get('CHROME_WORKER_ID', '0'))
-        total_workers = int(os.environ.get('CHROME_TOTAL_WORKERS', '1'))
-        chrome_portable = os.environ.get('CHROME_PORTABLE', '')
-
+        # Chrome 1: worker_id=0, total_workers=2 (để chia scenes với Chrome 2)
         engine = SmartEngine(
-            worker_id=worker_id,
-            total_workers=total_workers,
-            chrome_portable=chrome_portable if chrome_portable else None
+            worker_id=0,
+            total_workers=2  # Chia scenes chẵn/lẻ với Chrome 2
         )
 
         log(f"  Excel: {excel_path.name}")
-        if total_workers > 1:
-            log(f"  Mode: PARALLEL ({worker_id+1}/{total_workers})")
-        else:
-            log(f"  Mode: BASIC (segment-based prompts)")
+        log(f"  Mode: CHROME 1 (scenes chẵn: 2,4,6,... + nv/loc)")
 
         # Run engine - images only, skip video generation
         result = engine.run(str(excel_path), callback=callback, skip_compose=True, skip_video=True)
