@@ -3371,10 +3371,23 @@ class DrissionFlowAPI:
                         return False, [], error
 
                 # === 403 ERROR HANDLING ===
-                # Logic: 403 → Reset Chrome (2 lần) → Lần 3 clear data + login lại → Sau clear vẫn 403 thì đổi IPv6
+                # Logic MỚI (cho 2 Chrome parallel):
+                # 1. 403 → Reset Chrome (2 lần)
+                # 2. Lần 3 → Clear data + login lại
+                # 3. Sau clear vẫn 403 → Mark ready_for_rotation
+                # 4. CHỈ đổi IPv6 khi CẢ 2 CHROME đều ready!
                 if "403" in error:
                     self._consecutive_403 += 1
                     cleared_flag = getattr(self, '_cleared_data_for_403', False)
+
+                    # Get shared tracker
+                    try:
+                        from modules.shared_403_tracker import get_403_tracker
+                        tracker = get_403_tracker(total_workers=self.total_workers)
+                        tracker.mark_403(self.worker_id)
+                    except Exception as e:
+                        self.log(f"[403] Tracker error: {e}", "WARN")
+                        tracker = None
 
                     if self._consecutive_403 < 3 and not cleared_flag:
                         # Bước 1: Reset Chrome (lần 1 và 2)
@@ -3394,20 +3407,54 @@ class DrissionFlowAPI:
                         self._cleared_data_for_403 = True
                         self._consecutive_403 = 0  # Reset counter sau khi clear
 
-                    else:
-                        # Bước 3: Đã clear data vẫn 403 → Đổi IPv6
-                        self.log(f"⚠️ 403 sau khi clear data → ĐỔI IPv6!", "WARN")
-                        self._cleared_data_for_403 = False  # Reset flag
-                        self._consecutive_403 = 0
+                        # Mark cleared data in shared tracker
+                        if tracker:
+                            tracker.mark_cleared_data(self.worker_id)
 
-                        if self._ipv6_rotator and self._ipv6_activated:
-                            new_ip = self._ipv6_rotator.rotate()
-                            if new_ip:
-                                self.log(f"  → 🌐 IPv6 mới: {new_ip}")
-                                if hasattr(self, '_ipv6_proxy') and self._ipv6_proxy:
-                                    self._ipv6_proxy.set_ipv6(new_ip)
+                    else:
+                        # Bước 3: Đã clear data vẫn 403
+                        self.log(f"⚠️ 403 sau khi clear data (worker {self.worker_id})", "WARN")
+
+                        # Mark ready for rotation in shared tracker
+                        if tracker:
+                            tracker.mark_ready_for_rotation(self.worker_id)
+
+                            # CHỈ đổi IPv6 khi CẢ 2 workers đều ready
+                            if tracker.should_rotate_ipv6(self.worker_id):
+                                self.log(f"  → 🌐 CẢ {self.total_workers} Chrome đều ready → ĐỔI IPv6!", "WARN")
+                                self._cleared_data_for_403 = False
+                                self._consecutive_403 = 0
+
+                                if self._ipv6_rotator and self._ipv6_activated:
+                                    new_ip = self._ipv6_rotator.rotate()
+                                    if new_ip:
+                                        self.log(f"  → 🌐 IPv6 mới: {new_ip}")
+                                        if hasattr(self, '_ipv6_proxy') and self._ipv6_proxy:
+                                            self._ipv6_proxy.set_ipv6(new_ip)
+                                    else:
+                                        self.log(f"  → ⚠️ Không rotate được IPv6!", "WARN")
+
+                                # Reset all workers after rotation
+                                tracker.reset_after_rotation()
                             else:
-                                self.log(f"  → ⚠️ Không rotate được IPv6!", "WARN")
+                                # Chưa đủ workers ready → đợi và retry
+                                self.log(f"  → ⏳ Đợi Chrome khác cũng ready... (tiếp tục retry)", "WARN")
+                                self._cleared_data_for_403 = False  # Reset để thử lại flow
+                                self._consecutive_403 = 0
+                        else:
+                            # No tracker → fallback to old behavior
+                            self.log(f"⚠️ 403 sau khi clear data → ĐỔI IPv6!", "WARN")
+                            self._cleared_data_for_403 = False
+                            self._consecutive_403 = 0
+
+                            if self._ipv6_rotator and self._ipv6_activated:
+                                new_ip = self._ipv6_rotator.rotate()
+                                if new_ip:
+                                    self.log(f"  → 🌐 IPv6 mới: {new_ip}")
+                                    if hasattr(self, '_ipv6_proxy') and self._ipv6_proxy:
+                                        self._ipv6_proxy.set_ipv6(new_ip)
+                                else:
+                                    self.log(f"  → ⚠️ Không rotate được IPv6!", "WARN")
 
                     # Extend retries để đủ cho cả flow: reset x2 → clear data → IPv6 rotation
                     if effective_max_retries < 6:
@@ -3583,6 +3630,14 @@ class DrissionFlowAPI:
             self.log(f"[IPv6] Reset 403 counter (was {self._consecutive_403})")
             self._consecutive_403 = 0
             self._cleared_data_for_403 = False
+
+            # Reset shared tracker for this worker
+            try:
+                from modules.shared_403_tracker import get_403_tracker
+                tracker = get_403_tracker(total_workers=self.total_workers)
+                tracker.reset_worker(self.worker_id)
+            except:
+                pass
 
         return True, images, None
 
