@@ -1360,6 +1360,48 @@ class VMManagerGUI:
         self.scenes_tree.tag_configure("pending", background="#FFFFFF")  # White
         self.scenes_tree.tag_configure("no_prompt", background="#FFCCCC")  # Light red
 
+        # References tab - show character/location images from nv/ folder
+        refs_frame = ttk.Frame(self.logs_notebook, padding=5)
+        self.logs_notebook.add(refs_frame, text="References")
+
+        # Project selector for references
+        refs_selector_frame = ttk.Frame(refs_frame)
+        refs_selector_frame.pack(fill="x", pady=(0, 5))
+
+        ttk.Label(refs_selector_frame, text="Project:").pack(side="left", padx=(0, 5))
+        self.refs_project_var = tk.StringVar(value="")
+        self.refs_project_combo = ttk.Combobox(refs_selector_frame, textvariable=self.refs_project_var,
+                                                width=20, state="readonly")
+        self.refs_project_combo.pack(side="left", padx=(0, 10))
+        self.refs_project_combo.bind("<<ComboboxSelected>>", self._on_refs_project_change)
+
+        ttk.Button(refs_selector_frame, text="Refresh", command=self._refresh_refs, width=10).pack(side="left")
+        ttk.Button(refs_selector_frame, text="Open NV Folder", command=self._open_nv_folder, width=14).pack(side="left", padx=5)
+        ttk.Button(refs_selector_frame, text="Open IMG Folder", command=self._open_img_folder, width=14).pack(side="left", padx=5)
+
+        # Reference summary
+        self.refs_summary_var = tk.StringVar(value="Select a project to view references")
+        ttk.Label(refs_selector_frame, textvariable=self.refs_summary_var).pack(side="right", padx=10)
+
+        # References canvas for thumbnails
+        refs_canvas_frame = ttk.Frame(refs_frame)
+        refs_canvas_frame.pack(fill="both", expand=True)
+
+        self.refs_canvas = tk.Canvas(refs_canvas_frame, bg="white")
+        refs_scrollbar = ttk.Scrollbar(refs_canvas_frame, orient="vertical", command=self.refs_canvas.yview)
+        self.refs_inner_frame = ttk.Frame(self.refs_canvas)
+
+        self.refs_canvas.configure(yscrollcommand=refs_scrollbar.set)
+        refs_scrollbar.pack(side="right", fill="y")
+        self.refs_canvas.pack(side="left", fill="both", expand=True)
+        self.refs_canvas.create_window((0, 0), window=self.refs_inner_frame, anchor="nw")
+
+        self.refs_inner_frame.bind("<Configure>",
+            lambda e: self.refs_canvas.configure(scrollregion=self.refs_canvas.bbox("all")))
+
+        # Store image references to prevent garbage collection
+        self._ref_images = []
+
         # Track last log positions for incremental updates
         self._last_log_positions = {}
 
@@ -1805,6 +1847,162 @@ class VMManagerGUI:
             pass
 
     # ================================================================================
+    # References Tab Handling
+    # ================================================================================
+
+    def _on_refs_project_change(self, event=None):
+        """Handle project selection change in references tab."""
+        self._refresh_refs()
+
+    def _refresh_refs(self):
+        """Refresh the references gallery for selected project."""
+        project_code = self.refs_project_var.get()
+        if not project_code:
+            self.refs_summary_var.set("Select a project to view references")
+            return
+
+        try:
+            from PIL import Image, ImageTk
+        except ImportError:
+            self.refs_summary_var.set("PIL not installed - cannot show thumbnails")
+            return
+
+        project_dir = TOOL_DIR / "PROJECTS" / project_code
+        nv_dir = project_dir / "nv"
+        img_dir = project_dir / "img"
+
+        # Clear existing thumbnails
+        for widget in self.refs_inner_frame.winfo_children():
+            widget.destroy()
+        self._ref_images.clear()
+
+        # Get reference images from nv/ folder
+        ref_files = []
+        if nv_dir.exists():
+            ref_files = list(nv_dir.glob("*.png")) + list(nv_dir.glob("*.jpg"))
+
+        # Get generated images from img/ folder
+        gen_files = []
+        if img_dir.exists():
+            gen_files = list(img_dir.glob("*.png")) + list(img_dir.glob("*.jpg"))
+            gen_files = [f for f in gen_files if not f.stem.endswith('_video')]  # Exclude video frames
+
+        self.refs_summary_var.set(f"References: {len(ref_files)} | Generated: {len(gen_files)}")
+
+        # Create sections
+        row = 0
+
+        # NV/References section
+        if ref_files:
+            ttk.Label(self.refs_inner_frame, text="Reference Images (nv/)",
+                      font=("Arial", 10, "bold")).grid(row=row, column=0, columnspan=6, sticky="w", pady=(5, 2))
+            row += 1
+
+            col = 0
+            for img_path in sorted(ref_files):
+                try:
+                    img = Image.open(img_path)
+                    img.thumbnail((100, 100))
+                    photo = ImageTk.PhotoImage(img)
+                    self._ref_images.append(photo)
+
+                    frame = ttk.Frame(self.refs_inner_frame)
+                    frame.grid(row=row, column=col, padx=5, pady=5)
+
+                    label = ttk.Label(frame, image=photo)
+                    label.pack()
+                    ttk.Label(frame, text=img_path.stem, font=("Arial", 8)).pack()
+
+                    col += 1
+                    if col >= 6:
+                        col = 0
+                        row += 1
+                except Exception:
+                    pass
+            row += 1
+
+        # Generated Images section
+        if gen_files:
+            ttk.Label(self.refs_inner_frame, text="Generated Images (img/)",
+                      font=("Arial", 10, "bold")).grid(row=row, column=0, columnspan=6, sticky="w", pady=(10, 2))
+            row += 1
+
+            col = 0
+            for img_path in sorted(gen_files, key=lambda x: int(x.stem) if x.stem.isdigit() else 999):
+                try:
+                    img = Image.open(img_path)
+                    img.thumbnail((100, 100))
+                    photo = ImageTk.PhotoImage(img)
+                    self._ref_images.append(photo)
+
+                    frame = ttk.Frame(self.refs_inner_frame)
+                    frame.grid(row=row, column=col, padx=5, pady=5)
+
+                    label = ttk.Label(frame, image=photo)
+                    label.pack()
+                    ttk.Label(frame, text=f"Scene {img_path.stem}", font=("Arial", 8)).pack()
+
+                    col += 1
+                    if col >= 6:
+                        col = 0
+                        row += 1
+                except Exception:
+                    pass
+
+        if not ref_files and not gen_files:
+            ttk.Label(self.refs_inner_frame, text="No images found",
+                      font=("Arial", 10)).grid(row=0, column=0, pady=20)
+
+    def _open_nv_folder(self):
+        """Open the nv/ folder in file explorer."""
+        import subprocess
+        project_code = self.refs_project_var.get()
+        if not project_code:
+            messagebox.showwarning("Warning", "Select a project first")
+            return
+
+        nv_dir = TOOL_DIR / "PROJECTS" / project_code / "nv"
+        if not nv_dir.exists():
+            nv_dir.mkdir(parents=True, exist_ok=True)
+
+        if sys.platform == "win32":
+            subprocess.run(["explorer", str(nv_dir)])
+        else:
+            subprocess.run(["xdg-open", str(nv_dir)])
+
+    def _open_img_folder(self):
+        """Open the img/ folder in file explorer."""
+        import subprocess
+        project_code = self.refs_project_var.get()
+        if not project_code:
+            messagebox.showwarning("Warning", "Select a project first")
+            return
+
+        img_dir = TOOL_DIR / "PROJECTS" / project_code / "img"
+        if not img_dir.exists():
+            img_dir.mkdir(parents=True, exist_ok=True)
+
+        if sys.platform == "win32":
+            subprocess.run(["explorer", str(img_dir)])
+        else:
+            subprocess.run(["xdg-open", str(img_dir)])
+
+    def _update_refs_project_list(self):
+        """Update the project list in references combo."""
+        if not self.manager:
+            return
+
+        try:
+            projects = list(self.manager.quality_checker.project_cache.keys())
+            if projects:
+                current = self.refs_project_var.get()
+                self.refs_project_combo["values"] = projects
+                if current not in projects and projects:
+                    self.refs_project_var.set(projects[0])
+        except:
+            pass
+
+    # ================================================================================
     # Update Loop
     # ================================================================================
 
@@ -1818,6 +2016,7 @@ class VMManagerGUI:
         self._update_ipv6_status()
         self._update_worker_logs_incremental()
         self._update_scene_project_list()  # Update scenes project combo
+        self._update_refs_project_list()  # Update references project combo
         self._update_scenes_if_active()  # Auto-refresh scenes tab
 
         # Schedule next update - 500ms for real-time feel
