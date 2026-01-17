@@ -745,21 +745,29 @@ class VMManager:
         try:
             if w.worker_type == "excel":
                 script = TOOL_DIR / "run_excel_api.py"
-                args = "--loop --agent"
+                args = "--loop"  # Excel worker chạy loop liên tục
             else:
                 script = TOOL_DIR / f"_run_chrome{w.worker_num}.py"
-                args = "--agent"
+                args = ""  # Chrome workers chạy bình thường
 
             if not script.exists():
-                script = TOOL_DIR / "run_worker_agent.py"
-                args = f"--worker {w.worker_num} --agent"
+                # Fallback nếu không có script riêng
+                self.log(f"Script not found: {script.name}", worker_id, "ERROR")
+                w.status = WorkerStatus.ERROR
+                return False
 
             if sys.platform == "win32":
                 title = f"{w.worker_type.upper()} {w.worker_num or ''}"
-                cmd = f'start "{title}" cmd /k "cd /d {TOOL_DIR} && python {script.name} {args}"'
+                cmd_args = f"python {script.name}"
+                if args:
+                    cmd_args += f" {args}"
+                cmd = f'start "{title}" cmd /k "cd /d {TOOL_DIR} && {cmd_args}"'
                 w.process = subprocess.Popen(cmd, shell=True, cwd=str(TOOL_DIR))
             else:
-                w.process = subprocess.Popen([sys.executable, str(script)] + args.split(), cwd=str(TOOL_DIR))
+                cmd_list = [sys.executable, str(script)]
+                if args:
+                    cmd_list.extend(args.split())
+                w.process = subprocess.Popen(cmd_list, cwd=str(TOOL_DIR))
 
             w.status = WorkerStatus.IDLE
             w.start_time = datetime.now()
