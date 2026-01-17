@@ -707,14 +707,109 @@ class ProjectCard(ttk.Frame):
             self.vid_progress["value"] = int(vid_done / vid_total * 100)
 
 
+class CurrentActivityPanel(ttk.LabelFrame):
+    """Panel hiển thị hoạt động hiện tại của từng worker - real-time."""
+
+    def __init__(self, parent):
+        super().__init__(parent, text="🔴 LIVE - Current Activity", padding=10)
+        self.activity_labels = {}
+        self._build_ui()
+
+    def _build_ui(self):
+        # Header
+        header = ttk.Frame(self)
+        header.pack(fill="x")
+        ttk.Label(header, text="Worker", width=12, font=("Arial", 9, "bold")).pack(side="left")
+        ttk.Label(header, text="Status", width=10, font=("Arial", 9, "bold")).pack(side="left")
+        ttk.Label(header, text="Project", width=15, font=("Arial", 9, "bold")).pack(side="left")
+        ttk.Label(header, text="Scene", width=10, font=("Arial", 9, "bold")).pack(side="left")
+        ttk.Label(header, text="Current Prompt", font=("Arial", 9, "bold")).pack(side="left", fill="x", expand=True)
+
+        ttk.Separator(self, orient="horizontal").pack(fill="x", pady=5)
+
+        # Activity container
+        self.container = ttk.Frame(self)
+        self.container.pack(fill="both", expand=True)
+
+    def update_worker(self, worker_id: str, status: str, project: str, scene: int,
+                      total_scenes: int, current_prompt: str, progress: int):
+        """Update a worker's activity display."""
+        if worker_id not in self.activity_labels:
+            # Create new row
+            row = ttk.Frame(self.container)
+            row.pack(fill="x", pady=2)
+
+            # Worker ID with color indicator
+            worker_frame = ttk.Frame(row)
+            worker_frame.pack(side="left")
+
+            indicator = tk.Canvas(worker_frame, width=10, height=10, highlightthickness=0)
+            indicator.pack(side="left", padx=(0, 5))
+
+            worker_label = ttk.Label(worker_frame, text=worker_id, width=10, font=("Consolas", 9))
+            worker_label.pack(side="left")
+
+            status_label = ttk.Label(row, text="-", width=10, font=("Consolas", 9))
+            status_label.pack(side="left")
+
+            project_label = ttk.Label(row, text="-", width=15, font=("Consolas", 9, "bold"))
+            project_label.pack(side="left")
+
+            scene_label = ttk.Label(row, text="-", width=10, font=("Consolas", 9))
+            scene_label.pack(side="left")
+
+            # Progress bar
+            progress_bar = ttk.Progressbar(row, length=80, maximum=100, mode="determinate")
+            progress_bar.pack(side="left", padx=5)
+
+            # Prompt (truncated)
+            prompt_label = ttk.Label(row, text="-", font=("Consolas", 8), wraplength=400, anchor="w")
+            prompt_label.pack(side="left", fill="x", expand=True)
+
+            self.activity_labels[worker_id] = {
+                "indicator": indicator,
+                "status": status_label,
+                "project": project_label,
+                "scene": scene_label,
+                "progress": progress_bar,
+                "prompt": prompt_label
+            }
+
+        # Update values
+        labels = self.activity_labels[worker_id]
+
+        # Status indicator color
+        labels["indicator"].delete("all")
+        colors = {"working": "#00ff00", "idle": "#ffff00", "error": "#ff0000", "stopped": "#888888"}
+        color = colors.get(status, "#888888")
+        labels["indicator"].create_oval(2, 2, 8, 8, fill=color, outline=color)
+
+        labels["status"].configure(text=status)
+        labels["project"].configure(text=project or "-")
+
+        if scene and total_scenes:
+            labels["scene"].configure(text=f"{scene}/{total_scenes}")
+        else:
+            labels["scene"].configure(text="-")
+
+        labels["progress"]["value"] = progress
+
+        # Truncate prompt for display
+        if current_prompt:
+            display_prompt = current_prompt[:80] + "..." if len(current_prompt) > 80 else current_prompt
+            labels["prompt"].configure(text=display_prompt)
+        else:
+            labels["prompt"].configure(text="-")
+
+
 class VMManagerGUI:
     """Main GUI Application."""
 
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("VM Manager - AI Agent Dashboard")
-        self.root.geometry("1200x800")
-        self.root.minsize(1000, 600)
+        self.root.geometry("1400x900")
+        self.root.minsize(1200, 700)
 
         # Manager
         self.manager: Optional[VMManager] = None
@@ -727,7 +822,7 @@ class VMManagerGUI:
         # Build UI
         self._build_ui()
 
-        # Start update loop
+        # Start update loop - faster for real-time feel
         self._update_loop()
 
     def _build_ui(self):
@@ -738,6 +833,10 @@ class VMManagerGUI:
 
         # Top: Settings & Controls
         self._build_settings_frame(main_frame)
+
+        # Current Activity Panel - REAL-TIME view
+        self.activity_panel = CurrentActivityPanel(main_frame)
+        self.activity_panel.pack(fill="x", pady=(0, 10))
 
         # Middle: Workers & Projects
         middle_frame = ttk.Frame(main_frame)
@@ -1189,14 +1288,54 @@ class VMManagerGUI:
     def _update_loop(self):
         """Main update loop."""
         self._update_time()
+        self._update_activity_panel()  # Real-time activity
         self._update_workers()
         self._update_projects()
         self._update_tasks()
         self._update_ipv6_status()
         self._update_worker_logs_incremental()
 
-        # Schedule next update (faster for real-time feel)
-        self.root.after(1000, self._update_loop)  # 1 second updates
+        # Schedule next update - 500ms for real-time feel
+        self.root.after(500, self._update_loop)
+
+    def _update_activity_panel(self):
+        """Update the real-time activity panel."""
+        if not self.manager:
+            return
+
+        for wid, w in self.manager.workers.items():
+            details = self.manager.get_worker_details(wid) or {}
+
+            # Get current prompt from project if available
+            current_prompt = ""
+            project_code = details.get("current_project", "")
+            current_scene = details.get("current_scene", 0)
+
+            if project_code and current_scene:
+                try:
+                    # Try to get the current prompt being processed
+                    from modules.excel_manager import PromptWorkbook
+                    project_dir = Path(__file__).parent / "PROJECTS" / project_code
+                    excel_path = project_dir / f"{project_code}_prompts.xlsx"
+                    if excel_path.exists():
+                        wb = PromptWorkbook(str(excel_path))
+                        scenes = wb.get_scenes()
+                        for scene in scenes:
+                            if scene.scene_number == current_scene:
+                                current_prompt = scene.img_prompt or ""
+                                break
+                except:
+                    pass
+
+            self.activity_panel.update_worker(
+                worker_id=wid,
+                status=w.status.value,
+                project=project_code,
+                scene=current_scene,
+                total_scenes=details.get("total_scenes", 0),
+                current_prompt=current_prompt,
+                progress=details.get("progress", 0)
+            )
 
     def _update_time(self):
         """Update time display."""
@@ -1233,6 +1372,13 @@ class VMManagerGUI:
 
         projects = self.manager.scan_projects()
 
+        # Get active projects (being worked on by any worker)
+        active_projects = set()
+        for wid in self.manager.workers:
+            details = self.manager.get_worker_details(wid) or {}
+            if details.get("current_project"):
+                active_projects.add(details["current_project"])
+
         # Update or create project cards
         for code in projects[:10]:  # Limit to 10 projects
             if code not in self.project_cards:
@@ -1250,6 +1396,12 @@ class VMManagerGUI:
                 vid_total=status.total_scenes,
                 current_step=status.current_step
             )
+
+            # Highlight active projects
+            if code in active_projects:
+                self.project_cards[code].name_label.configure(foreground="green", font=("Arial", 9, "bold"))
+            else:
+                self.project_cards[code].name_label.configure(foreground="black", font=("Arial", 9))
 
     def _open_project_detail(self, project_code: str):
         """Open project detail dialog."""
