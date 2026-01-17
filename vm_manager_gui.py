@@ -828,8 +828,8 @@ class ChromeLogWindow(tk.Toplevel):
 def _cap_build_ui(self):
     header = ttk.Frame(self)
     header.pack(fill="x")
-    cols = [("Worker", 10), ("Status", 8), ("Project", 12), ("Excel", 8),
-            ("Images", 10), ("Videos", 10), ("Current Task", 30), ("Last Result", 12)]
+    cols = [("Worker", 10), ("Status", 8), ("Project", 12), ("Pending", 7),
+            ("Images", 10), ("Videos", 10), ("Current Task", 28), ("Last Result", 12)]
     for col_name, width in cols:
         ttk.Label(header, text=col_name, width=width, font=("Arial", 9, "bold")).pack(side="left", padx=1)
     ttk.Separator(self, orient="horizontal").pack(fill="x", pady=5)
@@ -837,7 +837,7 @@ def _cap_build_ui(self):
     self.container.pack(fill="both", expand=True)
 
 
-def _cap_update_worker(self, worker_id, status, project, total_scenes,
+def _cap_update_worker(self, worker_id, status, project, pending_tasks,
                        images_done, images_total, videos_done, videos_total,
                        current_task, last_result, progress):
     if worker_id not in self.activity_labels:
@@ -852,8 +852,8 @@ def _cap_update_worker(self, worker_id, status, project, total_scenes,
         status_label.pack(side="left", padx=1)
         project_label = ttk.Label(row, text="-", width=12, font=("Consolas", 9, "bold"))
         project_label.pack(side="left", padx=1)
-        excel_label = ttk.Label(row, text="-", width=8, font=("Consolas", 9))
-        excel_label.pack(side="left", padx=1)
+        pending_label = ttk.Label(row, text="-", width=7, font=("Consolas", 9))
+        pending_label.pack(side="left", padx=1)
         img_frame = ttk.Frame(row)
         img_frame.pack(side="left", padx=1)
         img_label = ttk.Label(img_frame, text="0/0", width=6, font=("Consolas", 9))
@@ -866,13 +866,13 @@ def _cap_update_worker(self, worker_id, status, project, total_scenes,
         vid_label.pack(side="left")
         vid_bar = ttk.Progressbar(vid_frame, length=40, maximum=100, mode="determinate")
         vid_bar.pack(side="left")
-        task_label = ttk.Label(row, text="-", width=30, font=("Consolas", 8), anchor="w")
+        task_label = ttk.Label(row, text="-", width=28, font=("Consolas", 8), anchor="w")
         task_label.pack(side="left", padx=1)
         result_label = ttk.Label(row, text="-", width=12, font=("Consolas", 9))
         result_label.pack(side="left", padx=1)
         self.activity_labels[worker_id] = {
             "indicator": indicator, "status": status_label, "project": project_label,
-            "excel": excel_label, "img_label": img_label, "img_bar": img_bar,
+            "pending": pending_label, "img_label": img_label, "img_bar": img_bar,
             "vid_label": vid_label, "vid_bar": vid_bar, "task": task_label, "result": result_label
         }
     labels = self.activity_labels[worker_id]
@@ -881,12 +881,12 @@ def _cap_update_worker(self, worker_id, status, project, total_scenes,
     labels["indicator"].create_oval(2, 2, 8, 8, fill=colors.get(status, "#888888"), outline=colors.get(status, "#888888"))
     labels["status"].configure(text=status)
     labels["project"].configure(text=project or "-")
-    labels["excel"].configure(text=f"{total_scenes} sc" if total_scenes > 0 else "-")
+    labels["pending"].configure(text=f"{pending_tasks}" if pending_tasks > 0 else "-")
     labels["img_label"].configure(text=f"{images_done}/{images_total}")
     labels["img_bar"]["value"] = int(images_done / images_total * 100) if images_total > 0 else 0
     labels["vid_label"].configure(text=f"{videos_done}/{videos_total}")
     labels["vid_bar"]["value"] = int(videos_done / videos_total * 100) if videos_total > 0 else 0
-    labels["task"].configure(text=(current_task[:28] + "..") if current_task and len(current_task) > 30 else (current_task or "-"))
+    labels["task"].configure(text=(current_task[:26] + "..") if current_task and len(current_task) > 28 else (current_task or "-"))
     labels["result"].configure(text=last_result or "-")
     if last_result:
         if "OK" in last_result or "success" in last_result.lower():
@@ -1739,7 +1739,7 @@ class VMManagerGUI:
             project_code = details.get("current_project", "")
 
             # Default values
-            total_scenes = 0
+            pending_tasks = 0
             images_done = 0
             images_total = 0
             videos_done = 0
@@ -1747,11 +1747,22 @@ class VMManagerGUI:
             current_task = ""
             last_result = ""
 
+            # Get pending task count for this worker
+            try:
+                for task in self.manager.tasks.values():
+                    if task.assigned_to == wid and task.status.value in ("pending", "running"):
+                        # Count scenes in this task
+                        if task.scenes:
+                            pending_tasks += len(task.scenes)
+                        else:
+                            pending_tasks += 1
+            except:
+                pass
+
             if project_code:
                 try:
                     # Get project status from quality checker
                     status = self.manager.quality_checker.get_project_status(project_code)
-                    total_scenes = status.total_scenes
                     images_done = status.images_done
                     images_total = status.total_scenes
                     videos_done = status.videos_done
@@ -1760,7 +1771,7 @@ class VMManagerGUI:
                     # Current task from details
                     current_scene = details.get("current_scene", 0)
                     if current_scene > 0:
-                        current_task = f"Scene {current_scene}/{total_scenes}"
+                        current_task = f"Scene {current_scene}/{status.total_scenes}"
                     else:
                         current_task = details.get("current_task", "") or status.current_step
                 except:
@@ -1777,7 +1788,7 @@ class VMManagerGUI:
                 worker_id=wid,
                 status=w.status.value,
                 project=project_code,
-                total_scenes=total_scenes,
+                pending_tasks=pending_tasks,
                 images_done=images_done,
                 images_total=images_total,
                 videos_done=videos_done,
