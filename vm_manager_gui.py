@@ -477,11 +477,11 @@ class ProjectDetailDialog(tk.Toplevel):
             for scene in self.scenes:
                 # Status icons
                 img_icon = "[v]" if scene.img_path and Path(scene.img_path).exists() else "○"
-                vid_icon = "[v]" if scene.video_local_path and Path(scene.video_local_path).exists() else "○"
+                vid_icon = "[v]" if scene.video_path and Path(scene.video_path).exists() else "○"
                 prompt_icon = "[v]" if scene.img_prompt else "○"
 
                 self.scene_listbox.insert("end",
-                    f"Scene {scene.scene_number:03d} │ P:{prompt_icon} I:{img_icon} V:{vid_icon}")
+                    f"Scene {scene.scene_id:03d} │ P:{prompt_icon} I:{img_icon} V:{vid_icon}")
 
                 # Color based on status
                 if scene.img_path and Path(scene.img_path).exists():
@@ -515,9 +515,9 @@ class ProjectDetailDialog(tk.Toplevel):
         scene = self.scenes[idx]
 
         # Update info
-        self.scene_num_var.set(str(scene.scene_number))
-        self.timing_var.set(f"{scene.start_time} → {scene.end_time}")
-        self.subtitle_var.set(scene.subtitle or "-")
+        self.scene_num_var.set(str(scene.scene_id))
+        self.timing_var.set(f"{scene.srt_start} → {scene.srt_end}")
+        self.subtitle_var.set(scene.srt_text or "-")
 
         # Update prompts
         self.img_prompt_text.configure(state="normal")
@@ -1644,18 +1644,18 @@ class VMManagerGUI:
                 # Status checks
                 has_prompt = "[v]" if scene.img_prompt else "-"
                 has_image = "[v]" if scene.img_path and Path(scene.img_path).exists() else "-"
-                has_video = "[v]" if scene.video_local_path and Path(scene.video_local_path).exists() else "-"
+                has_video = "[v]" if scene.video_path and Path(scene.video_path).exists() else "-"
 
                 # Count stats
                 if scene.img_prompt:
                     prompts_done += 1
                 if scene.img_path and Path(scene.img_path).exists():
                     images_done += 1
-                if scene.video_local_path and Path(scene.video_local_path).exists():
+                if scene.video_path and Path(scene.video_path).exists():
                     videos_done += 1
 
                 # Determine row status/tag
-                scene_num_str = str(scene.scene_number)
+                scene_num_str = str(scene.scene_id)
                 if scene_num_str in current_scenes:
                     status = "WORKING"
                     tag = "working"
@@ -1673,12 +1673,12 @@ class VMManagerGUI:
                     tag = "no_prompt"
 
                 # Truncate subtitle
-                subtitle = (scene.subtitle or "")[:40]
-                if len(scene.subtitle or "") > 40:
+                subtitle = (scene.srt_text or "")[:40]
+                if len(scene.srt_text or "") > 40:
                     subtitle += "..."
 
                 self.scenes_tree.insert("", "end", values=(
-                    scene.scene_number,
+                    scene.scene_id,
                     subtitle,
                     has_prompt,
                     has_image,
