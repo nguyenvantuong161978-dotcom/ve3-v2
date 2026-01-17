@@ -578,18 +578,52 @@ def process_project_with_agent(code: str) -> bool:
     task_id = f"image_{code}_{datetime.now().strftime('%H%M%S')}"
     start_time = time.time()
 
+    # Get total scenes for progress tracking
+    total_scenes = 0
+    current_scene = [0]  # Use list to allow modification in callback
+
+    try:
+        from modules.excel_manager import PromptWorkbook
+        local_dir = LOCAL_PROJECTS / code
+        excel_path = local_dir / f"{code}_prompts.xlsx"
+        if excel_path.exists():
+            wb = PromptWorkbook(str(excel_path))
+            total_scenes = len(wb.get_scenes())
+    except:
+        pass
+
     # Update agent status
     if _agent:
         _agent.update_status(
             state="working",
             current_project=code,
             current_task=task_id,
+            current_scene=0,
+            total_scenes=total_scenes,
             progress=0
         )
 
+    # Callback to track progress
+    def progress_callback(msg, level="INFO"):
+        """Callback that also updates agent with scene progress."""
+        print(msg)
+
+        # Try to extract scene number from message
+        if _agent and "Scene" in msg:
+            import re
+            match = re.search(r'Scene\s*(\d+)', msg, re.IGNORECASE)
+            if match:
+                scene_num = int(match.group(1))
+                current_scene[0] = scene_num
+                progress = int((scene_num / total_scenes * 100) if total_scenes > 0 else 0)
+                _agent.update_status(
+                    current_scene=scene_num,
+                    progress=progress
+                )
+
     # Process
     try:
-        success = process_project_pic_basic(code)
+        success = process_project_pic_basic(code, callback=progress_callback)
         duration = time.time() - start_time
 
         # Report result
@@ -609,7 +643,14 @@ def process_project_with_agent(code: str) -> bool:
                     error="Processing failed",
                     duration=duration
                 )
-            _agent.update_status(state="idle", current_project="", current_task="")
+            _agent.update_status(
+                state="idle",
+                current_project="",
+                current_task="",
+                current_scene=0,
+                total_scenes=0,
+                progress=0
+            )
 
         return success
 
@@ -623,7 +664,14 @@ def process_project_with_agent(code: str) -> bool:
                 error=str(e),
                 duration=duration
             )
-            _agent.update_status(state="error", current_project="", current_task="")
+            _agent.update_status(
+                state="error",
+                current_project="",
+                current_task="",
+                current_scene=0,
+                total_scenes=0,
+                progress=0
+            )
         raise
 
 
