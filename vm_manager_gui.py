@@ -941,27 +941,56 @@ class VMManagerGUI:
         self.root.after(100, self._run_update_async)
 
     def _run_update_async(self):
-        """Run update.py in background thread."""
+        """Run update.py in background - disable buttons until done."""
+        # Disable buttons during update
+        self._set_buttons_state("disabled")
+        self._log("Updating... Please wait...")
+        self.status_var.set("UPDATING - Please wait...")
+
         def run():
             update_script = TOOL_DIR / "update.py"
+            success = True
             if update_script.exists():
                 try:
                     import subprocess
                     result = subprocess.run(
                         [sys.executable, str(update_script)],
-                        capture_output=True, text=True, cwd=str(TOOL_DIR), timeout=30
+                        capture_output=True, text=True, cwd=str(TOOL_DIR), timeout=60
                     )
-                    # Update GUI from main thread
-                    if result.returncode == 0:
-                        self.root.after(0, lambda: self._log("Update completed"))
-                    else:
+                    if result.returncode != 0:
+                        success = False
                         err = result.stderr[:100] if result.stderr else 'unknown'
-                        self.root.after(0, lambda: self._log(f"Update failed: {err}"))
+                        self.root.after(0, lambda: self._log(f"Update warning: {err}"))
                 except Exception as e:
+                    success = False
                     self.root.after(0, lambda: self._log(f"Update error: {e}"))
 
-        self._log("Running update.py...")
+            # Re-enable buttons and notify completion
+            def on_complete():
+                self._set_buttons_state("normal")
+                if success:
+                    self._log("Update completed - Ready!")
+                    self.status_var.set("Ready")
+                else:
+                    self._log("Update had issues - Ready anyway")
+                    self.status_var.set("Ready (update had issues)")
+
+            self.root.after(0, on_complete)
+
         threading.Thread(target=run, daemon=True).start()
+
+    def _set_buttons_state(self, state: str):
+        """Enable/disable all action buttons."""
+        buttons = [
+            self.start_btn, self.stop_btn, self.restart_btn,
+            self.ipv6_btn, self.scan_btn, self.hide_chrome_btn,
+            self.show_chrome_btn, self.settings_btn
+        ]
+        for btn in buttons:
+            try:
+                btn.configure(state=state)
+            except:
+                pass
 
     def _get_current_branch(self) -> str:
         """Get current git branch name."""
