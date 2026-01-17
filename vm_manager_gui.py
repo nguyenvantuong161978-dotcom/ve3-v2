@@ -715,138 +715,188 @@ class CurrentActivityPanel(ttk.LabelFrame):
         self.activity_labels = {}
         self._build_ui()
 
+
+class ChromeLogWindow(tk.Toplevel):
+    """Floating window hiển thị Chrome logs - đặt bên cạnh Chrome windows."""
+
+    def __init__(self, parent, manager):
+        super().__init__(parent)
+        self.manager = manager
+        self.title("Chrome Logs")
+
+        # Get screen size
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+
+        # Position: below Chrome windows on the right side
+        # Chrome windows: 500x400 at x = screen_width - 510
+        log_width = 500
+        log_height = 300
+        x = screen_width - log_width - 10
+        y = 50 + 400 + 10 + 400 + 10  # Below 2 Chrome windows
+
+        # If too low, position it differently
+        if y + log_height > screen_height:
+            y = screen_height - log_height - 50
+
+        self.geometry(f"{log_width}x{log_height}+{x}+{y}")
+        self.resizable(True, True)
+
+        # Keep on top
+        self.attributes('-topmost', True)
+
+        self._build_ui()
+        self._last_positions = {}
+        self._update_logs()
+
     def _build_ui(self):
-        # Header row
-        header = ttk.Frame(self)
-        header.pack(fill="x")
+        # Notebook for Chrome 1 and Chrome 2 logs
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Column headers
-        cols = [
-            ("Worker", 10), ("Status", 8), ("Project", 12),
-            ("Excel", 8), ("Images", 10), ("Videos", 10),
-            ("Current Task", 30), ("Last Result", 12)
-        ]
-        for col_name, width in cols:
-            ttk.Label(header, text=col_name, width=width, font=("Arial", 9, "bold")).pack(side="left", padx=1)
+        # Chrome 1 tab
+        self.chrome1_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.chrome1_frame, text="Chrome 1")
+        self.chrome1_text = scrolledtext.ScrolledText(
+            self.chrome1_frame, height=15, font=("Consolas", 8),
+            wrap="word", state="disabled"
+        )
+        self.chrome1_text.pack(fill="both", expand=True)
 
-        ttk.Separator(self, orient="horizontal").pack(fill="x", pady=5)
+        # Chrome 2 tab
+        self.chrome2_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.chrome2_frame, text="Chrome 2")
+        self.chrome2_text = scrolledtext.ScrolledText(
+            self.chrome2_frame, height=15, font=("Consolas", 8),
+            wrap="word", state="disabled"
+        )
+        self.chrome2_text.pack(fill="both", expand=True)
 
-        # Activity container
-        self.container = ttk.Frame(self)
-        self.container.pack(fill="both", expand=True)
+        # Configure tags
+        for text_widget in [self.chrome1_text, self.chrome2_text]:
+            text_widget.tag_configure("error", foreground="red")
+            text_widget.tag_configure("warn", foreground="orange")
+            text_widget.tag_configure("ok", foreground="green")
 
-    def update_worker(self, worker_id: str, status: str, project: str,
-                      total_scenes: int, images_done: int, images_total: int,
-                      videos_done: int, videos_total: int,
-                      current_task: str, last_result: str, progress: int):
-        """Update a worker's activity display with full info."""
-        if worker_id not in self.activity_labels:
-            # Create new row
-            row = ttk.Frame(self.container)
-            row.pack(fill="x", pady=2)
+    def _update_logs(self):
+        """Update logs from worker log files."""
+        if not self.manager:
+            self.after(1000, self._update_logs)
+            return
 
-            # Worker ID with color indicator
-            worker_frame = ttk.Frame(row)
-            worker_frame.pack(side="left")
+        # Update Chrome 1 logs
+        self._update_worker_log("chrome_1", self.chrome1_text)
+        # Update Chrome 2 logs
+        self._update_worker_log("chrome_2", self.chrome2_text)
 
-            indicator = tk.Canvas(worker_frame, width=10, height=10, highlightthickness=0)
-            indicator.pack(side="left", padx=(0, 3))
+        # Schedule next update
+        self.after(500, self._update_logs)
 
-            worker_label = ttk.Label(worker_frame, text=worker_id, width=8, font=("Consolas", 9))
-            worker_label.pack(side="left")
+    def _update_worker_log(self, worker_id: str, text_widget):
+        """Update a specific worker's log display."""
+        logs = self.manager.get_worker_log_file(worker_id, lines=100)
+        if not logs:
+            return
 
-            status_label = ttk.Label(row, text="-", width=8, font=("Consolas", 9))
-            status_label.pack(side="left", padx=1)
+        last_pos = self._last_positions.get(worker_id, 0)
+        if len(logs) > last_pos:
+            new_lines = logs[last_pos:]
+            text_widget.configure(state="normal")
+            for line in new_lines:
+                # Determine tag based on content
+                tag = None
+                line_lower = line.lower()
+                if "error" in line_lower or "fail" in line_lower:
+                    tag = "error"
+                elif "warn" in line_lower:
+                    tag = "warn"
+                elif "[ok]" in line_lower or "success" in line_lower:
+                    tag = "ok"
 
-            project_label = ttk.Label(row, text="-", width=12, font=("Consolas", 9, "bold"))
-            project_label.pack(side="left", padx=1)
+                if tag:
+                    text_widget.insert("end", line, tag)
+                else:
+                    text_widget.insert("end", line)
+            text_widget.see("end")
+            text_widget.configure(state="disabled")
+            self._last_positions[worker_id] = len(logs)
 
-            excel_label = ttk.Label(row, text="-", width=8, font=("Consolas", 9))
-            excel_label.pack(side="left", padx=1)
 
-            # Images with mini progress bar
-            img_frame = ttk.Frame(row)
-            img_frame.pack(side="left", padx=1)
-            img_label = ttk.Label(img_frame, text="0/0", width=6, font=("Consolas", 9))
-            img_label.pack(side="left")
-            img_bar = ttk.Progressbar(img_frame, length=40, maximum=100, mode="determinate")
-            img_bar.pack(side="left")
+# Attach methods to CurrentActivityPanel
+def _cap_build_ui(self):
+    header = ttk.Frame(self)
+    header.pack(fill="x")
+    cols = [("Worker", 10), ("Status", 8), ("Project", 12), ("Excel", 8),
+            ("Images", 10), ("Videos", 10), ("Current Task", 30), ("Last Result", 12)]
+    for col_name, width in cols:
+        ttk.Label(header, text=col_name, width=width, font=("Arial", 9, "bold")).pack(side="left", padx=1)
+    ttk.Separator(self, orient="horizontal").pack(fill="x", pady=5)
+    self.container = ttk.Frame(self)
+    self.container.pack(fill="both", expand=True)
 
-            # Videos with mini progress bar
-            vid_frame = ttk.Frame(row)
-            vid_frame.pack(side="left", padx=1)
-            vid_label = ttk.Label(vid_frame, text="0/0", width=6, font=("Consolas", 9))
-            vid_label.pack(side="left")
-            vid_bar = ttk.Progressbar(vid_frame, length=40, maximum=100, mode="determinate")
-            vid_bar.pack(side="left")
 
-            task_label = ttk.Label(row, text="-", width=30, font=("Consolas", 8), anchor="w")
-            task_label.pack(side="left", padx=1)
-
-            result_label = ttk.Label(row, text="-", width=12, font=("Consolas", 9))
-            result_label.pack(side="left", padx=1)
-
-            self.activity_labels[worker_id] = {
-                "indicator": indicator,
-                "status": status_label,
-                "project": project_label,
-                "excel": excel_label,
-                "img_label": img_label,
-                "img_bar": img_bar,
-                "vid_label": vid_label,
-                "vid_bar": vid_bar,
-                "task": task_label,
-                "result": result_label
-            }
-
-        # Update values
-        labels = self.activity_labels[worker_id]
-
-        # Status indicator color
-        labels["indicator"].delete("all")
-        colors = {"working": "#00ff00", "idle": "#ffff00", "error": "#ff0000", "stopped": "#888888"}
-        color = colors.get(status, "#888888")
-        labels["indicator"].create_oval(2, 2, 8, 8, fill=color, outline=color)
-
-        labels["status"].configure(text=status)
-        labels["project"].configure(text=project or "-")
-
-        # Excel scenes
-        if total_scenes > 0:
-            labels["excel"].configure(text=f"{total_scenes} sc")
+def _cap_update_worker(self, worker_id, status, project, total_scenes,
+                       images_done, images_total, videos_done, videos_total,
+                       current_task, last_result, progress):
+    if worker_id not in self.activity_labels:
+        row = ttk.Frame(self.container)
+        row.pack(fill="x", pady=2)
+        worker_frame = ttk.Frame(row)
+        worker_frame.pack(side="left")
+        indicator = tk.Canvas(worker_frame, width=10, height=10, highlightthickness=0)
+        indicator.pack(side="left", padx=(0, 3))
+        ttk.Label(worker_frame, text=worker_id, width=8, font=("Consolas", 9)).pack(side="left")
+        status_label = ttk.Label(row, text="-", width=8, font=("Consolas", 9))
+        status_label.pack(side="left", padx=1)
+        project_label = ttk.Label(row, text="-", width=12, font=("Consolas", 9, "bold"))
+        project_label.pack(side="left", padx=1)
+        excel_label = ttk.Label(row, text="-", width=8, font=("Consolas", 9))
+        excel_label.pack(side="left", padx=1)
+        img_frame = ttk.Frame(row)
+        img_frame.pack(side="left", padx=1)
+        img_label = ttk.Label(img_frame, text="0/0", width=6, font=("Consolas", 9))
+        img_label.pack(side="left")
+        img_bar = ttk.Progressbar(img_frame, length=40, maximum=100, mode="determinate")
+        img_bar.pack(side="left")
+        vid_frame = ttk.Frame(row)
+        vid_frame.pack(side="left", padx=1)
+        vid_label = ttk.Label(vid_frame, text="0/0", width=6, font=("Consolas", 9))
+        vid_label.pack(side="left")
+        vid_bar = ttk.Progressbar(vid_frame, length=40, maximum=100, mode="determinate")
+        vid_bar.pack(side="left")
+        task_label = ttk.Label(row, text="-", width=30, font=("Consolas", 8), anchor="w")
+        task_label.pack(side="left", padx=1)
+        result_label = ttk.Label(row, text="-", width=12, font=("Consolas", 9))
+        result_label.pack(side="left", padx=1)
+        self.activity_labels[worker_id] = {
+            "indicator": indicator, "status": status_label, "project": project_label,
+            "excel": excel_label, "img_label": img_label, "img_bar": img_bar,
+            "vid_label": vid_label, "vid_bar": vid_bar, "task": task_label, "result": result_label
+        }
+    labels = self.activity_labels[worker_id]
+    labels["indicator"].delete("all")
+    colors = {"working": "#00ff00", "idle": "#ffff00", "error": "#ff0000", "stopped": "#888888"}
+    labels["indicator"].create_oval(2, 2, 8, 8, fill=colors.get(status, "#888888"), outline=colors.get(status, "#888888"))
+    labels["status"].configure(text=status)
+    labels["project"].configure(text=project or "-")
+    labels["excel"].configure(text=f"{total_scenes} sc" if total_scenes > 0 else "-")
+    labels["img_label"].configure(text=f"{images_done}/{images_total}")
+    labels["img_bar"]["value"] = int(images_done / images_total * 100) if images_total > 0 else 0
+    labels["vid_label"].configure(text=f"{videos_done}/{videos_total}")
+    labels["vid_bar"]["value"] = int(videos_done / videos_total * 100) if videos_total > 0 else 0
+    labels["task"].configure(text=(current_task[:28] + "..") if current_task and len(current_task) > 30 else (current_task or "-"))
+    labels["result"].configure(text=last_result or "-")
+    if last_result:
+        if "OK" in last_result or "success" in last_result.lower():
+            labels["result"].configure(foreground="green")
+        elif "FAIL" in last_result or "error" in last_result.lower():
+            labels["result"].configure(foreground="red")
         else:
-            labels["excel"].configure(text="-")
+            labels["result"].configure(foreground="black")
 
-        # Images progress
-        labels["img_label"].configure(text=f"{images_done}/{images_total}")
-        if images_total > 0:
-            labels["img_bar"]["value"] = int(images_done / images_total * 100)
-        else:
-            labels["img_bar"]["value"] = 0
 
-        # Videos progress
-        labels["vid_label"].configure(text=f"{videos_done}/{videos_total}")
-        if videos_total > 0:
-            labels["vid_bar"]["value"] = int(videos_done / videos_total * 100)
-        else:
-            labels["vid_bar"]["value"] = 0
-
-        # Current task (truncated)
-        if current_task:
-            display_task = current_task[:28] + ".." if len(current_task) > 30 else current_task
-            labels["task"].configure(text=display_task)
-        else:
-            labels["task"].configure(text="-")
-
-        # Last result with color
-        labels["result"].configure(text=last_result or "-")
-        if last_result:
-            if "OK" in last_result or "success" in last_result.lower():
-                labels["result"].configure(foreground="green")
-            elif "FAIL" in last_result or "error" in last_result.lower():
-                labels["result"].configure(foreground="red")
-            else:
-                labels["result"].configure(foreground="black")
+CurrentActivityPanel._build_ui = _cap_build_ui
+CurrentActivityPanel.update_worker = _cap_update_worker
 
 
 class VMManagerGUI:
@@ -1211,7 +1261,7 @@ class VMManagerGUI:
             pass
 
     def _start_all(self):
-        """Start all workers in hidden mode (logs captured to GUI)."""
+        """Start all workers and auto-position Chrome on right side."""
         if not self.manager:
             chrome_count = int(self.chrome_count_var.get())
             self.manager = VMManager(num_chrome_workers=chrome_count)
@@ -1224,13 +1274,23 @@ class VMManagerGUI:
         self._log("Starting all workers...")
 
         def start_thread():
-            # Start normally - CMD windows visible, Chrome visible
-            # Use Hide/Show Chrome buttons to hide Chrome windows later
+            # Start workers
             self.manager.start_all(gui_mode=False)
             # Start orchestration in background
             threading.Thread(target=self.manager.orchestrate, daemon=True).start()
 
         threading.Thread(target=start_thread, daemon=True).start()
+
+        # Auto-position Chrome windows after 10 seconds (give Chrome time to open)
+        def auto_position_chrome():
+            import time
+            time.sleep(10)  # Wait for Chrome to open
+            if self.manager:
+                self.manager.show_chrome_windows()  # Position on right side
+                # Open log window
+                self.root.after(0, lambda: self._show_chrome())
+
+        threading.Thread(target=auto_position_chrome, daemon=True).start()
 
     def _stop_all(self):
         """Stop all workers."""
@@ -1269,24 +1329,35 @@ class VMManagerGUI:
             messagebox.showwarning("Warning", "IPv6 Manager not available")
 
     def _hide_chrome(self):
-        """Hide Chrome windows (move off-screen)."""
+        """Hide Chrome windows (move off-screen) and close log window."""
         if self.manager:
-            self._log("Hiding Chrome windows (moving off-screen)...")
-            if self.manager.hide_chrome_windows():
-                self._log("Chrome windows hidden")
-            else:
-                self._log("No Chrome windows found to hide")
+            self._log("Hiding Chrome windows...")
+            self.manager.hide_chrome_windows()
+            # Close log window if open
+            if hasattr(self, 'chrome_log_window') and self.chrome_log_window:
+                try:
+                    self.chrome_log_window.destroy()
+                except:
+                    pass
+                self.chrome_log_window = None
+            self._log("Chrome hidden")
         else:
             messagebox.showwarning("Warning", "Manager not started")
 
     def _show_chrome(self):
-        """Show Chrome windows (move back on-screen)."""
+        """Show Chrome windows on right side + open log window."""
         if self.manager:
-            self._log("Showing Chrome windows...")
-            if self.manager.show_chrome_windows():
-                self._log("Chrome windows shown")
+            self._log("Showing Chrome windows (right side)...")
+            self.manager.show_chrome_windows()
+            # Open Chrome log window
+            if not hasattr(self, 'chrome_log_window') or not self.chrome_log_window:
+                self.chrome_log_window = ChromeLogWindow(self.root, self.manager)
             else:
-                self._log("No Chrome windows found to show")
+                try:
+                    self.chrome_log_window.lift()
+                except:
+                    self.chrome_log_window = ChromeLogWindow(self.root, self.manager)
+            self._log("Chrome shown with logs")
         else:
             messagebox.showwarning("Warning", "Manager not started")
 
