@@ -327,6 +327,260 @@ class SettingsDialog(tk.Toplevel):
         self.max_errors_var.set("3")
 
 
+class ProjectDetailDialog(tk.Toplevel):
+    """Dialog hiển thị chi tiết project với prompts và images."""
+
+    def __init__(self, parent, project_code: str, quality_checker):
+        super().__init__(parent)
+        self.title(f"Project: {project_code}")
+        self.geometry("1000x700")
+
+        self.project_code = project_code
+        self.quality_checker = quality_checker
+        self._image_cache = {}  # Cache for loaded images
+
+        # Make modal
+        self.transient(parent)
+
+        self._build_ui()
+        self._load_data()
+
+        # Auto-refresh
+        self._auto_refresh()
+
+    def _build_ui(self):
+        # Main container with panes
+        paned = ttk.PanedWindow(self, orient="horizontal")
+        paned.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Left: Scene list
+        left_frame = ttk.Frame(paned)
+        paned.add(left_frame, weight=1)
+
+        ttk.Label(left_frame, text="Scenes", font=("Arial", 11, "bold")).pack(anchor="w")
+
+        # Scene listbox with scrollbar
+        list_frame = ttk.Frame(left_frame)
+        list_frame.pack(fill="both", expand=True, pady=5)
+
+        self.scene_listbox = tk.Listbox(list_frame, font=("Consolas", 10), selectmode="single")
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.scene_listbox.yview)
+        self.scene_listbox.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        self.scene_listbox.pack(side="left", fill="both", expand=True)
+
+        self.scene_listbox.bind("<<ListboxSelect>>", self._on_scene_select)
+
+        # Status summary
+        self.summary_var = tk.StringVar(value="Loading...")
+        ttk.Label(left_frame, textvariable=self.summary_var, wraplength=250).pack(anchor="w", pady=5)
+
+        # Right: Detail view
+        right_frame = ttk.Frame(paned)
+        paned.add(right_frame, weight=2)
+
+        # Scene info
+        info_frame = ttk.LabelFrame(right_frame, text="Scene Details", padding=10)
+        info_frame.pack(fill="x", pady=(0, 10))
+
+        # Scene number
+        row = ttk.Frame(info_frame)
+        row.pack(fill="x")
+        ttk.Label(row, text="Scene:", width=12).pack(side="left")
+        self.scene_num_var = tk.StringVar(value="-")
+        ttk.Label(row, textvariable=self.scene_num_var, font=("Arial", 10, "bold")).pack(side="left")
+
+        # Timing
+        row = ttk.Frame(info_frame)
+        row.pack(fill="x")
+        ttk.Label(row, text="Timing:", width=12).pack(side="left")
+        self.timing_var = tk.StringVar(value="-")
+        ttk.Label(row, textvariable=self.timing_var).pack(side="left")
+
+        # Subtitle
+        row = ttk.Frame(info_frame)
+        row.pack(fill="x")
+        ttk.Label(row, text="Subtitle:", width=12).pack(side="left")
+        self.subtitle_var = tk.StringVar(value="-")
+        ttk.Label(row, textvariable=self.subtitle_var, wraplength=400).pack(side="left")
+
+        # Prompts notebook
+        prompts_notebook = ttk.Notebook(right_frame)
+        prompts_notebook.pack(fill="both", expand=True)
+
+        # Image prompt tab
+        img_prompt_frame = ttk.Frame(prompts_notebook, padding=5)
+        prompts_notebook.add(img_prompt_frame, text="Image Prompt")
+
+        self.img_prompt_text = scrolledtext.ScrolledText(img_prompt_frame, height=6, font=("Consolas", 9),
+                                                          wrap="word", state="disabled")
+        self.img_prompt_text.pack(fill="both", expand=True)
+
+        # Video prompt tab
+        vid_prompt_frame = ttk.Frame(prompts_notebook, padding=5)
+        prompts_notebook.add(vid_prompt_frame, text="Video Prompt")
+
+        self.vid_prompt_text = scrolledtext.ScrolledText(vid_prompt_frame, height=6, font=("Consolas", 9),
+                                                          wrap="word", state="disabled")
+        self.vid_prompt_text.pack(fill="both", expand=True)
+
+        # Image/Video preview frame
+        preview_frame = ttk.LabelFrame(right_frame, text="Preview", padding=10)
+        preview_frame.pack(fill="both", expand=True, pady=(10, 0))
+
+        # Image preview
+        self.image_label = ttk.Label(preview_frame, text="No image", anchor="center")
+        self.image_label.pack(fill="both", expand=True)
+
+        # Status label
+        self.preview_status_var = tk.StringVar(value="")
+        ttk.Label(preview_frame, textvariable=self.preview_status_var).pack(anchor="w")
+
+        # Bottom buttons
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(fill="x", padx=10, pady=10)
+
+        ttk.Button(btn_frame, text="Refresh", command=self._load_data).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Open Folder", command=self._open_folder).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Close", command=self.destroy).pack(side="right", padx=5)
+
+    def _load_data(self):
+        """Load project data."""
+        try:
+            from modules.excel_manager import PromptWorkbook
+
+            project_dir = Path(__file__).parent / "PROJECTS" / self.project_code
+            excel_path = project_dir / f"{self.project_code}_prompts.xlsx"
+
+            if not excel_path.exists():
+                self.summary_var.set("Excel file not found")
+                return
+
+            wb = PromptWorkbook(str(excel_path))
+            self.scenes = wb.get_scenes()
+
+            # Update listbox
+            self.scene_listbox.delete(0, "end")
+            for scene in self.scenes:
+                # Status icons
+                img_icon = "✓" if scene.img_local_path and Path(scene.img_local_path).exists() else "○"
+                vid_icon = "✓" if scene.video_local_path and Path(scene.video_local_path).exists() else "○"
+                prompt_icon = "✓" if scene.img_prompt else "○"
+
+                self.scene_listbox.insert("end",
+                    f"Scene {scene.scene_number:03d} │ P:{prompt_icon} I:{img_icon} V:{vid_icon}")
+
+                # Color based on status
+                if scene.img_local_path and Path(scene.img_local_path).exists():
+                    self.scene_listbox.itemconfig("end", fg="green")
+                elif not scene.img_prompt:
+                    self.scene_listbox.itemconfig("end", fg="red")
+
+            # Summary
+            status = self.quality_checker.get_project_status(self.project_code)
+            self.summary_var.set(
+                f"Total: {status.total_scenes} scenes\n"
+                f"Prompts: {status.img_prompts_count}/{status.total_scenes}\n"
+                f"Images: {status.images_done}/{status.total_scenes}\n"
+                f"Videos: {status.videos_done}/{status.total_scenes}\n"
+                f"Status: {status.excel_status}"
+            )
+
+        except Exception as e:
+            self.summary_var.set(f"Error: {str(e)[:50]}")
+
+    def _on_scene_select(self, event=None):
+        """Handle scene selection."""
+        selection = self.scene_listbox.curselection()
+        if not selection:
+            return
+
+        idx = selection[0]
+        if idx >= len(self.scenes):
+            return
+
+        scene = self.scenes[idx]
+
+        # Update info
+        self.scene_num_var.set(str(scene.scene_number))
+        self.timing_var.set(f"{scene.start_time} → {scene.end_time}")
+        self.subtitle_var.set(scene.subtitle or "-")
+
+        # Update prompts
+        self.img_prompt_text.configure(state="normal")
+        self.img_prompt_text.delete("1.0", "end")
+        self.img_prompt_text.insert("1.0", scene.img_prompt or "(No prompt)")
+        self.img_prompt_text.configure(state="disabled")
+
+        self.vid_prompt_text.configure(state="normal")
+        self.vid_prompt_text.delete("1.0", "end")
+        self.vid_prompt_text.insert("1.0", scene.video_prompt or "(No video prompt)")
+        self.vid_prompt_text.configure(state="disabled")
+
+        # Load image preview
+        self._load_image_preview(scene)
+
+    def _load_image_preview(self, scene):
+        """Load and display image preview."""
+        img_path = scene.img_local_path
+
+        if not img_path or not Path(img_path).exists():
+            self.image_label.configure(image="", text="No image generated")
+            self.preview_status_var.set("")
+            return
+
+        try:
+            # Check cache
+            if img_path in self._image_cache:
+                self.image_label.configure(image=self._image_cache[img_path], text="")
+                self.preview_status_var.set(f"Image: {Path(img_path).name}")
+                return
+
+            # Load and resize image
+            from PIL import Image, ImageTk
+
+            img = Image.open(img_path)
+
+            # Resize to fit (max 400x300)
+            max_size = (400, 300)
+            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+
+            photo = ImageTk.PhotoImage(img)
+
+            # Cache and display
+            self._image_cache[img_path] = photo
+            self.image_label.configure(image=photo, text="")
+            self.preview_status_var.set(f"Image: {Path(img_path).name}")
+
+        except ImportError:
+            self.image_label.configure(image="", text="PIL not installed\n(pip install Pillow)")
+            self.preview_status_var.set(img_path)
+        except Exception as e:
+            self.image_label.configure(image="", text=f"Error: {str(e)[:30]}")
+            self.preview_status_var.set("")
+
+    def _open_folder(self):
+        """Open project folder."""
+        import subprocess
+        import sys
+
+        project_dir = Path(__file__).parent / "PROJECTS" / self.project_code
+
+        if sys.platform == "win32":
+            subprocess.run(["explorer", str(project_dir)])
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(project_dir)])
+        else:
+            subprocess.run(["xdg-open", str(project_dir)])
+
+    def _auto_refresh(self):
+        """Auto-refresh data every 5 seconds."""
+        if self.winfo_exists():
+            self._load_data()
+            self.after(5000, self._auto_refresh)
+
+
 class WorkerCard(ttk.LabelFrame):
     """Card hiển thị thông tin một worker."""
 
@@ -394,28 +648,50 @@ class WorkerCard(ttk.LabelFrame):
 class ProjectCard(ttk.Frame):
     """Card hiển thị thông tin một project."""
 
-    def __init__(self, parent, project_code: str):
+    def __init__(self, parent, project_code: str, on_double_click=None):
         super().__init__(parent)
         self.project_code = project_code
+        self.on_double_click = on_double_click
 
-        # Project name
-        ttk.Label(self, text=project_code, font=("Arial", 9, "bold"), width=15).pack(side="left")
+        # Project name (clickable)
+        self.name_label = ttk.Label(self, text=project_code, font=("Arial", 9, "bold"),
+                                     width=15, cursor="hand2")
+        self.name_label.pack(side="left")
+        self.name_label.bind("<Double-Button-1>", self._on_click)
 
         # Excel status
         self.excel_var = tk.StringVar(value="-")
         ttk.Label(self, textvariable=self.excel_var, width=10).pack(side="left")
 
-        # Image progress
+        # Image progress with progress bar
+        img_frame = ttk.Frame(self)
+        img_frame.pack(side="left", padx=2)
         self.img_var = tk.StringVar(value="0/0")
-        ttk.Label(self, textvariable=self.img_var, width=10).pack(side="left")
+        ttk.Label(img_frame, textvariable=self.img_var, width=8).pack(side="left")
+        self.img_progress = ttk.Progressbar(img_frame, length=50, maximum=100, mode="determinate")
+        self.img_progress.pack(side="left")
 
-        # Video progress
+        # Video progress with progress bar
+        vid_frame = ttk.Frame(self)
+        vid_frame.pack(side="left", padx=2)
         self.vid_var = tk.StringVar(value="0/0")
-        ttk.Label(self, textvariable=self.vid_var, width=10).pack(side="left")
+        ttk.Label(vid_frame, textvariable=self.vid_var, width=8).pack(side="left")
+        self.vid_progress = ttk.Progressbar(vid_frame, length=50, maximum=100, mode="determinate")
+        self.vid_progress.pack(side="left")
 
         # Status
         self.status_var = tk.StringVar(value="-")
         ttk.Label(self, textvariable=self.status_var, width=10).pack(side="left")
+
+        # Detail button
+        ttk.Button(self, text="📋", width=3, command=self._on_click).pack(side="right", padx=2)
+
+        # Make entire row clickable
+        self.bind("<Double-Button-1>", self._on_click)
+
+    def _on_click(self, event=None):
+        if self.on_double_click:
+            self.on_double_click(self.project_code)
 
     def update(self, excel_status: str, img_done: int, img_total: int,
                vid_done: int, vid_total: int, current_step: str):
@@ -423,6 +699,12 @@ class ProjectCard(ttk.Frame):
         self.img_var.set(f"{img_done}/{img_total}")
         self.vid_var.set(f"{vid_done}/{vid_total}")
         self.status_var.set(current_step)
+
+        # Update progress bars
+        if img_total > 0:
+            self.img_progress["value"] = int(img_done / img_total * 100)
+        if vid_total > 0:
+            self.vid_progress["value"] = int(vid_done / vid_total * 100)
 
 
 class VMManagerGUI:
@@ -601,28 +883,63 @@ class VMManagerGUI:
 
     def _build_logs_frame(self, parent):
         """Frame hiển thị logs và errors."""
-        notebook = ttk.Notebook(parent)
-        notebook.pack(fill="both", expand=True)
+        self.logs_notebook = ttk.Notebook(parent)
+        self.logs_notebook.pack(fill="both", expand=True)
 
-        # Logs tab
-        logs_frame = ttk.Frame(notebook, padding=5)
-        notebook.add(logs_frame, text="Logs")
+        # System Logs tab
+        logs_frame = ttk.Frame(self.logs_notebook, padding=5)
+        self.logs_notebook.add(logs_frame, text="System")
 
         self.logs_text = scrolledtext.ScrolledText(logs_frame, height=10, state="disabled",
                                                     font=("Consolas", 9))
         self.logs_text.pack(fill="both", expand=True)
 
+        # Worker Logs tab - shows combined worker logs
+        worker_logs_frame = ttk.Frame(self.logs_notebook, padding=5)
+        self.logs_notebook.add(worker_logs_frame, text="Workers")
+
+        # Worker selector
+        selector_frame = ttk.Frame(worker_logs_frame)
+        selector_frame.pack(fill="x", pady=(0, 5))
+
+        ttk.Label(selector_frame, text="Worker:").pack(side="left", padx=(0, 5))
+        self.log_worker_var = tk.StringVar(value="all")
+        self.log_worker_combo = ttk.Combobox(selector_frame, textvariable=self.log_worker_var,
+                                              values=["all", "excel", "chrome_1", "chrome_2"],
+                                              width=15, state="readonly")
+        self.log_worker_combo.pack(side="left", padx=(0, 10))
+        self.log_worker_combo.bind("<<ComboboxSelected>>", self._on_log_worker_change)
+
+        ttk.Button(selector_frame, text="Refresh", command=self._refresh_worker_logs, width=10).pack(side="left")
+        ttk.Button(selector_frame, text="Clear", command=self._clear_worker_logs, width=10).pack(side="left", padx=5)
+
+        # Auto-scroll checkbox
+        self.auto_scroll_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(selector_frame, text="Auto-scroll", variable=self.auto_scroll_var).pack(side="right")
+
+        self.worker_logs_text = scrolledtext.ScrolledText(worker_logs_frame, height=10, state="disabled",
+                                                           font=("Consolas", 9))
+        self.worker_logs_text.pack(fill="both", expand=True)
+
+        # Configure tags for different workers
+        self.worker_logs_text.tag_configure("excel", foreground="#0066cc")
+        self.worker_logs_text.tag_configure("chrome_1", foreground="#006600")
+        self.worker_logs_text.tag_configure("chrome_2", foreground="#660066")
+        self.worker_logs_text.tag_configure("chrome_3", foreground="#cc6600")
+        self.worker_logs_text.tag_configure("chrome_4", foreground="#006666")
+        self.worker_logs_text.tag_configure("error", foreground="red")
+
         # Errors tab
-        errors_frame = ttk.Frame(notebook, padding=5)
-        notebook.add(errors_frame, text="Errors")
+        errors_frame = ttk.Frame(self.logs_notebook, padding=5)
+        self.logs_notebook.add(errors_frame, text="Errors")
 
         self.errors_text = scrolledtext.ScrolledText(errors_frame, height=10, state="disabled",
                                                       font=("Consolas", 9), foreground="red")
         self.errors_text.pack(fill="both", expand=True)
 
         # Tasks tab
-        tasks_frame = ttk.Frame(notebook, padding=5)
-        notebook.add(tasks_frame, text="Tasks")
+        tasks_frame = ttk.Frame(self.logs_notebook, padding=5)
+        self.logs_notebook.add(tasks_frame, text="Tasks")
 
         # Task stats
         stats_frame = ttk.Frame(tasks_frame)
@@ -641,6 +958,9 @@ class VMManagerGUI:
         self.tasks_text = scrolledtext.ScrolledText(tasks_frame, height=8, state="disabled",
                                                      font=("Consolas", 9))
         self.tasks_text.pack(fill="both", expand=True)
+
+        # Track last log positions for incremental updates
+        self._last_log_positions = {}
 
     def _build_status_bar(self, parent):
         """Status bar."""
@@ -681,17 +1001,21 @@ class VMManagerGUI:
             pass
 
     def _start_all(self):
-        """Start all workers."""
+        """Start all workers in hidden mode (logs captured to GUI)."""
         if not self.manager:
             chrome_count = int(self.chrome_count_var.get())
             self.manager = VMManager(num_chrome_workers=chrome_count)
             self._create_worker_cards(chrome_count)
+            # Update worker combo values
+            worker_list = ["all", "excel"] + [f"chrome_{i}" for i in range(1, chrome_count + 1)]
+            self.log_worker_combo.configure(values=worker_list)
 
         self.running = True
-        self._log("Starting all workers...")
+        self._log("Starting all workers in hidden mode...")
 
         def start_thread():
-            self.manager.start_all()
+            # Start in hidden mode - CMD windows hidden, logs to file
+            self.manager.start_all(hidden=True)
             # Start orchestration in background
             threading.Thread(target=self.manager.orchestrate, daemon=True).start()
 
@@ -767,6 +1091,98 @@ class VMManagerGUI:
                 self._create_worker_cards(self.manager.settings.chrome_count)
 
     # ================================================================================
+    # Worker Logs Handling
+    # ================================================================================
+
+    def _on_log_worker_change(self, event=None):
+        """Handle worker selection change in log viewer."""
+        self._refresh_worker_logs()
+
+    def _refresh_worker_logs(self):
+        """Refresh the worker logs display."""
+        if not self.manager:
+            return
+
+        selected = self.log_worker_var.get()
+
+        self.worker_logs_text.configure(state="normal")
+        self.worker_logs_text.delete("1.0", "end")
+
+        if selected == "all":
+            # Show all workers' logs
+            all_logs = self.manager.get_all_worker_logs(lines_per_worker=30)
+            for worker_id, logs in all_logs.items():
+                if logs:
+                    self.worker_logs_text.insert("end", f"\n{'='*20} {worker_id.upper()} {'='*20}\n", worker_id)
+                    for line in logs[-30:]:  # Last 30 lines per worker
+                        tag = "error" if "error" in line.lower() or "fail" in line.lower() else worker_id
+                        self.worker_logs_text.insert("end", line, tag)
+        else:
+            # Show specific worker logs
+            logs = self.manager.get_worker_log_file(selected, lines=100)
+            for line in logs:
+                tag = "error" if "error" in line.lower() or "fail" in line.lower() else selected
+                self.worker_logs_text.insert("end", line, tag)
+
+        if self.auto_scroll_var.get():
+            self.worker_logs_text.see("end")
+
+        self.worker_logs_text.configure(state="disabled")
+
+    def _clear_worker_logs(self):
+        """Clear the worker logs display."""
+        self.worker_logs_text.configure(state="normal")
+        self.worker_logs_text.delete("1.0", "end")
+        self.worker_logs_text.configure(state="disabled")
+        self._last_log_positions.clear()
+
+    def _update_worker_logs_incremental(self):
+        """Incrementally update worker logs (called in update loop)."""
+        if not self.manager or not self.running:
+            return
+
+        selected = self.log_worker_var.get()
+
+        # Only update if Workers tab is active
+        try:
+            current_tab = self.logs_notebook.index(self.logs_notebook.select())
+            if current_tab != 1:  # Workers tab is index 1
+                return
+        except:
+            return
+
+        self.worker_logs_text.configure(state="normal")
+
+        if selected == "all":
+            # Update all workers
+            for worker_id in self.manager.workers:
+                logs = self.manager.get_worker_log_file(worker_id, lines=10)
+                last_pos = self._last_log_positions.get(worker_id, 0)
+
+                if logs and len(logs) > last_pos:
+                    new_lines = logs[last_pos:]
+                    for line in new_lines:
+                        tag = "error" if "error" in line.lower() or "fail" in line.lower() else worker_id
+                        self.worker_logs_text.insert("end", f"[{worker_id}] {line}", tag)
+                    self._last_log_positions[worker_id] = len(logs)
+        else:
+            # Update specific worker
+            logs = self.manager.get_worker_log_file(selected, lines=50)
+            last_pos = self._last_log_positions.get(selected, 0)
+
+            if logs and len(logs) > last_pos:
+                new_lines = logs[last_pos:]
+                for line in new_lines:
+                    tag = "error" if "error" in line.lower() or "fail" in line.lower() else selected
+                    self.worker_logs_text.insert("end", line, tag)
+                self._last_log_positions[selected] = len(logs)
+
+        if self.auto_scroll_var.get():
+            self.worker_logs_text.see("end")
+
+        self.worker_logs_text.configure(state="disabled")
+
+    # ================================================================================
     # Update Loop
     # ================================================================================
 
@@ -777,9 +1193,10 @@ class VMManagerGUI:
         self._update_projects()
         self._update_tasks()
         self._update_ipv6_status()
+        self._update_worker_logs_incremental()
 
-        # Schedule next update
-        self.root.after(2000, self._update_loop)
+        # Schedule next update (faster for real-time feel)
+        self.root.after(1000, self._update_loop)  # 1 second updates
 
     def _update_time(self):
         """Update time display."""
@@ -819,7 +1236,8 @@ class VMManagerGUI:
         # Update or create project cards
         for code in projects[:10]:  # Limit to 10 projects
             if code not in self.project_cards:
-                card = ProjectCard(self.projects_container, code)
+                card = ProjectCard(self.projects_container, code,
+                                   on_double_click=self._open_project_detail)
                 card.pack(fill="x", pady=2)
                 self.project_cards[code] = card
 
@@ -832,6 +1250,12 @@ class VMManagerGUI:
                 vid_total=status.total_scenes,
                 current_step=status.current_step
             )
+
+    def _open_project_detail(self, project_code: str):
+        """Open project detail dialog."""
+        if self.manager:
+            dialog = ProjectDetailDialog(self.root, project_code, self.manager.quality_checker)
+            # Don't wait for dialog - allow non-modal viewing
 
     def _update_tasks(self):
         """Update task stats."""

@@ -131,6 +131,22 @@ class ProjectStatus:
     total_scenes: int = 0
     prompts_count: int = 0
     fallback_prompts: int = 0
+
+    # Chi tiết Excel validation
+    srt_scene_count: int = 0  # Số scene trong SRT
+    excel_scene_count: int = 0  # Số scene trong Excel
+    scenes_mismatch: bool = False  # SRT != Excel
+
+    # Các loại prompts
+    img_prompts_count: int = 0  # Số scene có img_prompt
+    video_prompts_count: int = 0  # Số scene có video_prompt
+    missing_img_prompts: List[int] = field(default_factory=list)  # Scenes thiếu img_prompt
+    missing_video_prompts: List[int] = field(default_factory=list)  # Scenes thiếu video_prompt
+
+    # Chi tiết fallback
+    fallback_scenes: List[int] = field(default_factory=list)  # Scenes có [FALLBACK]
+
+    # Images & Videos
     images_done: int = 0
     images_missing: List[int] = field(default_factory=list)
     videos_done: int = 0
@@ -243,9 +259,21 @@ class QualityChecker:
         status = ProjectStatus(code=project_code)
         project_dir = self.projects_dir / project_code
 
-        # Check SRT
+        # Check SRT và đếm số scene từ SRT
         srt_path = project_dir / f"{project_code}.srt"
         status.srt_exists = srt_path.exists()
+
+        if status.srt_exists:
+            try:
+                # Đếm số scene trong SRT (mỗi subtitle block = 1 scene)
+                with open(srt_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    # Đếm số block (mỗi block bắt đầu bằng số)
+                    import re
+                    blocks = re.findall(r'^\d+\s*$', content, re.MULTILINE)
+                    status.srt_scene_count = len(blocks)
+            except:
+                pass
 
         # Check Excel
         excel_path = project_dir / f"{project_code}_prompts.xlsx"
@@ -262,17 +290,45 @@ class QualityChecker:
             scenes = wb.get_scenes()
 
             status.total_scenes = len(scenes)
-            status.prompts_count = sum(1 for s in scenes if s.img_prompt)
-            status.fallback_prompts = sum(1 for s in scenes if "[FALLBACK]" in (s.img_prompt or ""))
+            status.excel_scene_count = len(scenes)
 
-            # Excel status
+            # Kiểm tra số scene khớp với SRT
+            if status.srt_scene_count > 0 and status.srt_scene_count != status.excel_scene_count:
+                status.scenes_mismatch = True
+
+            # Chi tiết từng loại prompt
+            for scene in scenes:
+                scene_num = scene.scene_number
+
+                # Check img_prompt
+                if scene.img_prompt and scene.img_prompt.strip():
+                    status.img_prompts_count += 1
+                    # Check fallback
+                    if "[FALLBACK]" in scene.img_prompt:
+                        status.fallback_prompts += 1
+                        status.fallback_scenes.append(scene_num)
+                else:
+                    status.missing_img_prompts.append(scene_num)
+
+                # Check video_prompt
+                if scene.video_prompt and scene.video_prompt.strip():
+                    status.video_prompts_count += 1
+                else:
+                    status.missing_video_prompts.append(scene_num)
+
+            status.prompts_count = status.img_prompts_count
+
+            # Excel status - chi tiết hơn
             if status.prompts_count == 0:
                 status.excel_status = "empty"
+                status.current_step = "excel"
+            elif status.scenes_mismatch:
+                status.excel_status = "mismatch"  # SRT và Excel không khớp
                 status.current_step = "excel"
             elif status.fallback_prompts > 0:
                 status.excel_status = "fallback"
                 status.current_step = "excel"  # Need API completion
-            elif status.prompts_count < status.total_scenes:
+            elif len(status.missing_img_prompts) > 0:
                 status.excel_status = "partial"
                 status.current_step = "excel"
             else:
@@ -311,6 +367,56 @@ class QualityChecker:
             status.errors.append(str(e))
 
         return status
+
+    def get_excel_validation_report(self, project_code: str) -> Dict:
+        """Báo cáo chi tiết về Excel validation."""
+        status = self.get_project_status(project_code)
+
+        report = {
+            "project": project_code,
+            "excel_exists": status.excel_exists,
+            "excel_status": status.excel_status,
+            "is_complete": status.excel_status == "complete",
+
+            # Scene counts
+            "srt_scenes": status.srt_scene_count,
+            "excel_scenes": status.excel_scene_count,
+            "scenes_match": not status.scenes_mismatch,
+
+            # Prompt stats
+            "total_scenes": status.total_scenes,
+            "img_prompts": status.img_prompts_count,
+            "video_prompts": status.video_prompts_count,
+            "fallback_count": status.fallback_prompts,
+
+            # Missing details
+            "missing_img_prompts": status.missing_img_prompts[:10],  # First 10
+            "missing_video_prompts": status.missing_video_prompts[:10],
+            "fallback_scenes": status.fallback_scenes[:10],
+
+            # Progress
+            "images_done": status.images_done,
+            "videos_done": status.videos_done,
+            "current_step": status.current_step,
+
+            # Issues
+            "issues": []
+        }
+
+        # Add issues
+        if status.scenes_mismatch:
+            report["issues"].append(f"Scene count mismatch: SRT={status.srt_scene_count}, Excel={status.excel_scene_count}")
+
+        if status.missing_img_prompts:
+            report["issues"].append(f"Missing img_prompt in {len(status.missing_img_prompts)} scenes")
+
+        if status.missing_video_prompts:
+            report["issues"].append(f"Missing video_prompt in {len(status.missing_video_prompts)} scenes")
+
+        if status.fallback_prompts > 0:
+            report["issues"].append(f"{status.fallback_prompts} scenes have [FALLBACK] prompts (need API)")
+
+        return report
 
     def check_excel(self, project_code: str) -> tuple:
         status = self.get_project_status(project_code)
@@ -599,6 +705,7 @@ class VMManager:
         # Control
         self._stop_flag = False
         self._lock = threading.Lock()
+        self.hidden_mode = False  # Track if workers run in hidden mode (for GUI)
 
         # IPv6 Manager for rotation
         if IPV6_MANAGER_ENABLED:
@@ -647,6 +754,196 @@ class VMManager:
         if "-T" in folder:
             return folder.split("-T")[0]
         return None
+
+    # ================================================================================
+    # CHROME AUTO-SCALING
+    # ================================================================================
+
+    def get_base_chrome_path(self) -> Optional[Path]:
+        """Tìm Chrome portable gốc để copy."""
+        candidates = [
+            TOOL_DIR / "GoogleChromePortable",
+            Path.home() / "Documents" / "GoogleChromePortable",
+        ]
+        for p in candidates:
+            exe = p / "GoogleChromePortable.exe"
+            if exe.exists():
+                return p
+        return None
+
+    def get_chrome_path_for_worker(self, worker_num: int) -> Optional[Path]:
+        """Lấy đường dẫn Chrome cho worker N."""
+        if worker_num == 1:
+            return self.get_base_chrome_path()
+
+        # Worker 2+ dùng copy
+        base = self.get_base_chrome_path()
+        if not base:
+            return None
+
+        # Thử các tên khác nhau
+        names = [
+            f"GoogleChromePortable_{worker_num}",
+            f"GoogleChromePortable - Copy{'' if worker_num == 2 else ' ' + str(worker_num - 1)}",
+            f"GoogleChromePortable - Copy {worker_num - 1}" if worker_num > 2 else "GoogleChromePortable - Copy",
+        ]
+
+        for name in names:
+            path = base.parent / name
+            if (path / "GoogleChromePortable.exe").exists():
+                return path
+
+        return None
+
+    def create_chrome_for_worker(self, worker_num: int) -> Optional[Path]:
+        """
+        Tạo Chrome portable cho worker N bằng cách copy từ base.
+        Không copy Data folder để user cần login lại.
+
+        Returns:
+            Path to Chrome folder if created, None if failed
+        """
+        if worker_num == 1:
+            return self.get_base_chrome_path()
+
+        base = self.get_base_chrome_path()
+        if not base:
+            self.log("Base Chrome not found, cannot create new instances", "CHROME", "ERROR")
+            return None
+
+        target_name = f"GoogleChromePortable_{worker_num}"
+        target_path = base.parent / target_name
+
+        if target_path.exists():
+            self.log(f"Chrome {worker_num} already exists: {target_path}", "CHROME")
+            return target_path
+
+        self.log(f"Creating Chrome {worker_num} from base...", "CHROME")
+
+        try:
+            # Copy entire folder except Data (so user needs to login)
+            def ignore_data(directory, files):
+                """Ignore Data folder for fresh login."""
+                if directory == str(base):
+                    return ['Data', 'User Data']
+                return []
+
+            shutil.copytree(base, target_path, ignore=ignore_data)
+            self.log(f"Created Chrome {worker_num}: {target_path}", "CHROME", "SUCCESS")
+            return target_path
+        except Exception as e:
+            self.log(f"Failed to create Chrome {worker_num}: {e}", "CHROME", "ERROR")
+            return None
+
+    def ensure_chrome_script(self, worker_num: int) -> Optional[Path]:
+        """
+        Đảm bảo script _run_chromeN.py tồn tại.
+        Nếu chưa có, tạo từ template.
+        """
+        script_path = TOOL_DIR / f"_run_chrome{worker_num}.py"
+
+        if script_path.exists():
+            return script_path
+
+        # Template cho Chrome worker script
+        self.log(f"Creating script: {script_path.name}", "CHROME")
+
+        # Copy từ _run_chrome1.py và sửa worker number
+        base_script = TOOL_DIR / "_run_chrome1.py"
+        if not base_script.exists():
+            self.log("Base script _run_chrome1.py not found", "CHROME", "ERROR")
+            return None
+
+        try:
+            with open(base_script, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Cập nhật parallel_chrome setting cho worker này
+            # Thay "1/2" thành "N/total"
+            import re
+            # Tìm và thay thế pattern parallel_chrome
+            content = re.sub(
+                r"parallel_chrome\s*=\s*['\"][^'\"]*['\"]",
+                f'parallel_chrome = "{worker_num}/{self.num_chrome_workers}"',
+                content
+            )
+
+            # Cập nhật WORKER_ID nếu có
+            content = re.sub(
+                r"WORKER_ID\s*=\s*['\"]chrome_\d+['\"]",
+                f'WORKER_ID = "chrome_{worker_num}"',
+                content
+            )
+
+            # Cập nhật chrome portable path cho worker này
+            chrome_path = self.get_chrome_path_for_worker(worker_num)
+            if chrome_path:
+                # Thêm logic để dùng Chrome portable riêng
+                content = re.sub(
+                    r"(# Chrome portable path)",
+                    f'# Chrome portable path for worker {worker_num}\n'
+                    f'CHROME_PORTABLE_{worker_num} = Path(r"{chrome_path}")',
+                    content
+                )
+
+            with open(script_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            self.log(f"Created script: {script_path.name}", "CHROME", "SUCCESS")
+            return script_path
+        except Exception as e:
+            self.log(f"Failed to create script: {e}", "CHROME", "ERROR")
+            return None
+
+    def scale_chrome_workers(self, new_count: int) -> bool:
+        """
+        Scale số lượng Chrome workers.
+        Tự động tạo Chrome portable và scripts nếu cần.
+
+        Args:
+            new_count: Số Chrome workers mới
+
+        Returns:
+            True nếu scale thành công
+        """
+        if new_count < 1:
+            self.log("Chrome count must be >= 1", "CHROME", "ERROR")
+            return False
+
+        self.log(f"Scaling Chrome workers: {self.num_chrome_workers} → {new_count}", "CHROME")
+
+        # Tạo Chrome portable và scripts cho workers mới
+        for i in range(1, new_count + 1):
+            # Kiểm tra/tạo Chrome portable
+            chrome_path = self.get_chrome_path_for_worker(i)
+            if not chrome_path:
+                chrome_path = self.create_chrome_for_worker(i)
+                if not chrome_path:
+                    self.log(f"Failed to setup Chrome {i}", "CHROME", "ERROR")
+                    return False
+
+            # Kiểm tra/tạo script
+            script = self.ensure_chrome_script(i)
+            if not script:
+                self.log(f"Failed to create script for Chrome {i}", "CHROME", "ERROR")
+                return False
+
+        # Cập nhật số workers
+        old_count = self.num_chrome_workers
+        self.num_chrome_workers = new_count
+        self._init_workers()
+
+        # Cập nhật settings
+        self.settings.chrome_count = new_count
+
+        self.log(f"Scaled to {new_count} Chrome workers", "CHROME", "SUCCESS")
+
+        # Nếu có workers mới, thông báo cần login
+        if new_count > old_count:
+            new_workers = [f"chrome_{i}" for i in range(old_count + 1, new_count + 1)]
+            self.log(f"New workers need Google login: {new_workers}", "CHROME", "WARN")
+
+        return True
 
     def log(self, msg: str, source: str = "MANAGER", level: str = "INFO"):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -759,6 +1056,30 @@ class VMManager:
             return []
         return self.agent_protocol.get_recent_logs(worker_id, lines)
 
+    def get_worker_log_file(self, worker_id: str, lines: int = 50) -> List[str]:
+        """Đọc log từ file log của worker (cho hidden mode)."""
+        log_file = AGENT_DIR / "logs" / f"{worker_id}.log"
+        if not log_file.exists():
+            return []
+        try:
+            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                all_lines = f.readlines()
+                return all_lines[-lines:] if len(all_lines) > lines else all_lines
+        except Exception as e:
+            return [f"Error reading log: {e}"]
+
+    def get_all_worker_logs(self, lines_per_worker: int = 20) -> Dict[str, List[str]]:
+        """Lấy log của tất cả workers (cho GUI)."""
+        logs = {}
+        for worker_id in self.workers:
+            # Try log file first (hidden mode), then agent protocol
+            file_logs = self.get_worker_log_file(worker_id, lines_per_worker)
+            if file_logs:
+                logs[worker_id] = file_logs
+            else:
+                logs[worker_id] = self.get_worker_logs(worker_id, lines_per_worker)
+        return logs
+
     def get_error_summary(self) -> Dict[str, int]:
         """Lấy tóm tắt các loại lỗi từ tất cả workers."""
         if not self.agent_protocol:
@@ -858,7 +1179,7 @@ class VMManager:
             time.sleep(3)
             for wid, w in self.workers.items():
                 if w.worker_type == "chrome":
-                    self.start_worker(wid)
+                    self.start_worker(wid, hidden=self.hidden_mode)
                     time.sleep(2)
 
             return True
@@ -1063,7 +1384,14 @@ class VMManager:
             subprocess.run(["pkill", "-f", "chrome"], capture_output=True)
         time.sleep(2)
 
-    def start_worker(self, worker_id: str) -> bool:
+    def start_worker(self, worker_id: str, hidden: bool = False) -> bool:
+        """
+        Start a worker process.
+
+        Args:
+            worker_id: ID of worker to start
+            hidden: If True, hide CMD window and capture logs to file (for GUI mode)
+        """
         if worker_id not in self.workers:
             return False
         w = self.workers[worker_id]
@@ -1086,12 +1414,47 @@ class VMManager:
                 return False
 
             if sys.platform == "win32":
-                title = f"{w.worker_type.upper()} {w.worker_num or ''}"
-                cmd_args = f"python {script.name}"
-                if args:
-                    cmd_args += f" {args}"
-                cmd = f'start "{title}" cmd /k "cd /d {TOOL_DIR} && {cmd_args}"'
-                w.process = subprocess.Popen(cmd, shell=True, cwd=str(TOOL_DIR))
+                if hidden:
+                    # Hidden mode - không mở CMD, redirect output to log file
+                    log_dir = AGENT_DIR / "logs"
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    log_file = log_dir / f"{worker_id}.log"
+
+                    cmd_list = [sys.executable, str(script)]
+                    if args:
+                        cmd_list.extend(args.split())
+
+                    # Hide window using STARTUPINFO
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    startupinfo.wShowWindow = subprocess.SW_HIDE
+
+                    # Open log file (append mode) - keep file handle open for process lifetime
+                    # Store the file handle in worker info so it stays open
+                    log_handle = open(log_file, 'a', encoding='utf-8', buffering=1)
+                    log_handle.write(f"\n{'='*60}\n")
+                    log_handle.write(f"[{datetime.now().isoformat()}] Starting {worker_id}\n")
+                    log_handle.write(f"{'='*60}\n")
+                    log_handle.flush()
+
+                    w.process = subprocess.Popen(
+                        cmd_list,
+                        cwd=str(TOOL_DIR),
+                        stdout=log_handle,
+                        stderr=subprocess.STDOUT,
+                        startupinfo=startupinfo,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                    # Store log handle to keep it open
+                    w._log_handle = log_handle
+                else:
+                    # Visible mode - mở CMD window
+                    title = f"{w.worker_type.upper()} {w.worker_num or ''}"
+                    cmd_args = f"python {script.name}"
+                    if args:
+                        cmd_args += f" {args}"
+                    cmd = f'start "{title}" cmd /k "cd /d {TOOL_DIR} && {cmd_args}"'
+                    w.process = subprocess.Popen(cmd, shell=True, cwd=str(TOOL_DIR))
             else:
                 cmd_list = [sys.executable, str(script)]
                 if args:
@@ -1100,7 +1463,7 @@ class VMManager:
 
             w.status = WorkerStatus.IDLE
             w.start_time = datetime.now()
-            self.log(f"{worker_id} started", worker_id, "SUCCESS")
+            self.log(f"{worker_id} started {'(hidden)' if hidden else ''}", worker_id, "SUCCESS")
             return True
         except Exception as e:
             self.log(f"Failed: {e}", worker_id, "ERROR")
@@ -1119,6 +1482,13 @@ class VMManager:
             except:
                 w.process.kill()
             w.process = None
+        # Close log handle if exists (hidden mode)
+        if hasattr(w, '_log_handle') and w._log_handle:
+            try:
+                w._log_handle.close()
+            except:
+                pass
+            w._log_handle = None
         w.status = WorkerStatus.STOPPED
         w.current_task = None
 
@@ -1131,20 +1501,26 @@ class VMManager:
             self.kill_all_chrome()
 
         time.sleep(3)
-        self.start_worker(worker_id)
+        self.start_worker(worker_id, hidden=self.hidden_mode)
 
         # Track restart time và count
         w.last_restart_time = datetime.now()
         w.restart_count += 1
         self.log(f"{worker_id} restarted (count: {w.restart_count})", worker_id, "SUCCESS")
 
-    def start_all(self):
+    def start_all(self, hidden: bool = False):
+        """Start all workers.
+
+        Args:
+            hidden: If True, hide CMD windows (for GUI mode)
+        """
+        self.hidden_mode = hidden  # Track mode for restart
         self.kill_all_chrome()
         if self.enable_excel:
-            self.start_worker("excel")
+            self.start_worker("excel", hidden=hidden)
             time.sleep(2)
         for i in range(1, self.num_chrome_workers + 1):
-            self.start_worker(f"chrome_{i}")
+            self.start_worker(f"chrome_{i}", hidden=hidden)
             time.sleep(2)
 
     def stop_all(self):
@@ -1254,13 +1630,16 @@ class VMManager:
                     elif cmd.startswith("scale "):
                         try:
                             num = int(cmd.split()[-1])
-                            self.num_chrome_workers = num
-                            self._init_workers()
-                            self.settings.chrome_count = num
-                            self.start_all()
-                            print(f"  Scaled to {num} Chrome workers")
-                        except:
-                            pass
+                            # Stop existing workers
+                            self.stop_all()
+                            # Scale with auto-creation of Chrome profiles
+                            if self.scale_chrome_workers(num):
+                                self.start_all(hidden=self.hidden_mode)
+                                print(f"  Scaled to {num} Chrome workers")
+                            else:
+                                print(f"  Failed to scale to {num} workers")
+                        except Exception as e:
+                            print(f"  Error: {e}")
                     elif cmd.startswith("logs "):
                         try:
                             parts = cmd.split()
