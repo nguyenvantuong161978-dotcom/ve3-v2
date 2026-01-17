@@ -1472,14 +1472,12 @@ class VMManagerGUI:
 
         threading.Thread(target=start_thread, daemon=True).start()
 
-        # Auto-position Chrome windows after 10 seconds (give Chrome time to open)
+        # Auto-position Chrome + CMD windows after 10 seconds (give Chrome time to open)
         def auto_position_chrome():
             import time
             time.sleep(10)  # Wait for Chrome to open
             if self.manager:
-                self.manager.show_chrome_windows()  # Position on right side
-                # Open log window
-                self.root.after(0, lambda: self._show_chrome())
+                self.manager.show_chrome_with_cmd()  # Position Chrome + CMD side by side
 
         threading.Thread(target=auto_position_chrome, daemon=True).start()
 
@@ -1528,35 +1526,21 @@ class VMManagerGUI:
             messagebox.showwarning("Warning", "IPv6 Manager not available")
 
     def _hide_chrome(self):
-        """Hide Chrome windows (move off-screen) and close log window."""
+        """Hide Chrome windows (move off-screen)."""
         if self.manager:
-            self._log("Hiding Chrome windows...")
+            self._log("Hiding Chrome + CMD windows...")
             self.manager.hide_chrome_windows()
-            # Close log window if open
-            if hasattr(self, 'chrome_log_window') and self.chrome_log_window:
-                try:
-                    self.chrome_log_window.destroy()
-                except:
-                    pass
-                self.chrome_log_window = None
-            self._log("Chrome hidden")
+            self.manager.hide_cmd_windows()
+            self._log("Chrome + CMD hidden")
         else:
             messagebox.showwarning("Warning", "Manager not started")
 
     def _show_chrome(self):
-        """Show Chrome windows on right side + open log window."""
+        """Show Chrome windows + CMD windows side by side on right."""
         if self.manager:
-            self._log("Showing Chrome windows (right side)...")
-            self.manager.show_chrome_windows()
-            # Open Chrome log window
-            if not hasattr(self, 'chrome_log_window') or not self.chrome_log_window:
-                self.chrome_log_window = ChromeLogWindow(self.root, self.manager)
-            else:
-                try:
-                    self.chrome_log_window.lift()
-                except:
-                    self.chrome_log_window = ChromeLogWindow(self.root, self.manager)
-            self._log("Chrome shown with logs")
+            self._log("Showing Chrome + CMD windows (right side)...")
+            self.manager.show_chrome_with_cmd()
+            self._log("Chrome + CMD shown side by side")
         else:
             messagebox.showwarning("Warning", "Manager not started")
 

@@ -1504,6 +1504,116 @@ class VMManager:
             self.log(f"Error showing Chrome windows: {e}", "CHROME", "ERROR")
             return False
 
+    def get_cmd_windows(self) -> List[int]:
+        """Lấy danh sách handle của các cửa sổ CMD cho Chrome workers."""
+        if sys.platform != "win32":
+            return []
+
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            cmd_windows = []
+
+            def enum_windows_callback(hwnd, lParam):
+                if user32.IsWindowVisible(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        title = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, title, length + 1)
+                        # CMD windows have titles like "CHROME 1" or "CHROME 2"
+                        if "CHROME" in title.value.upper() and "CHROME" not in title.value.lower().replace("chrome ", ""):
+                            cmd_windows.append((hwnd, title.value))
+                return True
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+            user32.EnumWindows(WNDENUMPROC(enum_windows_callback), 0)
+
+            # Sort by title to ensure consistent ordering (CHROME 1 before CHROME 2)
+            cmd_windows.sort(key=lambda x: x[1])
+            return [hwnd for hwnd, _ in cmd_windows]
+        except Exception as e:
+            self.log(f"Error getting CMD windows: {e}", "CHROME", "ERROR")
+            return []
+
+    def hide_cmd_windows(self):
+        """Ẩn các cửa sổ CMD của Chrome workers."""
+        if sys.platform != "win32":
+            return False
+
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+
+            cmd_windows = self.get_cmd_windows()
+            for hwnd in cmd_windows:
+                # Move off-screen
+                user32.SetWindowPos(hwnd, 0, -3000, 100, 0, 0, 0x0001 | 0x0004)
+
+            if cmd_windows:
+                self.log(f"Hidden {len(cmd_windows)} CMD windows", "CHROME", "SUCCESS")
+            return True
+        except Exception as e:
+            self.log(f"Error hiding CMD windows: {e}", "CHROME", "ERROR")
+            return False
+
+    def show_chrome_with_cmd(self):
+        """
+        Show Chrome và CMD windows cạnh nhau.
+        Layout: [Chrome 1][CMD 1]
+                [Chrome 2][CMD 2]
+        """
+        if sys.platform != "win32":
+            self.log("Window showing only supported on Windows", "CHROME", "WARN")
+            return False
+
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+
+            chrome_windows = self.get_chrome_windows()
+            cmd_windows = self.get_cmd_windows()
+
+            # Get screen size
+            screen_width = user32.GetSystemMetrics(0)
+            screen_height = user32.GetSystemMetrics(1)
+
+            # Sizes
+            chrome_width = 500
+            chrome_height = 450
+            cmd_width = 500
+            cmd_height = 450
+
+            # Position from right side
+            x_chrome = screen_width - chrome_width - cmd_width - 20
+            x_cmd = screen_width - cmd_width - 10
+            y_start = 50
+
+            # Position Chrome windows
+            for i, hwnd in enumerate(chrome_windows):
+                y = y_start + (i * (chrome_height + 10))
+                if y + chrome_height > screen_height:
+                    y = y_start
+                user32.SetWindowPos(hwnd, 0, x_chrome, y, chrome_width, chrome_height, 0x0004)
+                # Restore if minimized
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+
+            # Position CMD windows next to Chrome
+            for i, hwnd in enumerate(cmd_windows):
+                y = y_start + (i * (cmd_height + 10))
+                if y + cmd_height > screen_height:
+                    y = y_start
+                user32.SetWindowPos(hwnd, 0, x_cmd, y, cmd_width, cmd_height, 0x0004)
+                # Restore if minimized
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+
+            self.log(f"Shown {len(chrome_windows)} Chrome + {len(cmd_windows)} CMD windows (side by side)", "CHROME", "SUCCESS")
+            return True
+        except Exception as e:
+            self.log(f"Error showing Chrome with CMD: {e}", "CHROME", "ERROR")
+            return False
+
     def toggle_chrome_visibility(self) -> bool:
         """
         Toggle hiển thị Chrome windows.
