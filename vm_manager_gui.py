@@ -934,11 +934,34 @@ class VMManagerGUI:
         # Update title with branch info
         self.root.title(f"VM Manager - [{self.current_branch}]")
 
-        # Run update.py on startup
-        self._run_update()
-
         # Start update loop - faster for real-time feel
         self._update_loop()
+
+        # Run update.py asynchronously after GUI is shown
+        self.root.after(100, self._run_update_async)
+
+    def _run_update_async(self):
+        """Run update.py in background thread."""
+        def run():
+            update_script = TOOL_DIR / "update.py"
+            if update_script.exists():
+                try:
+                    import subprocess
+                    result = subprocess.run(
+                        [sys.executable, str(update_script)],
+                        capture_output=True, text=True, cwd=str(TOOL_DIR), timeout=30
+                    )
+                    # Update GUI from main thread
+                    if result.returncode == 0:
+                        self.root.after(0, lambda: self._log("Update completed"))
+                    else:
+                        err = result.stderr[:100] if result.stderr else 'unknown'
+                        self.root.after(0, lambda: self._log(f"Update failed: {err}"))
+                except Exception as e:
+                    self.root.after(0, lambda: self._log(f"Update error: {e}"))
+
+        self._log("Running update.py...")
+        threading.Thread(target=run, daemon=True).start()
 
     def _get_current_branch(self) -> str:
         """Get current git branch name."""
@@ -954,23 +977,6 @@ class VMManagerGUI:
             pass
         return "unknown"
 
-    def _run_update(self):
-        """Run update.py on startup."""
-        update_script = TOOL_DIR / "update.py"
-        if update_script.exists():
-            try:
-                import subprocess
-                self._log(f"Running update.py...")
-                result = subprocess.run(
-                    [sys.executable, str(update_script)],
-                    capture_output=True, text=True, cwd=str(TOOL_DIR), timeout=30
-                )
-                if result.returncode == 0:
-                    self._log(f"Update completed")
-                else:
-                    self._log(f"Update failed: {result.stderr[:100] if result.stderr else 'unknown'}")
-            except Exception as e:
-                self._log(f"Update error: {e}")
 
     def _build_ui(self):
         """Xây dựng giao diện."""
