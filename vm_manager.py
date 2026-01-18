@@ -199,8 +199,12 @@ class SettingsManager:
         return {}
 
     def save_config(self):
+        print(f"[DEBUG] Saving config to {CONFIG_FILE}")
+        print(f"[DEBUG] video_mode = {self.config.get('video_mode', 'NOT SET')}")
+        print(f"[DEBUG] excel_mode = {self.config.get('excel_mode', 'NOT SET')}")
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             yaml.dump(self.config, f, default_flow_style=False, allow_unicode=True)
+        print(f"[DEBUG] Config saved!")
 
     # Chrome settings
     @property
