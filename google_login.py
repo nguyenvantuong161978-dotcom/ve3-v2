@@ -125,54 +125,81 @@ def load_gsheet_client():
         return None, None
 
 
-def get_account_info(machine_code: str) -> dict:
+def get_account_info(machine_code: str, max_retries: int = 3) -> dict:
     """
     Lấy thông tin tài khoản từ Google Sheet.
+
+    Tìm exact match theo mã máy. Nếu gặp lỗi network sẽ tự động retry.
+
+    Args:
+        machine_code: Mã máy cần tìm (exact match)
+        max_retries: Số lần retry khi gặp lỗi (default 3)
 
     Returns:
         {"id": "email@gmail.com", "password": "xxx"} or None
     """
-    gc, spreadsheet_name = load_gsheet_client()
-    if not gc:
-        return None
+    import time
 
-    try:
-        ws = gc.open(spreadsheet_name).worksheet(SHEET_NAME)
+    machine_code_upper = machine_code.upper()
+    last_error = None
 
-        # Đọc tất cả dữ liệu
-        all_data = ws.get_all_values()
+    for attempt in range(max_retries):
+        if attempt > 0:
+            wait_time = 2 * attempt  # 2s, 4s
+            log(f"Retry đọc Google Sheet ({attempt + 1}/{max_retries}) sau {wait_time}s...")
+            time.sleep(wait_time)
 
-        if not all_data:
-            log(f"Sheet '{SHEET_NAME}' is empty", "ERROR")
-            return None
+        gc, spreadsheet_name = load_gsheet_client()
+        if not gc:
+            last_error = "Cannot load gsheet client"
+            continue
 
-        # Tìm row có mã máy khớp (cột A)
-        for row_idx, row in enumerate(all_data, start=1):
-            if len(row) >= 3:
-                code = str(row[0]).strip().upper()
-                if code == machine_code.upper():
+        try:
+            ws = gc.open(spreadsheet_name).worksheet(SHEET_NAME)
+
+            # Đọc tất cả dữ liệu
+            all_data = ws.get_all_values()
+
+            if not all_data:
+                log(f"Sheet '{SHEET_NAME}' is empty", "ERROR")
+                return None
+
+            # Tìm exact match
+            for row_idx, row in enumerate(all_data, start=1):
+                if len(row) >= 3:
+                    code = str(row[0]).strip().upper()
                     account_id = str(row[1]).strip()
                     password = str(row[2]).strip()
 
-                    if account_id and password:
+                    if not account_id or not password:
+                        continue
+
+                    # Exact match
+                    if code == machine_code_upper:
                         log(f"Found account for {machine_code}: {account_id}")
                         return {
                             "id": account_id,
                             "password": password,
                             "row": row_idx
                         }
-                    else:
-                        log(f"Row {row_idx} has empty ID or password", "WARN")
 
-        log(f"Machine code '{machine_code}' not found in sheet", "ERROR")
-        return None
+            # Không tìm thấy - có thể do sheet chưa sync, retry
+            last_error = f"Machine code '{machine_code}' not found"
+            if attempt < max_retries - 1:
+                log(f"Không tìm thấy {machine_code}, thử lại...", "WARN")
+                continue
 
-    except Exception as e:
-        log(f"Error reading sheet: {e}", "ERROR")
-        return None
+        except Exception as e:
+            last_error = str(e)
+            log(f"Error reading sheet (attempt {attempt + 1}): {e}", "WARN")
+            continue
+
+    # Hết retry
+    log(f"Machine code '{machine_code}' not found in sheet after {max_retries} attempts: {last_error}", "ERROR")
+    return None
 
 
-def login_google_chrome(account_info: dict, chrome_portable: str = None) -> bool:
+def login_google_chrome(account_info: dict, chrome_portable: str = None, profile_dir: str = None, worker_id: int = 0) -> bool:
     """
     Mở Chrome và đăng nhập Google bằng JavaScript.
 
@@ -185,6 +212,9 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None) -> bool
         account_info: Dict với 'id' (email) và 'password'
         chrome_portable: Đường dẫn Chrome Portable cụ thể (nếu có).
                         Quan trọng khi có nhiều Chrome chạy song song.
+        profile_dir: Đường dẫn profile Chrome cụ thể (nếu có).
+                    Dùng cho Chrome 2 với profile riêng (ví dụ: pic2).
+        worker_id: Worker ID để dùng port khác nhau cho mỗi Chrome.
     """
     try:
         from DrissionPage import ChromiumPage, ChromiumOptions
@@ -200,6 +230,13 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None) -> bool
     try:
         # Setup Chrome options
         options = ChromiumOptions()
+
+        # === Port riêng cho mỗi Chrome (tránh conflict) ===
+        # Chrome 1 (worker_id=0): port 9222
+        # Chrome 2 (worker_id=1): port 9223
+        base_port = 9222 + worker_id
+        options.set_local_port(base_port)  # Dùng set_local_port như drission_flow_api.py
+        log(f"Using port: {base_port} (worker_id={worker_id})")
 
         # Ưu tiên chrome_portable được truyền vào (cho Chrome 2 song song)
         chrome_exe = None
@@ -221,14 +258,20 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None) -> bool
             options.set_browser_path(chrome_exe)
             log(f"Using Chrome: {chrome_exe}")
 
-            # User data
-            chrome_dir = Path(chrome_exe).parent
-            for data_path in [chrome_dir / "Data" / "profile", chrome_dir / "User Data"]:
-                if data_path.exists():
-                    options.set_user_data_path(str(data_path))
-                    break
+            # === Profile: ưu tiên profile_dir được truyền vào ===
+            if profile_dir and Path(profile_dir).exists():
+                options.set_user_data_path(str(profile_dir))
+                log(f"Using profile: {profile_dir}")
+            else:
+                # Fallback: dùng profile mặc định của Chrome Portable
+                chrome_dir = Path(chrome_exe).parent
+                for data_path in [chrome_dir / "Data" / "profile", chrome_dir / "User Data"]:
+                    if data_path.exists():
+                        options.set_user_data_path(str(data_path))
+                        log(f"Using default profile: {data_path}")
+                        break
 
-        # Mở Chrome
+        # Mở Chrome mới
         driver = ChromiumPage(options)
 
         # Đi đến trang đăng nhập Google
@@ -315,119 +358,20 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None) -> bool
             # Nhấn Enter để submit
             actions.key_down('enter').key_up('enter')
             log("Pressed Enter")
-            time.sleep(3)
         except Exception as e:
             log(f"Password step error: {e}", "WARN")
 
-        # === BƯỚC 3: CHỌN CHẾ ĐỘ LOGIN (Tab Tab Enter) ===
-        log("Waiting for login mode selection screen...")
-        try:
-            time.sleep(6)  # Đợi trang load lâu hơn
-            log("Selecting login mode (Tab Tab Enter)...")
-            from DrissionPage.common import Actions
-            actions = Actions(driver)
+        # === XONG - Đợi login hoàn tất ===
+        log("Waiting for login to complete...")
+        time.sleep(5)  # Đợi 5s cho login xong
+        log("Login completed!", "OK")
 
-            # Tab 2 lần
-            actions.key_down('tab').key_up('tab')
-            time.sleep(0.2)
-            actions.key_down('tab').key_up('tab')
-            time.sleep(0.2)
+        # Đợi thêm để trang load đầy đủ trước khi tắt
+        log("Waiting for page to fully load...")
+        time.sleep(10)  # Đợi thêm 10s cho trang load xong
+        log("Page loaded, closing browser...", "OK")
 
-            # Enter để chọn
-            actions.key_down('enter').key_up('enter')
-            log("Sent Tab Tab Enter")
-        except Exception as e:
-            log(f"Tab Tab Enter error: {e}", "WARN")
-
-        # === BƯỚC 4: VÀO FLOW VÀ CLICK "Create with Flow" ===
-        log("Navigating to Flow...")
-        try:
-            time.sleep(3)
-            driver.get("https://labs.google/fx/vi/tools/flow")
-            time.sleep(5)  # Đợi trang load
-
-            log("Looking for 'Create with Flow' button...")
-            from DrissionPage.common import Actions
-            actions = Actions(driver)
-
-            # Thử click button "Create with Flow"
-            try:
-                create_btn = driver.ele('button:contains("Create with Flow")', timeout=3)
-                if create_btn:
-                    create_btn.click()
-                    log("Clicked 'Create with Flow' button")
-                else:
-                    # Fallback: Tab 3 lần rồi Enter
-                    log("Button not found, trying Tab Tab Tab Enter...")
-                    for _ in range(3):
-                        actions.key_down('tab').key_up('tab')
-                        time.sleep(0.2)
-                    actions.key_down('enter').key_up('enter')
-                    log("Sent Tab Tab Tab Enter")
-            except:
-                # Fallback: Tab 3 lần rồi Enter
-                log("Fallback: Tab Tab Tab Enter...")
-                for _ in range(3):
-                    actions.key_down('tab').key_up('tab')
-                    time.sleep(0.2)
-                actions.key_down('enter').key_up('enter')
-                log("Sent Tab Tab Tab Enter")
-
-            time.sleep(3)
-        except Exception as e:
-            log(f"Create Flow error: {e}", "WARN")
-
-        # === BƯỚC 5: CLICK "Tiếp theo" (Chính sách) ===
-        log("Looking for 'Tiếp theo' button (Policy)...")
-        try:
-            time.sleep(2)
-            next_btn = driver.ele('button:contains("Tiếp theo")', timeout=5)
-            if next_btn:
-                next_btn.click()
-                log("Clicked 'Tiếp theo' button")
-            else:
-                log("'Tiếp theo' button not found", "WARN")
-            time.sleep(2)
-        except Exception as e:
-            log(f"Policy button error: {e}", "WARN")
-
-        # === BƯỚC 6: TAB + END để cuộn xuống cuối ===
-        log("Scrolling down with Tab + End...")
-        try:
-            time.sleep(2)
-            from DrissionPage.common import Actions
-            actions = Actions(driver)
-
-            # Tab để focus vào content
-            actions.key_down('tab').key_up('tab')
-            time.sleep(0.3)
-
-            # End để cuộn xuống cuối
-            actions.key_down('end').key_up('end')
-            log("Sent Tab + End")
-            time.sleep(1)
-        except Exception as e:
-            log(f"Scroll error: {e}", "WARN")
-
-        # === BƯỚC 7: CLICK "Tiếp tục" ===
-        log("Looking for 'Tiếp tục' button...")
-        try:
-            time.sleep(1)
-            continue_btn = driver.ele('button:contains("Tiếp tục")', timeout=5)
-            if continue_btn:
-                continue_btn.click()
-                log("Clicked 'Tiếp tục' button")
-            else:
-                log("'Tiếp tục' button not found", "WARN")
-            time.sleep(2)
-        except Exception as e:
-            log(f"Continue button error: {e}", "WARN")
-
-        # Kiểm tra kết quả
-        time.sleep(3)
-        log("Setup completed!", "OK")
-
-        # Đóng Chrome (không đợi user nhấn Enter khi chạy tự động)
+        # Đóng Chrome (drission_flow_api.py sẽ tự navigate đến project)
         try:
             driver.quit()
             log("Chrome closed")

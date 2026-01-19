@@ -58,7 +58,6 @@ DIRECTOR_PLAN_COLUMNS = [
     "srt_start",        # Thời gian bắt đầu (HH:MM:SS,mmm)
     "srt_end",          # Thời gian kết thúc (HH:MM:SS,mmm)
     "duration",         # Độ dài (giây)
-    "video_enabled",    # TRUE=tạo video, FALSE=chỉ ảnh tĩnh (QUAN TRỌNG!)
     "srt_text",         # Nội dung text
     "characters_used",  # JSON list nhân vật trong scene (backup)
     "location_used",    # Location ID (backup)
@@ -649,8 +648,6 @@ class PromptWorkbook:
         Lấy tất cả media_id từ characters sheet.
         (Cả nhân vật nv* và bối cảnh loc* đều nằm trong characters sheet)
 
-        QUAN TRỌNG: SKIP references có status="skip" (trẻ vị thành niên, policy violation)
-
         Returns:
             Dict mapping id -> media_id
             VD: {"nvc": "CAMSJDZiYzQ2...", "loc_01": "CAMSJDZiYzQ1..."}
@@ -661,37 +658,24 @@ class PromptWorkbook:
         result = {}
         ws = self.workbook[self.CHARACTERS_SHEET]
 
-        # Tìm cột media_id và status
+        # Tìm cột media_id
         media_id_col = None
-        status_col = None
         for col_idx, col_name in enumerate(CHARACTERS_COLUMNS, start=1):
             if col_name == "media_id":
                 media_id_col = col_idx
-            elif col_name == "status":
-                status_col = col_idx
+                break
 
         if media_id_col is None:
             return result
 
-        skipped_count = 0
         # Đọc từ dòng 2 (skip header)
         for row_idx in range(2, ws.max_row + 1):
             char_id = ws.cell(row=row_idx, column=1).value
             media_id = ws.cell(row=row_idx, column=media_id_col).value
 
-            # CHECK STATUS - SKIP nếu status="skip" (policy violation)
-            status = ws.cell(row=row_idx, column=status_col).value if status_col else None
-
-            if status and str(status).lower() == "skip":
-                self.logger.debug(f"SKIP {char_id}: status=skip (policy violation)")
-                skipped_count += 1
-                continue  # Không load media_id này
-
             if char_id and media_id:
                 result[str(char_id)] = str(media_id)
 
-        if skipped_count > 0:
-            self.logger.info(f"Skipped {skipped_count} reference(s) with status=skip")
         self.logger.debug(f"Loaded {len(result)} media_ids from Excel")
         return result
 
@@ -874,28 +858,23 @@ class PromptWorkbook:
             # Duration: handle cả "duration" và "duration_seconds" (3-8s từ SRT timing)
             duration = scene.get("duration") or scene.get("duration_seconds") or 0
             ws.cell(row=next_row, column=4, value=round(duration, 2) if duration else 0)
-            # NEW: video_enabled
-            ws.cell(row=next_row, column=5, value=scene.get("video_enabled", False))
-            ws.cell(row=next_row, column=6, value=scene.get("text", "")[:500])
+            ws.cell(row=next_row, column=5, value=scene.get("text", "")[:500])
             # New columns for backup
             # Handle characters_used - convert list to JSON string if needed
             chars_used = scene.get("characters_used", "[]")
             if isinstance(chars_used, list):
                 chars_used = json.dumps(chars_used)
-            ws.cell(row=next_row, column=7, value=chars_used)
+            ws.cell(row=next_row, column=6, value=chars_used)
 
-            ws.cell(row=next_row, column=8, value=scene.get("location_used", ""))
+            ws.cell(row=next_row, column=7, value=scene.get("location_used", ""))
 
             # Handle reference_files - convert list to JSON string if needed
             ref_files = scene.get("reference_files", "[]")
             if isinstance(ref_files, list):
                 ref_files = json.dumps(ref_files)
-            ws.cell(row=next_row, column=9, value=ref_files)
-
-            # Safely handle img_prompt (may be None)
-            img_prompt = scene.get("img_prompt") or ""
-            ws.cell(row=next_row, column=10, value=img_prompt[:1000])
-            ws.cell(row=next_row, column=11, value=scene.get("status", "backup"))
+            ws.cell(row=next_row, column=8, value=ref_files)
+            ws.cell(row=next_row, column=9, value=scene.get("img_prompt", "")[:1000])
+            ws.cell(row=next_row, column=10, value=scene.get("status", "backup"))
 
         self.save()
         self.logger.info(f"Saved {len(scenes_data)} scenes to director_plan")
@@ -916,20 +895,19 @@ class PromptWorkbook:
             if row[0] is None:
                 continue
 
-            # Handle both old format and new format (with video_enabled at column 5)
+            # Handle both old format (6 cols) and new format (10 cols)
             plans.append({
                 "plan_id": row[0],
                 "scene_id": row[0],  # Alias cho plan_id (step 5 dùng scene_id)
                 "srt_start": row[1] or "",
                 "srt_end": row[2] or "",
                 "duration": row[3] or 0,
-                "video_enabled": row[4] if len(row) > 4 else False,  # NEW
-                "srt_text": row[5] if len(row) > 5 else "",
-                "characters_used": row[6] if len(row) > 6 else "[]",
-                "location_used": row[7] if len(row) > 7 else "",
-                "reference_files": row[8] if len(row) > 8 else "[]",
-                "img_prompt": row[9] if len(row) > 9 else "",
-                "status": row[10] if len(row) > 10 else "pending",
+                "srt_text": row[4] or "",
+                "characters_used": row[5] if len(row) > 5 else "[]",
+                "location_used": row[6] if len(row) > 6 else "",
+                "reference_files": row[7] if len(row) > 7 else "[]",
+                "img_prompt": row[8] if len(row) > 8 else "",
+                "status": row[9] if len(row) > 9 else "pending",
             })
 
         return plans

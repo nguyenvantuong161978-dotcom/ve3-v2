@@ -16,6 +16,10 @@ project_root: "./VE3_TOOL"
 #   3. Documents/ve3/ve3.exe (legacy)
 chrome_portable: ""
 
+# Chrome portable thứ 2 - Dùng cho run_worker_pic_basic_2 (2 Chrome song song)
+# VD: "C:\Users\Administrator\Documents\KA5-T1\ve3-tool-simple\GoogleChromePortable - Copy\GoogleChromePortable.exe"
+chrome_portable_2: ""
+
 # Parallel Chrome - Chạy nhiều Chrome song song
 # Format: "worker/total" - VD: "1/2", "2/4"
 # Ví dụ 2 Chrome: Terminal 1 = "1/2", Terminal 2 = "2/2"
@@ -39,6 +43,11 @@ flow_aspect_ratio: "landscape"
 flow_image_count: 1
 flow_timeout: 120
 flow_delay: 3.0
+
+# Số lượng API calls song song khi tạo prompts (Step 4.5, Step 5)
+# Tăng lên để nhanh hơn, giảm xuống nếu bị rate limit
+# Recommended: 4-8 (default: 6)
+max_parallel_api: 6
 
 # DrissionPage Settings (Image Generation)
 # Sử dụng DrissionPage + Interceptor để tạo ảnh
@@ -247,7 +256,7 @@ browser_generate_timeout: 120
 # Khi Chrome bị 403 liên tục, tự động đổi IPv6 để bypass
 
 ipv6_rotation:
-  enabled: false              # Bật/tắt tính năng đổi IPv6
+  enabled: true               # Bật/tắt tính năng đổi IPv6
 
   # Interface name (tên adapter mạng)
   # Chạy "netsh interface ipv6 show addresses" để xem tên

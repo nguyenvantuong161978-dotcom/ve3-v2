@@ -2315,10 +2315,6 @@ class DrissionFlowAPI:
                 try:
                     self.driver = ChromiumPage(addr_or_opts=options)
                     self.log("[v] Chrome started")
-
-                    # Enable Chrome DevTools logging to capture errors
-                    self._enable_chrome_logging()
-
                     break
                 except Exception as chrome_err:
                     self.log(f"Chrome attempt {attempt+1}/{max_retries} failed: {chrome_err}", "WARN")
@@ -2404,12 +2400,6 @@ class DrissionFlowAPI:
             except Exception as e:
                 error_msg = str(e)
                 self.log(f"[x] Navigation error (attempt {nav_attempt+1}/{max_nav_retries}): {error_msg}", "WARN")
-
-                # Check Chrome errors
-                chrome_errors = self._get_chrome_errors()
-                if chrome_errors:
-                    for err in chrome_errors:
-                        self.log(f"  [CHROME] {err}", "WARN")
 
                 # Kiểm tra lỗi proxy/connection
                 is_proxy_error = any(x in error_msg.lower() for x in [
@@ -2619,9 +2609,9 @@ class DrissionFlowAPI:
         Textarea là dấu hiệu page đã load xong.
         PHẢI verify textarea thật sự visible, không chỉ có trong DOM.
         """
-        # Timeout tối đa 15s (tăng từ 10s để tránh miss textarea khi Chrome chậm)
+        # Timeout tối đa 10s là đủ
         if timeout is None:
-            timeout = 15
+            timeout = 10
 
         for refresh_count in range(max_refresh + 1):
             # === CHECK LOGOUT TRƯỚC MỖI VÒNG ===
@@ -2791,9 +2781,6 @@ class DrissionFlowAPI:
 
         Returns:
             True nếu thành công
-
-        Raises:
-            Exception: Nếu page bị refresh hoặc element invalid
         """
         try:
             import pyperclip
@@ -2812,13 +2799,7 @@ class DrissionFlowAPI:
             try:
                 textarea.click()
                 time.sleep(0.5)
-            except Exception as e:
-                error_msg = str(e)
-                # Check if page refresh error
-                if "page is refreshed" in error_msg.lower() or "element object is invalid" in error_msg.lower():
-                    # Re-raise để caller xử lý
-                    raise
-                # Ignore other click errors
+            except:
                 pass
 
             # 4. Clear nội dung cũ bằng Ctrl+A
@@ -2826,11 +2807,7 @@ class DrissionFlowAPI:
             try:
                 textarea.input(Keys.CTRL_A)
                 time.sleep(0.1)
-            except Exception as e:
-                error_msg = str(e)
-                # Check if page refresh error
-                if "page is refreshed" in error_msg.lower() or "element object is invalid" in error_msg.lower():
-                    raise
+            except:
                 pass
 
             # 5. Paste bằng Ctrl+V
@@ -2842,15 +2819,8 @@ class DrissionFlowAPI:
             return True
 
         except Exception as e:
-            error_msg = str(e)
-            # Check if page refresh error → re-raise để caller handle as 403
-            if "page is refreshed" in error_msg.lower() or "element object is invalid" in error_msg.lower():
-                self.log(f"[WARN] Paste prompt failed: {e}", "WARN")
-                raise  # Re-raise để trigger 403 retry logic
-            else:
-                # Other errors → log and return False
-                self.log(f"[WARN] Paste prompt failed: {e}", "WARN")
-                return False
+            self.log(f"[WARN] Paste prompt failed: {e}", "WARN")
+            return False
 
     def _paste_prompt_js(self, prompt: str) -> bool:
         """Fallback: Paste prompt bằng JavaScript."""
@@ -2923,11 +2893,10 @@ class DrissionFlowAPI:
                         # Fallback: dùng JavaScript
                         self.driver.run_js(f"window.moveTo({x}, {y}); window.resizeTo({w}, {h});")
 
-            # Fixed Chrome window size (900x700) on right side, stacked vertically
-            # Tăng từ 700x550 để textarea và elements dễ tìm hơn
+            # Fixed Chrome window size (700x550) on right side, stacked vertically
             # This matches the layout in vm_manager.show_chrome_windows()
-            chrome_width = 900
-            chrome_height = 700
+            chrome_width = 700
+            chrome_height = 550
 
             # Position on right side of screen
             x_start = screen_w - chrome_width - 10  # 10px from right edge
@@ -2947,122 +2916,6 @@ class DrissionFlowAPI:
         except Exception as e:
             self.log(f"[WARN] Window layout error: {e}", "WARN")
             # Don't fallback to maximize - keep Chrome at default size
-
-    def _enable_chrome_logging(self):
-        """
-        Enable Chrome DevTools Protocol logging để capture:
-        - Console errors (console.error, console.warn)
-        - Network failures
-        - JavaScript exceptions
-        - Page crashes
-        """
-        try:
-            # Access CDP (Chrome DevTools Protocol) via DrissionPage
-            if not hasattr(self.driver, 'run_cdp'):
-                self.log("[CDP] DrissionPage không hỗ trợ CDP, skip logging", "WARN")
-                return
-
-            # Enable Runtime domain để capture console và exceptions
-            self.driver.run_cdp('Runtime.enable')
-
-            # Enable Log domain để capture browser logs
-            self.driver.run_cdp('Log.enable')
-
-            # Enable Network domain để capture network errors
-            self.driver.run_cdp('Network.enable')
-
-            # Inject JavaScript console interceptor để log ra Python
-            intercept_js = """
-            (function() {
-                const originalError = console.error;
-                const originalWarn = console.warn;
-
-                console.error = function(...args) {
-                    // Log to Python via special attribute
-                    window.__lastConsoleError = args.join(' ');
-                    originalError.apply(console, args);
-                };
-
-                console.warn = function(...args) {
-                    window.__lastConsoleWarn = args.join(' ');
-                    originalWarn.apply(console, args);
-                };
-
-                // Capture unhandled errors
-                window.addEventListener('error', function(e) {
-                    window.__lastJSError = e.message + ' at ' + e.filename + ':' + e.lineno;
-                });
-
-                // Capture unhandled promise rejections
-                window.addEventListener('unhandledrejection', function(e) {
-                    window.__lastPromiseError = 'Unhandled promise: ' + e.reason;
-                });
-            })();
-            """
-            self.driver.run_js(intercept_js)
-
-            self.log("[CDP] Chrome logging enabled (Console/Network/Runtime)")
-
-        except Exception as e:
-            self.log(f"[CDP] Cannot enable logging: {e}", "WARN")
-
-    def _get_chrome_errors(self) -> list:
-        """
-        Lấy các errors từ Chrome console/runtime.
-
-        Returns:
-            List of error messages
-        """
-        errors = []
-        try:
-            # Try DrissionPage's built-in console property first
-            if hasattr(self.driver, 'console'):
-                try:
-                    console_msgs = self.driver.console()
-                    if console_msgs:
-                        for msg in console_msgs:
-                            # Filter for errors/warnings only
-                            level = getattr(msg, 'level', '').lower()
-                            text = getattr(msg, 'text', str(msg))
-                            if 'error' in level or 'severe' in level:
-                                errors.append(f"[Console Error] {text}")
-                            elif 'warn' in level:
-                                errors.append(f"[Console Warn] {text}")
-                except:
-                    pass
-
-            # Fallback: Get from JS injection
-            if not errors:
-                # Get console.error
-                console_error = self.driver.run_js('return window.__lastConsoleError')
-                if console_error:
-                    errors.append(f"[Console Error] {console_error}")
-                    # Clear after reading
-                    self.driver.run_js('window.__lastConsoleError = null')
-
-                # Get console.warn
-                console_warn = self.driver.run_js('return window.__lastConsoleWarn')
-                if console_warn:
-                    errors.append(f"[Console Warn] {console_warn}")
-                    self.driver.run_js('window.__lastConsoleWarn = null')
-
-                # Get JS errors
-                js_error = self.driver.run_js('return window.__lastJSError')
-                if js_error:
-                    errors.append(f"[JS Error] {js_error}")
-                    self.driver.run_js('window.__lastJSError = null')
-
-                # Get promise rejections
-                promise_error = self.driver.run_js('return window.__lastPromiseError')
-                if promise_error:
-                    errors.append(f"[Promise Error] {promise_error}")
-                    self.driver.run_js('window.__lastPromiseError = null')
-
-        except Exception as e:
-            # Ignore errors when checking for errors
-            pass
-
-        return errors
 
     def _click_textarea(self, wait_visible: bool = True):
         """
@@ -3380,14 +3233,6 @@ class DrissionFlowAPI:
 
         except Exception as e:
             self.log(f"[x] Request error: {e}", "ERROR")
-
-            # Check Chrome errors để debug
-            chrome_errors = self._get_chrome_errors()
-            if chrome_errors:
-                self.log(f"[CHROME] {len(chrome_errors)} error(s) detected:", "ERROR")
-                for err in chrome_errors:
-                    self.log(f"  → {err}", "ERROR")
-
             return [], str(e)
 
     def _parse_response(self, data: Dict) -> List[GeneratedImage]:
@@ -3514,98 +3359,15 @@ class DrissionFlowAPI:
             return [], "Không tìm thấy textarea"
 
         # Paste prompt bằng Ctrl+V (như thủ công)
-        # Nếu page bị refresh → raise exception để trigger 403 retry logic
-        try:
-            self._paste_prompt_ctrlv(textarea, prompt)
-        except Exception as e:
-            error_msg = str(e)
-            # Detect page refresh errors
-            if "page is refreshed" in error_msg.lower() or "element object is invalid" in error_msg.lower():
-                self.log(f"[x] Page refresh detected: {error_msg}", "ERROR")
-                # Treat as 403 error to trigger Chrome reset
-                return [], "Error 403: Page refreshed (treated as reCAPTCHA)"
-            else:
-                # Other errors
-                return [], f"Paste error: {error_msg}"
+        self._paste_prompt_ctrlv(textarea, prompt)
 
         # Đợi 2 giây để reCAPTCHA chuẩn bị token
         time.sleep(2)
 
         # Nhấn Enter để gửi
-        # Nếu page bị refresh → raise exception để trigger 403 retry logic
-        try:
-            textarea.input('\n')
-            self.log("→ Pressed Enter to send")
-            self.log("→ Chrome đang gửi request...")
-
-            # Đợi 6s để interceptor bắt request (có thể bị delay do 403)
-            time.sleep(6)
-            check_result = self.driver.run_js("""
-                return {
-                    pending: window._requestPending,
-                    response: window._response,
-                    error: window._responseError
-                };
-            """)
-
-            # Check xem request có được gửi không
-            request_sent = bool(check_result.get('pending') or check_result.get('response') or check_result.get('error'))
-
-            if not request_sent:
-                # Không có signal → có thể textarea click bị trượt, thử lại 1 lần
-                self.log("[WARN] No request signal after 6s - textarea click may have missed", "WARN")
-                self.log("[RETRY] Click textarea again and resend...", "WARN")
-
-                # Click lại textarea để ensure focus
-                textarea = self.driver.ele('tag:textarea', timeout=5)
-                if textarea:
-                    textarea.click()
-                    time.sleep(0.5)
-
-                # Clear và paste lại
-                from DrissionPage.common import Keys
-                textarea.input(Keys.CTRL_A)
-                time.sleep(0.2)
-                textarea.input(Keys.CTRL_V)
-                time.sleep(0.5)
-
-                # Gửi lại
-                textarea.input('\n')
-                self.log("→ Retry: Pressed Enter to send")
-
-                # Check lần 2 (đợi 5s)
-                time.sleep(5)
-                check_result = self.driver.run_js("""
-                    return {
-                        pending: window._requestPending,
-                        response: window._response,
-                        error: window._responseError
-                    };
-                """)
-
-                request_sent = bool(check_result.get('pending') or check_result.get('response') or check_result.get('error'))
-
-                if request_sent:
-                    self.log("→ Retry successful: Request confirmed sent")
-                else:
-                    self.log("[WARN] Still no request signal after retry", "WARN")
-
-        except Exception as e:
-            error_msg = str(e)
-            # Detect page refresh/element invalidation errors
-            if ("page is refreshed" in error_msg.lower() or
-                "element object is invalid" in error_msg.lower() or
-                "no location or size" in error_msg.lower()):
-                self.log(f"[x] Page refresh/element lost during Enter: {error_msg}", "ERROR")
-                # Treat as 403 error to trigger Chrome reset
-                return [], "Error 403: Page refreshed (treated as reCAPTCHA)"
-            else:
-                # Other errors
-                self.log(f"[WARN] Enter error: {error_msg}", "WARN")
-                return [], f"Enter error: {error_msg}"
-
-        if not request_sent:
-            self.log("[WARN] Request may not be sent properly", "WARN")
+        textarea.input('\n')
+        self.log("→ Pressed Enter to send")
+        self.log("→ Chrome đang gửi request...")
 
         # 4. Đợi response từ browser (không gọi API riêng!)
         start_time = time.time()
@@ -3621,14 +3383,6 @@ class DrissionFlowAPI:
             if result.get('error'):
                 error_msg = result['error']
                 self.log(f"[x] Browser request error: {error_msg}", "ERROR")
-
-                # Check Chrome console/JS errors để hiểu rõ nguyên nhân
-                chrome_errors = self._get_chrome_errors()
-                if chrome_errors:
-                    self.log(f"[CHROME ERRORS] Detected {len(chrome_errors)} error(s):", "ERROR")
-                    for err in chrome_errors:
-                        self.log(f"  → {err}", "ERROR")
-
                 return [], error_msg
 
             if result.get('response'):
@@ -3927,14 +3681,9 @@ class DrissionFlowAPI:
 
             for i, img in enumerate(images):
                 self.log(f"[DEBUG] Processing image {i}: has_base64={bool(img.base64_data)}, has_url={bool(img.url)}")
-
-                # CHỈ LƯU ẢNH ĐẦU TIÊN - bỏ qua variations
-                if i > 0:
-                    self.log(f"[SKIP] Variation {i+1}/{len(images)} - only save first image")
-                    continue
-
                 fname = filename or f"image_{int(time.time())}"
-                # KHÔNG thêm suffix _1, _2 nữa - scene ID là tên file
+                if len(images) > 1:
+                    fname = f"{fname}_{i+1}"
 
                 if img.base64_data:
                     img_path = save_dir / f"{fname}.png"

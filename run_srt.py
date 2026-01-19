@@ -93,33 +93,33 @@ def delete_voice_source(voice_path: Path):
                         shutil.rmtree(item)
                     else:
                         item.unlink()
-                    print(f"  🗑️ Deleted: {item.name}")
+                    print(f"  [DEL] Deleted: {item.name}")
                     deleted_count += 1
                 except Exception as e:
-                    print(f"  ⚠️ Cannot delete {item.name}: {e}")
+                    print(f"  [WARN] Cannot delete {item.name}: {e}")
 
         # 2. Delete txt file in parent folder (D:\AUTO\voice\AR35-0001.txt)
         parent_txt = parent_dir / f"{name}.txt"
         if parent_txt.exists():
             try:
                 parent_txt.unlink()
-                print(f"  🗑️ Deleted: {parent_dir.name}/{parent_txt.name}")
+                print(f"  [DEL] Deleted: {parent_dir.name}/{parent_txt.name}")
                 deleted_count += 1
             except Exception as e:
-                print(f"  ⚠️ Cannot delete {parent_txt.name}: {e}")
+                print(f"  [WARN] Cannot delete {parent_txt.name}: {e}")
 
         if deleted_count > 0:
-            print(f"  🗑️ Cleaned up {deleted_count} items for {name}")
+            print(f"  [DEL] Cleaned up {deleted_count} items for {name}")
 
         # Delete channel folder if empty
         if voice_dir.exists():
             remaining = list(voice_dir.iterdir())
             if not remaining:
                 voice_dir.rmdir()
-                print(f"  🗑️ Deleted empty folder: {voice_dir.name}")
+                print(f"  [DEL] Deleted empty folder: {voice_dir.name}")
 
     except Exception as e:
-        print(f"  ⚠️ Cleanup warning: {e}")
+        print(f"  [WARN] Cleanup warning: {e}")
 
 
 def process_voice_to_srt(voice_path: Path) -> bool:
@@ -176,7 +176,7 @@ def process_voice_to_srt(voice_path: Path) -> bool:
         from modules.voice_to_srt import VoiceToSrt
         conv = VoiceToSrt(model_name=whisper_model, language=whisper_lang)
         conv.transcribe(str(voice_copy), str(srt_path))
-        safe_print(f"[SRT] {name}: ✅ Done")
+        safe_print(f"[SRT] {name}: [OK] Done")
 
         # Cleanup source voice file after successful SRT
         if is_from_source:
@@ -184,7 +184,7 @@ def process_voice_to_srt(voice_path: Path) -> bool:
 
         return True
     except Exception as e:
-        safe_print(f"[SRT] {name}: ❌ Error - {e}")
+        safe_print(f"[SRT] {name}: [FAIL] Error - {e}")
         return False
 
 

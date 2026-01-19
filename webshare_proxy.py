@@ -1034,4 +1034,4 @@ if __name__ == "__main__":
     # Test connection
     print("\n[5] Testing connection...")
     success, msg = manager.test_proxy(0)
-    print(f"    {'✓' if success else '✗'} {msg}")
+    print(f"    {'[v]' if success else '[x]'} {msg}")

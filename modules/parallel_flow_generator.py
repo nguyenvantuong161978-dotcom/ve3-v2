@@ -12,6 +12,23 @@ Features:
 - Chia đều prompts cho các browsers
 """
 
+import sys
+import os
+
+# Fix Windows encoding issues
+if sys.platform == "win32":
+    if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        except:
+            pass
+    if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+        try:
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        except:
+            pass
+
+
 import os
 import time
 import json
@@ -307,7 +324,7 @@ class ParallelFlowGenerator:
                     # Đảm bảo chỉ 1 browser download tại 1 thời điểm
                     # =========================================================
                     with self._download_lock:
-                        self._log(f"[{thread_name}] 🔒 Bắt đầu generate + download: {pid}")
+                        self._log(f"[{thread_name}] [LOCK] Bắt đầu generate + download: {pid}")
 
                         # Gọi VE3.run()
                         ref_json = json.dumps(ref_files if ref_files else [])
@@ -335,7 +352,7 @@ class ParallelFlowGenerator:
                             img_file, score, _ = generator._move_downloaded_images(pid)
                             if img_file:
                                 success += 1
-                                self._log(f"[{thread_name}] ✅ OK: {pid} -> {img_file.name}", "success")
+                                self._log(f"[{thread_name}] [OK] OK: {pid} -> {img_file.name}", "success")
 
                                 # Save media name (cho ref)
                                 if phase == "ref":
@@ -347,12 +364,12 @@ class ParallelFlowGenerator:
                                         )
                             else:
                                 failed += 1
-                                self._log(f"[{thread_name}] ❌ Không tìm thấy file: {pid}", "error")
+                                self._log(f"[{thread_name}] [FAIL] Không tìm thấy file: {pid}", "error")
                         else:
                             failed += 1
-                            self._log(f"[{thread_name}] ❌ FAIL: {pid}", "error")
+                            self._log(f"[{thread_name}] [FAIL] FAIL: {pid}", "error")
 
-                        self._log(f"[{thread_name}] 🔓 Xong download: {pid}")
+                        self._log(f"[{thread_name}] [UNLOCK] Xong download: {pid}")
 
                     # Delay
                     time.sleep(2)
@@ -660,9 +677,9 @@ if __name__ == "__main__":
 
     if result.get("success"):
         stats = result.get("stats", {})
-        print(f"\n✅ Hoàn thành: {stats.get('success', 0)} ảnh")
+        print(f"\n[OK] Hoàn thành: {stats.get('success', 0)} ảnh")
         print(f"   Thời gian: {stats.get('time', 0):.1f}s")
         print(f"   Speedup: {stats.get('speedup', 1):.1f}x")
     else:
-        print(f"\n❌ Lỗi: {result.get('error')}")
+        print(f"\n[FAIL] Lỗi: {result.get('error')}")
         sys.exit(1)

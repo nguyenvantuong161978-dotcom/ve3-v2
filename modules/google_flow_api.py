@@ -11,6 +11,23 @@ Video Generation:
 - Proxy API support: flow-api.nanoai.pics (bypass captcha)
 """
 
+import sys
+import os
+
+# Fix Windows encoding issues
+if sys.platform == "win32":
+    if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        except:
+            pass
+    if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+        try:
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        except:
+            pass
+
+
 import json
 import time
 import random
@@ -215,7 +232,7 @@ class GoogleFlowAPI:
 
         # Validate token format
         if not self.bearer_token.startswith("ya29."):
-            print("⚠️  Warning: Bearer token should start with 'ya29.'")
+            print("[WARN]  Warning: Bearer token should start with 'ya29.'")
 
         self.session = self._create_session()
     
@@ -348,7 +365,7 @@ class GoogleFlowAPI:
         # Thêm recaptcha vào main context (Direct mode)
         if recaptcha_token:
             main_context["recaptchaToken"] = recaptcha_token
-            self._log("🆓 Direct mode: Using captured recaptchaToken")
+            self._log("[FREE] Direct mode: Using captured recaptchaToken")
 
         payload = {
             "clientContext": main_context,
@@ -418,7 +435,7 @@ class GoogleFlowAPI:
             images = self._parse_image_response(result, prompt, aspect_ratio.value)
             
             if images:
-                self._log(f"✓ Generated {len(images)} images successfully")
+                self._log(f"[v] Generated {len(images)} images successfully")
                 return True, images, ""
             else:
                 # Check if we need to poll for results
@@ -685,7 +702,7 @@ class GoogleFlowAPI:
                     )
                     if img.has_data:
                         images.append(img)
-                        self._log(f"  ✓ Parsed image: seed={img.seed}, has_url={bool(img.url)}, has_b64={bool(img.base64_data)}")
+                        self._log(f"  [v] Parsed image: seed={img.seed}, has_url={bool(img.url)}, has_b64={bool(img.base64_data)}")
                         if media_name:
                             self._log(f"  -> media_name (for I2V): {media_name[:80]}..." if len(media_name) > 80 else f"  -> media_name (for I2V): {media_name}")
         
@@ -849,7 +866,7 @@ class GoogleFlowAPI:
                     with open(output_path, "wb") as f:
                         f.write(response.content)
                     image.local_path = output_path
-                    self._log(f"✓ Saved to {output_path}")
+                    self._log(f"[v] Saved to {output_path}")
                     return output_path
                 else:
                     self._log(f"URL download failed ({response.status_code}), trying base64...")
@@ -872,7 +889,7 @@ class GoogleFlowAPI:
                     f.write(img_bytes)
                 
                 image.local_path = output_path
-                self._log(f"✓ Saved to {output_path}")
+                self._log(f"[v] Saved to {output_path}")
                 return output_path
             
             self._log("No URL or base64 data available")
@@ -1022,7 +1039,7 @@ class GoogleFlowAPI:
                 media_name = result["mediaName"]
 
             if media_name:
-                self._log(f"✓ Upload successful, media_name: {media_name[:50]}...")
+                self._log(f"[v] Upload successful, media_name: {media_name[:50]}...")
                 return True, ImageInput(name=media_name, input_type=image_type), ""
             else:
                 # Log full response for debugging
@@ -1810,7 +1827,7 @@ class GoogleFlowAPI:
         )
 
         if status == "completed" and video_url:
-            self._log(f"✓ Video generated: {video_url[:60]}...")
+            self._log(f"[v] Video generated: {video_url[:60]}...")
             return True, result, ""
         elif operation_id:
             self._log(f"Video generation started, operation: {operation_id[:40]}...")
@@ -1980,7 +1997,7 @@ class GoogleFlowAPI:
                         f.write(chunk)
 
                 video_result.local_path = output_path
-                self._log(f"✓ Saved to {output_path}")
+                self._log(f"[v] Saved to {output_path}")
                 return output_path
             else:
                 self._log(f"Download failed: {response.status_code}")
@@ -2060,7 +2077,7 @@ class GoogleFlowAPI:
 ║                                                                              ║
 ║  9. Copy TOÀN BỘ giá trị sau "Bearer " (bắt đầu bằng "ya29.")               ║
 ║                                                                              ║
-║  ⚠️  LƯU Ý QUAN TRỌNG:                                                      ║
+║  [WARN]  LƯU Ý QUAN TRỌNG:                                                      ║
 ║     - Token có thời hạn ngắn (~1 giờ), cần refresh thường xuyên            ║
 ║     - Mỗi lần refresh trang hoặc tạo ảnh mới sẽ có token mới               ║
 ║     - Không chia sẻ token với người khác                                    ║
@@ -2138,7 +2155,7 @@ def quick_generate(
     if success:
         return [str(p) for p in paths]
     else:
-        print(f"❌ Error: {error}")
+        print(f"[FAIL] Error: {error}")
         return []
 
 
@@ -2200,7 +2217,7 @@ def quick_generate_video(
     )
 
     if not success:
-        print(f"❌ Error: {error}")
+        print(f"[FAIL] Error: {error}")
         return None
 
     # If video URL available, download it
@@ -2211,7 +2228,7 @@ def quick_generate_video(
 
     # If async, need to poll
     if result.operation_id:
-        print(f"⏳ Video generation started, operation: {result.operation_id}")
+        print(f"[WAIT] Video generation started, operation: {result.operation_id}")
         print("   Đang đợi... (video generation có thể mất vài phút)")
 
         poll_success, poll_result, poll_error = client.poll_video_status(
@@ -2225,7 +2242,7 @@ def quick_generate_video(
             if path:
                 return str(path)
         else:
-            print(f"❌ Polling failed: {poll_error}")
+            print(f"[FAIL] Polling failed: {poll_error}")
 
     return None
 
@@ -2286,25 +2303,25 @@ if __name__ == "__main__":
 
     if mode == "image":
         if len(sys.argv) < 4:
-            print("❌ Missing token or prompt for image mode")
+            print("[FAIL] Missing token or prompt for image mode")
             sys.exit(1)
 
         token = sys.argv[2]
         prompt = sys.argv[3]
 
-        print(f"\n🎨 Generating images for: {prompt}")
+        print(f"\n[GEN] Generating images for: {prompt}")
         paths = quick_generate(prompt, token)
 
         if paths:
-            print(f"\n✅ Generated {len(paths)} images:")
+            print(f"\n[OK] Generated {len(paths)} images:")
             for p in paths:
-                print(f"   📁 {p}")
+                print(f"   [DIR] {p}")
         else:
-            print("\n❌ Image generation failed")
+            print("\n[FAIL] Image generation failed")
 
     elif mode == "video":
         if len(sys.argv) < 4:
-            print("❌ Missing token or prompt for video mode")
+            print("[FAIL] Missing token or prompt for video mode")
             sys.exit(1)
 
         token = sys.argv[2]
@@ -2319,7 +2336,7 @@ if __name__ == "__main__":
                 proxy_token = sys.argv[proxy_idx + 1]
                 use_proxy = True
 
-        print(f"\n🎬 Generating video for: {prompt}")
+        print(f"\n[VIDEO] Generating video for: {prompt}")
         if use_proxy:
             print("   (Using proxy API to bypass captcha)")
 
@@ -2331,10 +2348,10 @@ if __name__ == "__main__":
         )
 
         if path:
-            print(f"\n✅ Video saved to: {path}")
+            print(f"\n[OK] Video saved to: {path}")
         else:
-            print("\n❌ Video generation failed")
+            print("\n[FAIL] Video generation failed")
 
     else:
-        print(f"❌ Unknown mode: {mode}")
+        print(f"[FAIL] Unknown mode: {mode}")
         print("   Use 'image' or 'video'")

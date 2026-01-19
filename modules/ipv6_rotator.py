@@ -19,6 +19,23 @@ Usage:
     rotator.rotate()
 """
 
+import sys
+import os
+
+# Fix Windows encoding issues
+if sys.platform == "win32":
+    if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        except:
+            pass
+    if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+        try:
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        except:
+            pass
+
+
 import subprocess
 import random
 import re
@@ -132,6 +149,7 @@ class IPv6Rotator:
         # State
         self.consecutive_403 = 0
         self.current_ipv6 = None
+        self.current_gateway = None  # Track gateway đang dùng để xóa đúng route
         self.last_rotated = None
         self._ipv4_disabled = False  # Track trạng thái IPv4
         self._local_proxy = None  # Local SOCKS5 proxy
@@ -200,7 +218,7 @@ class IPv6Rotator:
             # Chỉ xóa khỏi memory, KHÔNG sửa file ipv6_list.txt
             if dead_ip in self.ipv6_list:
                 self.ipv6_list.remove(dead_ip)
-                self.log(f"[IPv6] 🗑️ Removed dead IP from memory: {dead_ip}")
+                self.log(f"[IPv6] [DEL] Removed dead IP from memory: {dead_ip}")
                 self.log(f"[IPv6] Remaining this session: {len(self.ipv6_list)} IPs")
 
             # Điều chỉnh current_index nếu cần
@@ -260,7 +278,7 @@ class IPv6Rotator:
             if self.set_ipv6(ipv6):
                 # Test connectivity
                 if self.test_ipv6_connectivity():
-                    self.log(f"[IPv6] ✓ Found working IP: {ipv6}")
+                    self.log(f"[IPv6] [v] Found working IP: {ipv6}")
                     # Xóa tất cả dead IPs đã thu thập
                     for dead_ip in dead_ips:
                         self._remove_dead_ipv6(dead_ip)
@@ -271,17 +289,17 @@ class IPv6Rotator:
                         self.current_index = 0
                     return ipv6
                 else:
-                    self.log(f"[IPv6] ✗ No connectivity: {ipv6} → REMOVING")
+                    self.log(f"[IPv6] [x] No connectivity: {ipv6} → REMOVING")
                     dead_ips.append(ipv6)
             else:
-                self.log(f"[IPv6] ✗ Failed to set: {ipv6} → REMOVING")
+                self.log(f"[IPv6] [x] Failed to set: {ipv6} → REMOVING")
                 dead_ips.append(ipv6)
 
         # Xóa tất cả dead IPs nếu không tìm thấy IP nào hoạt động
         for dead_ip in dead_ips:
             self._remove_dead_ipv6(dead_ip)
 
-        self.log("[IPv6] ✗ No working IPv6 found in entire list!")
+        self.log("[IPv6] [x] No working IPv6 found in entire list!")
         return None
 
     def get_current_ipv6(self) -> Optional[str]:
@@ -380,14 +398,20 @@ class IPv6Rotator:
             True nếu thành công
         """
         try:
-            self.log(f"[IPv6] 🔄 Changing to: {new_ipv6}")
+            # === SKIP NẾU ĐÃ DÙNG IPv6 NÀY ===
+            # Tránh thao tác thừa khi restart Chrome
+            if self.current_ipv6 and self.current_ipv6.lower() == new_ipv6.lower():
+                self.log(f"[IPv6] [v] Already using: {new_ipv6}")
+                return True
+
+            self.log(f"[IPv6] [SYNC] Changing to: {new_ipv6}")
 
             # Collect all netsh commands
             commands = []
 
             # Bước 0: Tắt IPv4 để Chrome phải dùng IPv6 (nếu bật)
             if self.disable_ipv4 and not self._ipv4_disabled:
-                self.log("[IPv6] 🔌 Disabling IPv4 to force IPv6...")
+                self.log("[IPv6] [PLUG] Disabling IPv4 to force IPv6...")
                 commands.append(f'netsh interface ipv4 set interface "{self.interface_name}" admin=disabled')
 
             # Bước 1: XÓA IP HIỆN TẠI đang dùng (quan trọng!)
@@ -407,17 +431,24 @@ class IPv6Rotator:
             # Bước 3: Set gateway
             # Ưu tiên custom gateway từ file, nếu không có thì tự tính
             if new_ipv6 in self.ipv6_gateways:
-                auto_gateway = self.ipv6_gateways[new_ipv6]
-                self.log(f"[IPv6] Using custom gateway: {auto_gateway}")
+                new_gateway = self.ipv6_gateways[new_ipv6]
+                self.log(f"[IPv6] Using custom gateway: {new_gateway}")
             else:
-                auto_gateway = _get_gateway_for_ipv6(new_ipv6)
-                self.log(f"[IPv6] Auto gateway: {auto_gateway}")
+                new_gateway = _get_gateway_for_ipv6(new_ipv6)
+                self.log(f"[IPv6] Auto gateway: {new_gateway}")
 
-            if auto_gateway:
-                # Xóa route cũ trước (ignore error nếu không có)
-                commands.append(f'netsh interface ipv6 delete route ::/0 "{self.interface_name}"')
-                # Thêm route mới
-                commands.append(f'netsh interface ipv6 add route ::/0 "{self.interface_name}" {auto_gateway}')
+            if new_gateway:
+                # Xóa route cũ trước - phải chỉ định cả gateway cũ nếu có
+                # Nếu không chỉ định gateway cũ, Windows có thể không xóa đúng route
+                if self.current_gateway:
+                    self.log(f"[IPv6] Deleting old route with gateway: {self.current_gateway}")
+                    commands.append(f'netsh interface ipv6 delete route ::/0 "{self.interface_name}" {self.current_gateway}')
+                else:
+                    # Fallback: xóa tất cả default routes (có thể có nhiều)
+                    commands.append(f'netsh interface ipv6 delete route ::/0 "{self.interface_name}"')
+
+                # Thêm route mới với gateway MỚI
+                commands.append(f'netsh interface ipv6 add route ::/0 "{self.interface_name}" {new_gateway}')
 
             # Bước 4: Set Windows prefer IPv6 over IPv4 (quan trọng!)
             # Đây là cách ép Windows dùng IPv6 cho outgoing connections
@@ -436,7 +467,7 @@ class IPv6Rotator:
                 # Cần yêu cầu quyền admin
                 self.log("[IPv6] Requesting admin privileges...")
                 if not _run_netsh_admin(commands, self.log):
-                    self.log("[IPv6] ✗ Failed to get admin privileges")
+                    self.log("[IPv6] [x] Failed to get admin privileges")
                     return False
 
             # Đợi adapter cập nhật (quan trọng: cần đủ thời gian để Windows nhận IPv6)
@@ -450,13 +481,15 @@ class IPv6Rotator:
             # Verify
             current = self.get_current_ipv6()
             if current:
-                self.log(f"[IPv6] ✓ Now using: {current}")
+                self.log(f"[IPv6] [v] Now using: {current}")
+                self.log(f"[IPv6] [v] Gateway: {new_gateway}")
                 if self.disable_ipv4:
-                    self.log("[IPv6] ✓ IPv4 disabled - Chrome sẽ dùng IPv6")
+                    self.log("[IPv6] [v] IPv4 disabled - Chrome sẽ dùng IPv6")
                 self.current_ipv6 = current
+                self.current_gateway = new_gateway  # Track gateway để lần sau xóa đúng
                 return True
             else:
-                self.log("[IPv6] ✗ Failed to verify new IP")
+                self.log("[IPv6] [x] Failed to verify new IP")
                 return False
 
         except Exception as e:
@@ -469,7 +502,7 @@ class IPv6Rotator:
             return True
 
         try:
-            self.log("[IPv6] 🔌 Re-enabling IPv4...")
+            self.log("[IPv6] [PLUG] Re-enabling IPv4...")
             cmd = f'netsh interface ipv4 set interface "{self.interface_name}" admin=enabled'
 
             if _is_admin():
@@ -478,7 +511,7 @@ class IPv6Rotator:
                 _run_netsh_admin([cmd], self.log)
 
             self._ipv4_disabled = False
-            self.log("[IPv6] ✓ IPv4 re-enabled")
+            self.log("[IPv6] [v] IPv4 re-enabled")
             return True
         except Exception as e:
             self.log(f"[IPv6] Error enabling IPv4: {e}")
@@ -529,7 +562,7 @@ class IPv6Rotator:
                 if self.set_ipv6(new_ipv6):
                     # Test connectivity
                     if self.test_ipv6_connectivity():
-                        self.log(f"[IPv6] ✓ Connectivity OK: {new_ipv6}")
+                        self.log(f"[IPv6] [v] Connectivity OK: {new_ipv6}")
 
                         # Xóa tất cả dead IPs đã thu thập
                         for dead_ip in dead_ips:
@@ -543,11 +576,11 @@ class IPv6Rotator:
                         self.last_rotated = time.time()
                         return new_ipv6
                     else:
-                        self.log(f"[IPv6] ✗ No connectivity: {new_ipv6} → REMOVING")
+                        self.log(f"[IPv6] [x] No connectivity: {new_ipv6} → REMOVING")
                         dead_ips.append(new_ipv6)
                         continue
                 else:
-                    self.log(f"[IPv6] ✗ Failed to set: {new_ipv6} → REMOVING")
+                    self.log(f"[IPv6] [x] Failed to set: {new_ipv6} → REMOVING")
                     dead_ips.append(new_ipv6)
                     continue
 
@@ -559,7 +592,7 @@ class IPv6Rotator:
         for dead_ip in dead_ips:
             self._remove_dead_ipv6(dead_ip)
 
-        self.log("[IPv6] ✗ All rotation attempts failed")
+        self.log("[IPv6] [x] All rotation attempts failed")
         return None
 
     def _start_local_proxy(self, ipv6_address: str):
@@ -571,7 +604,7 @@ class IPv6Rotator:
             # (cần có IP trên interface thì proxy mới bind được)
             self.log(f"[IPv6] Ensuring interface has: {ipv6_address}")
             if not self.set_ipv6(ipv6_address):
-                self.log("[IPv6] ⚠️ Failed to set IPv6, proxy may not work correctly", "WARN")
+                self.log("[IPv6] [WARN] Failed to set IPv6, proxy may not work correctly", "WARN")
 
             if self._local_proxy is None:
                 # Start proxy lần đầu

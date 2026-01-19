@@ -11,6 +11,14 @@ Usage:
 
 import sys
 import os
+
+# Fix Windows encoding issues
+if sys.platform == "win32":
+    if sys.stdout:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if sys.stderr:
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
 import time
 import shutil
 from pathlib import Path
@@ -114,12 +122,12 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
     local_dir = LOCAL_PROJECTS / code
 
     if not local_dir.exists():
-        log(f"  ❌ Project not found locally: {code}")
+        log(f"  [FAIL] Project not found locally: {code}")
         return False
 
     excel_path = local_dir / f"{code}_prompts.xlsx"
     if not excel_path.exists():
-        log(f"  ❌ Excel not found: {code}")
+        log(f"  [FAIL] Excel not found: {code}")
         return False
 
     # Get scenes that need videos
@@ -164,10 +172,10 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
             # Try sheet 'config' first
             if 'config' in wb_xl.sheetnames:
                 ws = wb_xl['config']
-                log(f"  📋 Reading from sheet 'config'...")
+                log(f"  [LIST] Reading from sheet 'config'...")
             else:
                 ws = wb_xl.active
-                log(f"  📋 No 'config' sheet, using active sheet...")
+                log(f"  [LIST] No 'config' sheet, using active sheet...")
 
             for row in ws.iter_rows(min_row=1, max_row=30, values_only=True):
                 if not row:
@@ -179,7 +187,7 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
                         cell_str = str(cell_val).strip()
                         if '/project/' in cell_str and cell_str.startswith('http'):
                             project_url = cell_str
-                            log(f"  📋 Found project URL in Excel!")
+                            log(f"  [LIST] Found project URL in Excel!")
                             break
 
                 if project_url:
@@ -191,16 +199,16 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
                     val = str(row[1] or '').strip()
                     if key == 'flow_project_url' and '/project/' in val:
                         project_url = val
-                        log(f"  📋 Found project URL from key 'flow_project_url'!")
+                        log(f"  [LIST] Found project URL from key 'flow_project_url'!")
                         break
                     elif key == 'flow_project_id' and val:
                         project_url = f"https://labs.google/fx/vi/tools/flow/project/{val}"
-                        log(f"  📋 Built project URL from project_id!")
+                        log(f"  [LIST] Built project URL from project_id!")
                         break
 
             wb_xl.close()
         except Exception as e:
-            log(f"  ⚠️ Error reading Excel: {e}")
+            log(f"  [WARN] Error reading Excel: {e}")
 
         # Method 2: Read from .media_cache.json (same as SmartEngine uses)
         # Try both flat and nested locations
@@ -221,17 +229,17 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
                             if project_id:
                                 project_url = f"https://labs.google/fx/vi/tools/flow/project/{project_id}"
                         if project_url:
-                            log(f"  📦 Found project URL from cache: {cache_file.name}")
+                            log(f"  [PKG] Found project URL from cache: {cache_file.name}")
                             break
                     except Exception as e:
-                        log(f"  ⚠️ Error reading cache {cache_file}: {e}")
+                        log(f"  [WARN] Error reading cache {cache_file}: {e}")
 
         if not project_url:
-            log(f"  ❌ No project URL in Excel or cache!")
-            log(f"  💡 Run run_worker_pic first to create images and save project URL")
+            log(f"  [FAIL] No project URL in Excel or cache!")
+            log(f"  [TIP] Run run_worker_pic first to create images and save project URL")
             return False
 
-        log(f"  📋 Project URL: {project_url[:50]}...")
+        log(f"  [LIST] Project URL: {project_url[:50]}...")
 
         # Create API instance for video Chrome
         api = DrissionFlowAPI(
@@ -241,12 +249,18 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
             chrome_portable=chrome_portable_2
         )
 
-        # Setup Chrome - skip mode selection, sẽ chuyển T2V mode sau
+        # Setup Chrome
         if not api.setup(project_url=project_url, skip_mode_selection=True):
-            log(f"  ❌ Failed to setup Chrome for video!")
+            log(f"  [FAIL] Failed to setup Chrome for video!")
             return False
 
-        log(f"  🎬 Using T2V→I2V MODE (T2V UI → interceptor convert → I2V API)")
+        # Chuyển sang mode T2V ("Từ văn bản sang video")
+        # Interceptor sẽ convert T2V request → I2V request
+        log(f"  [VIDEO] Switching to T2V mode...")
+        if api.switch_to_t2v_mode():
+            log(f"  [v] Switched to T2V mode (Từ văn bản sang video)")
+        else:
+            log(f"  [WARN] Could not switch to T2V mode, trying anyway...", "WARN")
         time.sleep(1)
 
         # Create videos
@@ -263,29 +277,29 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
 
             mp4_path = img_dir / f"{scene_id}.mp4"
 
-            log(f"\n  🎬 Creating video: {scene_id}")
+            log(f"\n  [VIDEO] Creating video: {scene_id}")
             log(f"     Media ID: {media_id[:40]}...")
             log(f"     Prompt: {video_prompt[:50]}...")
 
             # Kiểm tra Chrome còn sống không
             if not api._ready or api.driver is None:
-                log(f"     ⚠️ Chrome không sẵn sàng, restart...", "WARN")
+                log(f"     [WARN] Chrome không sẵn sàng, restart...", "WARN")
                 try:
                     if api.restart_chrome():
-                        log(f"     ✓ Chrome restarted")
+                        log(f"     [v] Chrome restarted")
                         consecutive_failures = 0
                     else:
-                        log(f"     ✗ Không restart được Chrome, skip video {scene_id}", "WARN")
+                        log(f"     [x] Không restart được Chrome, skip video {scene_id}", "WARN")
                         continue
                 except Exception as e:
-                    log(f"     ✗ Restart error: {e}, skip video {scene_id}", "WARN")
+                    log(f"     [x] Restart error: {e}, skip video {scene_id}", "WARN")
                     continue
 
             try:
                 # Use T2V→I2V MODE:
-                # - UI ở "Từ văn bản sang video" (T2V) - JS đã OK
-                # - Interceptor convert: batchAsyncGenerateVideoText → batchAsyncGenerateVideoReferenceImages
-                # - Interceptor thêm referenceImages với mediaId
+                # - Chrome ở mode "Từ văn bản sang video" (T2V)
+                # - Interceptor convert: T2V request → I2V request
+                # - Đổi URL, thêm referenceImages, đổi model
                 ok, result_path, error = api.generate_video_t2v_mode(
                     media_id=media_id,
                     prompt=video_prompt,
@@ -295,7 +309,7 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
                 if ok:
                     video_created += 1
                     consecutive_failures = 0  # Reset counter on success
-                    log(f"     ✓ Video created: {scene_id}.mp4")
+                    log(f"     [v] Video created: {scene_id}.mp4")
 
                     # Di chuyển ảnh gốc sang thư mục img_src để tránh nhầm lẫn khi edit
                     png_path = img_dir / f"{scene_id}.png"
@@ -305,33 +319,33 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
                         dst_path = img_src_dir / f"{scene_id}.png"
                         try:
                             shutil.move(str(png_path), str(dst_path))
-                            log(f"     📦 Moved image to img_src/")
+                            log(f"     [PKG] Moved image to img_src/")
                         except Exception as e:
-                            log(f"     ⚠️ Cannot move image: {e}", "WARN")
+                            log(f"     [WARN] Cannot move image: {e}", "WARN")
                 else:
                     consecutive_failures += 1
-                    log(f"     ✗ Failed: {error} (fail {consecutive_failures}/{MAX_CONSECUTIVE_FAILURES})", "WARN")
+                    log(f"     [x] Failed: {error} (fail {consecutive_failures}/{MAX_CONSECUTIVE_FAILURES})", "WARN")
 
                     # Nếu fail nhiều lần liên tiếp, restart Chrome
                     if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                        log(f"     ⚠️ {consecutive_failures} failures, restarting Chrome...", "WARN")
+                        log(f"     [WARN] {consecutive_failures} failures, restarting Chrome...", "WARN")
                         try:
                             if api.restart_chrome():
-                                log(f"     ✓ Chrome restarted")
+                                log(f"     [v] Chrome restarted")
                                 consecutive_failures = 0
                         except:
                             pass
 
             except Exception as e:
                 consecutive_failures += 1
-                log(f"     ✗ Exception: {e} (fail {consecutive_failures}/{MAX_CONSECUTIVE_FAILURES})", "ERROR")
+                log(f"     [x] Exception: {e} (fail {consecutive_failures}/{MAX_CONSECUTIVE_FAILURES})", "ERROR")
 
                 # Nếu fail nhiều lần liên tiếp, restart Chrome
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                    log(f"     ⚠️ {consecutive_failures} failures, restarting Chrome...", "WARN")
+                    log(f"     [WARN] {consecutive_failures} failures, restarting Chrome...", "WARN")
                     try:
                         if api.restart_chrome():
-                            log(f"     ✓ Chrome restarted")
+                            log(f"     [v] Chrome restarted")
                             consecutive_failures = 0
                     except:
                         pass
@@ -342,11 +356,11 @@ def process_project_video(code: str, video_count: int = -1, callback=None) -> bo
         except:
             pass
 
-        log(f"\n  ✅ Created {video_created}/{len(scenes)} videos")
+        log(f"\n  [OK] Created {video_created}/{len(scenes)} videos")
         return video_created > 0
 
     except Exception as e:
-        log(f"  ❌ Exception: {e}", "ERROR")
+        log(f"  [FAIL] Exception: {e}", "ERROR")
         import traceback
         traceback.print_exc()
         return False
@@ -417,16 +431,16 @@ def run_scan_loop():
                 try:
                     success = process_project_video(code, video_count=VIDEO_COUNT)
                     if not success:
-                        print(f"  ⏭️ Skipping {code}, moving to next...")
+                        print(f"  [SKIP] Skipping {code}, moving to next...")
                         continue
                 except KeyboardInterrupt:
                     print("\n\nStopped by user.")
                     return
                 except Exception as e:
-                    print(f"  ❌ Error processing {code}: {e}")
+                    print(f"  [FAIL] Error processing {code}: {e}")
                     continue
 
-            print(f"\n  ✅ Processed all projects!")
+            print(f"\n  [OK] Processed all projects!")
             print(f"  Waiting {VIDEO_SCAN_INTERVAL}s... (Ctrl+C to stop)")
             try:
                 time.sleep(VIDEO_SCAN_INTERVAL)

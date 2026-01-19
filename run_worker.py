@@ -17,6 +17,14 @@ Usage:
 
 import sys
 import os
+
+# Fix Windows encoding issues
+if sys.platform == "win32":
+    if sys.stdout:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if sys.stderr:
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
 import time
 import shutil
 from pathlib import Path
@@ -47,7 +55,7 @@ def detect_auto_path() -> Path:
         try:
             path = Path(path_str)
             if path.exists():
-                print(f"  ✓ Found AUTO at: {path}")
+                print(f"  [v] Found AUTO at: {path}")
                 return path
         except Exception:
             continue
@@ -205,10 +213,10 @@ def create_excel_with_api(project_dir: Path, name: str) -> bool:
 
     # Check SRT exists
     if not srt_path.exists():
-        print(f"  ❌ No SRT file found!")
+        print(f"  [FAIL] No SRT file found!")
         return False
 
-    print(f"  🤖 Creating Excel from SRT (Progressive API)...")
+    print(f"  [API] Creating Excel from SRT (Progressive API)...")
 
     # Load config
     cfg = {}
@@ -229,7 +237,7 @@ def create_excel_with_api(project_dir: Path, name: str) -> bool:
 
     # === PHƯƠNG ÁN 1: Progressive API (từng step, lưu ngay) ===
     if has_api_keys:
-        print(f"  🌐 Using Progressive API (step-by-step, save immediately)...")
+        print(f"  [NET] Using Progressive API (step-by-step, save immediately)...")
 
         try:
             from modules.progressive_prompts import ProgressivePromptsGenerator
@@ -240,20 +248,20 @@ def create_excel_with_api(project_dir: Path, name: str) -> bool:
             api_success = gen.run_all_steps(project_dir, name, log_callback=print)
 
             if api_success and excel_path.exists():
-                print(f"  ✅ Excel created with Progressive API")
+                print(f"  [OK] Excel created with Progressive API")
                 return True
             else:
-                print(f"  ⚠️ Progressive API incomplete, trying fallback...")
+                print(f"  [WARN] Progressive API incomplete, trying fallback...")
 
         except Exception as api_err:
-            print(f"  ⚠️ Progressive API error: {api_err}")
+            print(f"  [WARN] Progressive API error: {api_err}")
             import traceback
             traceback.print_exc()
     else:
-        print(f"  ⚠️ No API keys configured")
+        print(f"  [WARN] No API keys configured")
 
     # === PHƯƠNG ÁN 2: Fallback (không cần API) ===
-    print(f"  📋 Creating fallback Excel from SRT...")
+    print(f"  [EXCEL] Creating fallback Excel from SRT...")
 
     try:
         cfg['fallback_only'] = True
@@ -262,14 +270,14 @@ def create_excel_with_api(project_dir: Path, name: str) -> bool:
         gen = PromptGenerator(cfg)
 
         if gen.generate_for_project(project_dir, name, fallback_only=True):
-            print(f"  ✅ Fallback Excel created")
+            print(f"  [OK] Fallback Excel created")
             return True
         else:
-            print(f"  ❌ Failed to create fallback Excel")
+            print(f"  [FAIL] Failed to create fallback Excel")
             return False
 
     except Exception as e:
-        print(f"  ❌ Fallback error: {e}")
+        print(f"  [FAIL] Fallback error: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -288,7 +296,7 @@ def complete_excel_with_api(project_dir: Path, name: str) -> bool:
     """
     import yaml
 
-    print(f"  🤖 Completing Excel with API...")
+    print(f"  [API] Completing Excel with API...")
 
     excel_path = project_dir / f"{name}_prompts.xlsx"
     original_excel_backup = None
@@ -300,7 +308,7 @@ def complete_excel_with_api(project_dir: Path, name: str) -> bool:
             backup_path = excel_path.with_suffix('.xlsx.backup')
             shutil.copy2(excel_path, backup_path)
             original_excel_backup = backup_path
-            print(f"  📋 Backed up Excel to {backup_path.name}")
+            print(f"  [EXCEL] Backed up Excel to {backup_path.name}")
         else:
             # Không có Excel → dùng create_excel_with_api
             return create_excel_with_api(project_dir, name)
@@ -322,7 +330,7 @@ def complete_excel_with_api(project_dir: Path, name: str) -> bool:
 
         # === KIỂM TRA: Nếu không có API keys → giữ nguyên fallback ===
         if not groq_keys and not gemini_keys and not deepseek_key:
-            print(f"  ⚠️ No API keys, keeping existing fallback prompts")
+            print(f"  [WARN] No API keys, keeping existing fallback prompts")
             if original_excel_backup and original_excel_backup.exists():
                 original_excel_backup.unlink()
             return True
@@ -334,7 +342,7 @@ def complete_excel_with_api(project_dir: Path, name: str) -> bool:
         # Xóa Excel để regenerate
         if excel_path.exists():
             excel_path.unlink()
-            print(f"  🔄 Regenerating with API...")
+            print(f"  [SYNC] Regenerating with API...")
 
         # Generate prompts with API
         from modules.prompts_generator import PromptGenerator
@@ -344,26 +352,26 @@ def complete_excel_with_api(project_dir: Path, name: str) -> bool:
         try:
             api_success = gen.generate_for_project(project_dir, name, overwrite=True)
         except Exception as api_err:
-            print(f"  ❌ API error: {api_err}")
+            print(f"  [FAIL] API error: {api_err}")
             api_success = False
 
         if api_success:
-            print(f"  ✅ Excel completed with API prompts")
+            print(f"  [OK] Excel completed with API prompts")
             if original_excel_backup and original_excel_backup.exists():
                 original_excel_backup.unlink()
             return True
         else:
-            print(f"  ⚠️ API failed, restoring backup...")
+            print(f"  [WARN] API failed, restoring backup...")
             # Khôi phục từ backup
             if original_excel_backup and original_excel_backup.exists():
                 import shutil
                 shutil.copy2(original_excel_backup, excel_path)
                 original_excel_backup.unlink()
-                print(f"  ✅ Restored fallback Excel")
+                print(f"  [OK] Restored fallback Excel")
             return True  # Tiếp tục với fallback prompts
 
     except Exception as e:
-        print(f"  ❌ Error: {e}")
+        print(f"  [FAIL] Error: {e}")
         import traceback
         traceback.print_exc()
         # Khôi phục từ backup
@@ -380,9 +388,9 @@ def delete_master_source(code: str):
         src = MASTER_PROJECTS / code
         if src.exists():
             shutil.rmtree(src)
-            print(f"  🗑️ Deleted from master PROJECTS: {code}")
+            print(f"  [DEL] Deleted from master PROJECTS: {code}")
     except Exception as e:
-        print(f"  ⚠️ Cleanup master warning: {e}")
+        print(f"  [WARN] Cleanup master warning: {e}")
 
 
 def delete_local_project(code: str):
@@ -391,9 +399,9 @@ def delete_local_project(code: str):
         local_dir = LOCAL_PROJECTS / code
         if local_dir.exists():
             shutil.rmtree(local_dir)
-            print(f"  🗑️ Deleted local project: {code}")
+            print(f"  [DEL] Deleted local project: {code}")
     except Exception as e:
-        print(f"  ⚠️ Cleanup local warning: {e}")
+        print(f"  [WARN] Cleanup local warning: {e}")
 
 
 def copy_from_master(code: str) -> Path:
@@ -406,25 +414,33 @@ def copy_from_master(code: str) -> Path:
 
     # If local already exists, use it (even if master was deleted)
     if dst.exists():
-        print(f"  📂 Using existing local: {code}")
-        # Try to update Excel from master if available
+        print(f"  [LOCAL] Using existing local: {code}")
+        # Try to update Excel and SRT from master if available
         if src.exists():
+            # Copy Excel if newer
             excel_src = src / f"{code}_prompts.xlsx"
             excel_dst = dst / f"{code}_prompts.xlsx"
             if excel_src.exists():
                 if not excel_dst.exists() or excel_src.stat().st_mtime > excel_dst.stat().st_mtime:
                     shutil.copy2(excel_src, excel_dst)
-                    print(f"  📥 Updated Excel from master")
+                    print(f"  [COPY] Updated Excel from master")
+
+            # Copy SRT if local doesn't have it
+            srt_src = src / f"{code}.srt"
+            srt_dst = dst / f"{code}.srt"
+            if srt_src.exists() and not srt_dst.exists():
+                shutil.copy2(srt_src, srt_dst)
+                print(f"  [COPY] Copied SRT from master")
         return dst
 
     # Local doesn't exist, need to copy from master
     if not src.exists():
-        print(f"  ❌ Source not found: {src}")
+        print(f"  [FAIL] Source not found: {src}")
         return None
 
-    print(f"  📥 Copying from master: {code}")
+    print(f"  [COPY] Copying from master: {code}")
     shutil.copytree(src, dst)
-    print(f"  ✅ Copied to: {dst}")
+    print(f"  [OK] Copied to: {dst}")
     # Cleanup: delete from master after successful copy
     delete_master_source(code)
 
@@ -435,7 +451,7 @@ def copy_to_visual(code: str, local_dir: Path) -> bool:
     """Copy completed project to VISUAL folder on master."""
     dst = MASTER_VISUAL / code
 
-    print(f"  📤 Copying to VISUAL: {code}")
+    print(f"  [OUT] Copying to VISUAL: {code}")
 
     try:
         # Create VISUAL dir on master
@@ -446,14 +462,14 @@ def copy_to_visual(code: str, local_dir: Path) -> bool:
 
         # Copy entire project folder
         shutil.copytree(local_dir, dst)
-        print(f"  ✅ Copied to: {dst}")
+        print(f"  [OK] Copied to: {dst}")
 
         # Cleanup: delete local project after successful copy
         delete_local_project(code)
 
         return True
     except Exception as e:
-        print(f"  ❌ Copy failed: {e}")
+        print(f"  [FAIL] Copy failed: {e}")
         return False
 
 
@@ -550,7 +566,7 @@ def process_project(code: str, callback=None) -> bool:
 
     # Step 1: Check if already done on master
     if is_project_complete_on_master(code):
-        log(f"  ⏭️ Already in VISUAL folder, skip!")
+        log(f"  [SKIP] Already in VISUAL folder, skip!")
         return True
 
     # Step 2: Copy from master
@@ -565,23 +581,23 @@ def process_project(code: str, callback=None) -> bool:
     if not excel_path.exists():
         # Không có Excel - tạo mới từ SRT
         if srt_path.exists():
-            log(f"  📋 No Excel found, creating from SRT (API first, fallback if fail)...")
+            log(f"  [EXCEL] No Excel found, creating from SRT (API first, fallback if fail)...")
             if not create_excel_with_api(local_dir, code):
-                log(f"  ❌ Failed to create Excel, skip!")
+                log(f"  [FAIL] Failed to create Excel, skip!")
                 return False
         else:
-            log(f"  ⏭️ No Excel and no SRT, skip!")
+            log(f"  [SKIP] No Excel and no SRT, skip!")
             return False
     elif not has_excel_with_prompts(local_dir, code):
         # Excel exists but empty/corrupt - recreate
-        log(f"  📋 Excel empty/corrupt, recreating...")
+        log(f"  [EXCEL] Excel empty/corrupt, recreating...")
         excel_path.unlink()  # Delete corrupt Excel
         if not create_excel_with_api(local_dir, code):
-            log(f"  ❌ Failed to recreate Excel, skip!")
+            log(f"  [FAIL] Failed to recreate Excel, skip!")
             return False
     elif needs_api_completion(local_dir, code):
         # Excel has [FALLBACK] prompts - try to complete with API
-        log(f"  📋 Excel has [FALLBACK] prompts, trying API...")
+        log(f"  [EXCEL] Excel has [FALLBACK] prompts, trying API...")
         complete_excel_with_api(local_dir, code)
         # Continue even if API fails (fallback prompts will be used)
 
@@ -595,17 +611,17 @@ def process_project(code: str, callback=None) -> bool:
         # Find Excel path
         excel_path = local_dir / f"{code}_prompts.xlsx"
 
-        log(f"  📋 Excel: {excel_path.name}")
+        log(f"  [EXCEL] Excel: {excel_path.name}")
 
         # Run engine - create images and videos only (no MP4 compose)
         result = engine.run(str(excel_path), callback=callback, skip_compose=True)
 
         if result.get('error'):
-            log(f"  ❌ Error: {result.get('error')}", "ERROR")
+            log(f"  [FAIL] Error: {result.get('error')}", "ERROR")
             return False
 
     except Exception as e:
-        log(f"  ❌ Exception: {e}", "ERROR")
+        log(f"  [FAIL] Exception: {e}", "ERROR")
         import traceback
         traceback.print_exc()
         return False
@@ -613,13 +629,13 @@ def process_project(code: str, callback=None) -> bool:
     # Step 5: Copy to VISUAL on master
     if is_local_complete(local_dir, code):
         if copy_to_visual(code, local_dir):
-            log(f"  ✅ Done! Project copied to VISUAL")
+            log(f"  [OK] Done! Project copied to VISUAL")
             return True
         else:
-            log(f"  ⚠️ Images created but copy failed", "WARN")
+            log(f"  [WARN] Images created but copy failed", "WARN")
             return False
     else:
-        log(f"  ⚠️ No images created", "WARN")
+        log(f"  [WARN] No images created", "WARN")
         return False
 
 
@@ -672,6 +688,35 @@ def scan_incomplete_local_projects() -> list:
     return sorted(need_processing)
 
 
+def safe_path_exists(path: Path) -> bool:
+    """
+    Safely check if a path exists, handling network disconnection errors.
+    Returns False if path doesn't exist OR if network is disconnected.
+    """
+    try:
+        return path.exists()
+    except (OSError, PermissionError) as e:
+        # WinError 1167: The device is not connected
+        # WinError 53: The network path was not found
+        # WinError 64: The specified network name is no longer available
+        print(f"  [WARN] Network error checking path: {e}")
+        return False
+
+
+def safe_iterdir(path: Path) -> list:
+    """
+    Safely iterate over a directory, handling network disconnection errors.
+    Returns empty list if path doesn't exist OR if network is disconnected.
+    """
+    try:
+        if not path.exists():
+            return []
+        return list(path.iterdir())
+    except (OSError, PermissionError) as e:
+        print(f"  [WARN] Network error listing directory: {e}")
+        return []
+
+
 def scan_master_projects() -> list:
     """Scan master PROJECTS folder for pending projects."""
     pending = []
@@ -679,41 +724,62 @@ def scan_master_projects() -> list:
     print(f"  [DEBUG] Checking: {MASTER_PROJECTS}")
     print(f"  [DEBUG] Worker channel: {WORKER_CHANNEL or 'ALL (no filter)'}")
 
-    if not MASTER_PROJECTS.exists():
-        print(f"  ⚠️ Master PROJECTS not accessible: {MASTER_PROJECTS}")
+    if not safe_path_exists(MASTER_PROJECTS):
+        print(f"  [WARN] Master PROJECTS not accessible: {MASTER_PROJECTS}")
         return pending
 
-    # List all folders
-    all_folders = [item for item in MASTER_PROJECTS.iterdir() if item.is_dir()]
-    print(f"  [DEBUG] Found {len(all_folders)} folders in MASTER_PROJECTS")
+    # List all folders - wrap in try-except for network safety
+    try:
+        all_folders = []
+        for item in safe_iterdir(MASTER_PROJECTS):
+            try:
+                if item.is_dir():
+                    all_folders.append(item)
+            except (OSError, PermissionError):
+                continue
+        print(f"  [DEBUG] Found {len(all_folders)} folders in MASTER_PROJECTS")
+    except (OSError, PermissionError) as e:
+        print(f"  [WARN] Network error listing master: {e}")
+        return pending
 
     for item in all_folders:
-        code = item.name
+        try:
+            code = item.name
 
-        # Skip if not matching this worker's channel
-        if not matches_channel(code):
-            continue  # Silent skip - not our channel
+            # Skip if not matching this worker's channel
+            if not matches_channel(code):
+                continue  # Silent skip - not our channel
 
-        # Skip if already in VISUAL
-        if is_project_complete_on_master(code):
-            print(f"    - {code}: already in VISUAL ✓")
-            continue
+            # Skip if already in VISUAL
+            if is_project_complete_on_master(code):
+                print(f"    - {code}: already in VISUAL [v]")
+                continue
 
-        # Check if has Excel or SRT
-        excel_path = item / f"{code}_prompts.xlsx"
-        srt_path = item / f"{code}.srt"
+            # Check if has Excel or SRT
+            excel_path = item / f"{code}_prompts.xlsx"
+            srt_path = item / f"{code}.srt"
 
-        if has_excel_with_prompts(item, code):
-            print(f"    - {code}: ready (has prompts) ✓")
-            pending.append(code)
-        elif srt_path.exists():
-            # Có SRT nhưng không có Excel - worker sẽ tự tạo
-            print(f"    - {code}: has SRT, no Excel → will create with API")
-            pending.append(code)
-        elif excel_path.exists():
-            print(f"    - {code}: Excel exists but no prompts yet")
-        else:
-            print(f"    - {code}: no Excel and no SRT")
+            # Wrap network path checks in try-except
+            try:
+                if has_excel_with_prompts(item, code):
+                    print(f"    - {code}: ready (has prompts) [v]")
+                    pending.append(code)
+                elif srt_path.exists():
+                    # Có SRT nhưng không có Excel - worker sẽ tự tạo
+                    print(f"    - {code}: has SRT, no Excel → will create with API")
+                    pending.append(code)
+                elif excel_path.exists():
+                    print(f"    - {code}: Excel exists but no prompts yet")
+                else:
+                    print(f"    - {code}: no Excel and no SRT")
+            except (OSError, PermissionError) as e:
+                print(f"  [WARN] Network error checking {code}: {e}")
+                continue
+
+        except (OSError, PermissionError) as e:
+            # Network disconnected while iterating
+            print(f"  [WARN] Network error scanning: {e}")
+            break
 
     return sorted(pending)
 
@@ -744,7 +810,7 @@ def sync_local_to_visual() -> int:
         pass
 
     if not master_accessible:
-        print(f"  ⚠️ Master VISUAL not accessible - skipping cleanup to protect local data")
+        print(f"  [WARN] Master VISUAL not accessible - skipping cleanup to protect local data")
         return 0
 
     # List all folders
@@ -795,16 +861,16 @@ def run_scan_loop():
 
     # Re-detect AUTO path nếu chưa có
     if not AUTO_PATH:
-        print(f"\n  🔍 Detecting network path to \\AUTO...")
+        print(f"\n  [SEARCH] Detecting network path to \\AUTO...")
         AUTO_PATH = detect_auto_path()
         if AUTO_PATH:
             MASTER_PROJECTS = AUTO_PATH / "ve3-tool-simple" / "PROJECTS"
             MASTER_VISUAL = AUTO_PATH / "VISUAL"
 
     if AUTO_PATH:
-        print(f"  ✓ AUTO path:     {AUTO_PATH}")
+        print(f"  [v] AUTO path:     {AUTO_PATH}")
     else:
-        print(f"  ✗ AUTO path:     NOT FOUND")
+        print(f"  [x] AUTO path:     NOT FOUND")
 
     print(f"  Master PROJECTS: {MASTER_PROJECTS}")
     print(f"  Master VISUAL:   {MASTER_VISUAL}")
@@ -813,8 +879,8 @@ def run_scan_loop():
     print(f"{'='*60}")
 
     # Check network paths
-    if not AUTO_PATH or not MASTER_PROJECTS.exists():
-        print(f"\n❌ Cannot access master PROJECTS!")
+    if not AUTO_PATH or not safe_path_exists(MASTER_PROJECTS):
+        print(f"\n[FAIL] Cannot access master PROJECTS!")
         print(f"   Tried paths:")
         for p in POSSIBLE_AUTO_PATHS:
             print(f"     - {p}")
@@ -829,7 +895,7 @@ def run_scan_loop():
     print(f"\n[SYNC] Checking local projects to sync to VISUAL...")
     synced = sync_local_to_visual()
     if synced > 0:
-        print(f"  ✅ Synced {synced} projects to VISUAL")
+        print(f"  [OK] Synced {synced} projects to VISUAL")
     else:
         print(f"  No local projects to sync")
 
@@ -842,7 +908,7 @@ def run_scan_loop():
         # === SYNC: Copy local projects đã có ảnh sang VISUAL ===
         synced = sync_local_to_visual()
         if synced > 0:
-            print(f"  📤 Synced {synced} local projects to VISUAL")
+            print(f"  [OUT] Synced {synced} local projects to VISUAL")
 
         # Find incomplete local projects (đã copy về nhưng chưa xong)
         incomplete_local = scan_incomplete_local_projects()
@@ -878,18 +944,18 @@ def run_scan_loop():
                     sync_local_to_visual()
 
                     if not success:
-                        print(f"  ⏭️ Skipping {code}, moving to next...")
+                        print(f"  [SKIP] Skipping {code}, moving to next...")
                         continue
 
                 except KeyboardInterrupt:
                     print("\n\nStopped by user.")
                     return
                 except Exception as e:
-                    print(f"  ❌ Error processing {code}: {e}")
+                    print(f"  [FAIL] Error processing {code}: {e}")
                     continue
 
             # Sau khi xử lý hết, đợi 1 chút rồi scan lại
-            print(f"\n  ✅ Processed all pending projects!")
+            print(f"\n  [OK] Processed all pending projects!")
             print(f"  Waiting {SCAN_INTERVAL}s for new projects... (Ctrl+C to stop)")
             try:
                 time.sleep(SCAN_INTERVAL)

@@ -5,6 +5,23 @@ Sử dụng AI API để phân tích SRT và tạo prompts cho ảnh/video.
 Hỗ trợ: DeepSeek API
 """
 
+import sys
+import os
+
+# Fix Windows encoding issues
+if sys.platform == "win32":
+    if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        except:
+            pass
+    if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+        try:
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        except:
+            pass
+
+
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
@@ -822,7 +839,7 @@ class PromptGenerator:
                     open_brackets = result.count('[') - result.count(']')
 
                     if open_braces > 0 or open_brackets > 0:
-                        print(f"[Director] ⚠️ JSON BỊ TRUNCATE! Braces: +{open_braces}, Brackets: +{open_brackets}")
+                        print(f"[Director] [WARN] JSON BỊ TRUNCATE! Braces: +{open_braces}, Brackets: +{open_brackets}")
                         print("[Director] Response không hoàn chỉnh - sẽ retry...")
                         return ""  # Return empty to trigger retry
                     else:
@@ -1082,10 +1099,10 @@ class PromptGenerator:
             )
 
             if success:
-                self.logger.info("[V2 FLOW] ✓ Hoàn thành!")
+                self.logger.info("[V2 FLOW] [v] Hoàn thành!")
                 return True
             else:
-                self.logger.error("[V2 FLOW] ✗ Thất bại!")
+                self.logger.error("[V2 FLOW] [x] Thất bại!")
                 # KHÔNG fallback về flow cũ - flow cũ tạo scenes lỗi
                 # Nếu V2 fail, return False để retry hoặc dùng fallback_only
                 return False
@@ -1274,7 +1291,7 @@ Trả về JSON:"""
                 self.logger.info(f"[BACKUP] Lưu {len(backup_scenes_data)} backup scenes vào Excel...")
                 workbook.save_director_plan(backup_scenes_data)
                 workbook.save()
-                self.logger.info(f"[BACKUP] ✓ Đã lưu backup với character/location mapping!")
+                self.logger.info(f"[BACKUP] [v] Đã lưu backup với character/location mapping!")
             else:
                 self.logger.info(f"[BACKUP] Đã có {len(existing_plan)} scenes trong director_plan, skip backup")
         except Exception as e:
@@ -1347,7 +1364,7 @@ Trả về JSON:"""
             # Dùng kế hoạch quay từ đạo diễn
             scenes_data = self._convert_shooting_plan_to_scenes(directors_shooting["shooting_plan"])
             using_director_prompts = True
-            self.logger.info(f"[Director] ✓ Sử dụng {len(scenes_data)} shots từ đạo diễn")
+            self.logger.info(f"[Director] [v] Sử dụng {len(scenes_data)} shots từ đạo diễn")
         else:
             # Fallback: Dùng smart_divide_scenes cũ
             self.logger.warning("[Director] Không có kế hoạch quay, sử dụng smart_divide_scenes...")
@@ -1411,7 +1428,7 @@ Trả về JSON:"""
 
                 if not missing_scenes_data:
                     # Tất cả scenes đã có → skip hoàn toàn
-                    self.logger.info(f"[RESUME] ✓ Tất cả {len(scenes_data)} scenes đã có prompts - SKIP!")
+                    self.logger.info(f"[RESUME] [v] Tất cả {len(scenes_data)} scenes đã có prompts - SKIP!")
                     return True
                 else:
                     # Một số scenes thiếu → chỉ generate phần thiếu
@@ -1447,7 +1464,7 @@ Trả về JSON:"""
                     "shot_type": scene.get("shot_type", ""),
                     "camera_angle": scene.get("camera_angle", ""),
                 })
-            self.logger.info(f"[Director Flow] ✓ Lấy {len(all_scene_prompts)} prompts từ đạo diễn")
+            self.logger.info(f"[Director Flow] [v] Lấy {len(all_scene_prompts)} prompts từ đạo diễn")
         else:
             # === FLOW CŨ: Gọi AI tạo prompts ===
             self.logger.info("[Legacy Flow] Tạo prompts bằng AI...")
@@ -1824,7 +1841,7 @@ Trả về JSON:"""
                 # Detect timeline gaps (khoảng thời gian không có scene nào)
                 timeline_gaps = workbook.detect_timeline_gaps(video_duration_seconds)
                 if not timeline_gaps:
-                    self.logger.info(f"[TIMELINE CHECK] ✓ Không có gaps trong timeline - hoàn thành!")
+                    self.logger.info(f"[TIMELINE CHECK] [v] Không có gaps trong timeline - hoàn thành!")
                     break
 
                 total_gap_duration = sum(g['duration'] for g in timeline_gaps)
@@ -2028,7 +2045,7 @@ Trả về JSON:"""
                         total_new_scenes += 1
 
                 workbook.save()
-                self.logger.info(f"[TIMELINE RETRY] ✓ Đã tạo thêm {total_new_scenes} scenes cho gaps")
+                self.logger.info(f"[TIMELINE RETRY] [v] Đã tạo thêm {total_new_scenes} scenes cho gaps")
 
                 # Delay trước retry tiếp theo
                 if retry_round < max_gap_retries - 1:
@@ -2119,9 +2136,9 @@ Trả về JSON:"""
 
                 if force_filled > 0:
                     workbook.save()
-                    self.logger.info(f"[FINAL] ✓ Force filled {force_filled} scenes cho gaps còn lại!")
+                    self.logger.info(f"[FINAL] [v] Force filled {force_filled} scenes cho gaps còn lại!")
             else:
-                self.logger.info("[FINAL] ✓ Timeline đầy đủ - không còn gaps!")
+                self.logger.info("[FINAL] [v] Timeline đầy đủ - không còn gaps!")
         except Exception as e:
             self.logger.error(f"[FINAL] Lỗi force fill: {e}")
 
@@ -2176,12 +2193,19 @@ Trả về JSON:"""
 
                 # Check if this is a child character
                 is_child = char_data.get("is_child", False)
+                status = char_data.get("status", "pending")
 
                 # If portrait_prompt is DO_NOT_GENERATE, this is a child (no reference image)
                 if portrait_prompt == "DO_NOT_GENERATE":
                     is_child = True
+                    status = "skip"  # Auto set status để bỏ qua tạo ảnh
                     # Keep DO_NOT_GENERATE as marker - don't replace with character_lock
-                    self.logger.info(f"  -> Child character detected: {char_data.get('id', '')} - will use inline description")
+                    self.logger.info(f"  -> Child character detected: {char_data.get('id', '')} - status=skip, will use inline description")
+
+                # Nếu is_child=True nhưng status chưa set, set luôn
+                if is_child and status == "pending":
+                    status = "skip"
+                    self.logger.info(f"  -> Child character: {char_data.get('id', '')} - status=skip (no image generation)")
 
                 characters.append(Character(
                     id=char_data.get("id", ""),
@@ -2191,6 +2215,7 @@ Trả về JSON:"""
                     character_lock=character_lock,    # For scene prompts (IMPORTANT!)
                     vietnamese_prompt=char_data.get("vietnamese_prompt", char_data.get("vietnamese_description", "")),
                     is_child=is_child,
+                    status=status,  # skip cho trẻ em, pending cho người lớn
                 ))
 
             # Extract locations (v5.0 format)
@@ -2703,7 +2728,7 @@ Estimated Shots: {part_info.get('estimated_shots', 5)}
 
                 if gap > 60:  # Gap > 1 phút
                     self.logger.warning(
-                        f"[SRT CHECK] ⚠️ GAP trong SRT: "
+                        f"[SRT CHECK] [WARN] GAP trong SRT: "
                         f"{self._format_timedelta(srt_entries[i].end_time)} -> "
                         f"{self._format_timedelta(srt_entries[i + 1].start_time)} "
                         f"(gap: {gap:.0f}s = {gap/60:.1f} phút)"
@@ -2838,14 +2863,14 @@ Estimated Shots: {part_info.get('estimated_shots', 5)}
                 chunk_parts = chunk_plan.get("story_parts", [])
 
                 if chunk_parts:
-                    self.logger.info(f"[TIER 1] ✅ Chunk {chunk_num} succeeded with DeepSeek!")
+                    self.logger.info(f"[TIER 1] [OK] Chunk {chunk_num} succeeded with DeepSeek!")
                     break
                 else:
                     self.logger.error(f"[TIER 1] Chunk {chunk_num} attempt {attempt+1} - empty story_parts")
 
             # === TIER 2: SRT Fallback (luôn hoạt động) ===
             if not chunk_parts:
-                self.logger.warning(f"[TIER 2] ⚠️ DeepSeek failed for chunk {chunk_num}, using SRT FALLBACK...")
+                self.logger.warning(f"[TIER 2] [WARN] DeepSeek failed for chunk {chunk_num}, using SRT FALLBACK...")
                 self.logger.warning(f"[TIER 2] Creating shots from {len(chunk_entries)} SRT entries...")
                 chunk_parts = self._create_fallback_shots_from_srt(
                     chunk_entries,
@@ -2854,11 +2879,11 @@ Estimated Shots: {part_info.get('estimated_shots', 5)}
                     global_style
                 )
                 fallback_shots = sum(len(p.get("shots", [])) for p in chunk_parts) if chunk_parts else 0
-                self.logger.info(f"[TIER 2] ✅ FALLBACK created {len(chunk_parts) if chunk_parts else 0} parts, {fallback_shots} shots")
+                self.logger.info(f"[TIER 2] [OK] FALLBACK created {len(chunk_parts) if chunk_parts else 0} parts, {fallback_shots} shots")
 
             # Safety check - nếu vẫn không có chunk_parts, tạo empty list để tránh crash
             if not chunk_parts:
-                self.logger.error(f"[Director CHUNKING] 🚨 CRITICAL: Chunk {chunk_num} has NO parts even after fallback!")
+                self.logger.error(f"[Director CHUNKING] [!] CRITICAL: Chunk {chunk_num} has NO parts even after fallback!")
                 chunk_parts = []
 
             # Adjust part and shot numbers + VALIDATE TIMESTAMPS
@@ -3016,12 +3041,12 @@ Estimated Shots: {part_info.get('estimated_shots', 5)}
                         if gap_sec > 30:
                             gap_info = f"Shot {current_shot.get('shot_number')} ({current_end}) -> Shot {next_shot.get('shot_number')} ({next_start}): GAP {gap_sec:.0f}s"
                             gaps_found.append((gap_sec, gap_info, i))
-                            self.logger.warning(f"[GAP CHECK] ⚠️ {gap_info}")
+                            self.logger.warning(f"[GAP CHECK] [WARN] {gap_info}")
                 except Exception as e:
                     pass  # Ignore parsing errors
 
             if gaps_found:
-                self.logger.error(f"[GAP CHECK] ⚠️ TÌM THẤY {len(gaps_found)} GAPS LỚN!")
+                self.logger.error(f"[GAP CHECK] [WARN] TÌM THẤY {len(gaps_found)} GAPS LỚN!")
                 self.logger.error("[GAP CHECK] Đang tự động fill từ SRT entries...")
 
                 # === AUTO-FILL GAPS TỪ SRT ===
@@ -3092,11 +3117,11 @@ Estimated Shots: {part_info.get('estimated_shots', 5)}
                                         "shots": fill_shots
                                     }
                                     all_parts.append(new_part)
-                                    self.logger.info(f"[GAP FILL] ✅ Đã thêm {len(fill_shots)} shots để fill gap")
+                                    self.logger.info(f"[GAP FILL] [OK] Đã thêm {len(fill_shots)} shots để fill gap")
                         except Exception as e:
                             self.logger.warning(f"[GAP FILL] Lỗi fill gap: {e}")
             else:
-                self.logger.info("[GAP CHECK] ✅ Không có gaps lớn")
+                self.logger.info("[GAP CHECK] [OK] Không có gaps lớn")
 
         # Đếm lại total shots sau khi fill gaps
         total_shots_final = sum(len(p.get("shots", [])) for p in all_parts)
@@ -4382,7 +4407,7 @@ Return JSON: {{"scenes": [{{"scene_id": 1, "img_prompt": "...", "video_prompt": 
                 # Create STORY-AWARE visual based on scene_type and scene text
                 scene_text = scene.get("text", "").lower()
 
-                # 🔥 HOOK SCENES (1-3) - CRITICAL FOR VIEWER RETENTION!
+                # [HOT] HOOK SCENES (1-3) - CRITICAL FOR VIEWER RETENTION!
                 # These scenes need EXTRA dramatic visuals to hook viewers immediately
                 if idx < 3:
                     hook_visual = self._create_hook_visual(idx, scene_text, char_parts, loc_part)
@@ -5314,7 +5339,7 @@ DURATION: {duration:.1f}s → {num_shots} shot(s)
 }}
 
 === EXAMPLE HIGH-QUALITY PROMPT ===
-"Close-up shot, 85mm portrait lens, 35-year-old Asian man with salt-and-pepper hair and tired eyes, wearing a faded blue work shirt, his weathered hands gripping an old photograph, tears welling in his eyes as memories flood back, soft diffused window light casting gentle shadows on his face, bokeh background of a modest living room, photorealistic, 4K cinematic quality. (nvc.png)"
+"Close-up shot, 85mm portrait lens, 35-year-old Caucasian man with salt-and-pepper hair and tired eyes, wearing a faded blue work shirt, his weathered hands gripping an old photograph, tears welling in his eyes as memories flood back, soft diffused window light casting gentle shadows on his face, bokeh background of a modest living room, photorealistic, 4K cinematic quality. (nvc.png)"
 
 NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summary if scene_summary else srt_text[:100]}"
 """
@@ -5546,7 +5571,7 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
             # BƯỚC 2: Nhóm SRT entries thành scenes
             self.logger.info("\n[V2 BƯỚC 2] Nhóm SRT entries thành scenes...")
             scenes = self._group_srt_entries_v2(srt_entries, characters, locations)
-            self.logger.info(f"[V2 BƯỚC 2] ✓ Tạo được {len(scenes)} scenes")
+            self.logger.info(f"[V2 BƯỚC 2] [v] Tạo được {len(scenes)} scenes")
 
             # BƯỚC 3: Tạo shots cho mỗi scene - XỬ LÝ THEO BATCH ĐỂ TRÁNH LỖI TOKEN
             self.logger.info("\n[V2 BƯỚC 3] Tạo shots cho mỗi scene (batch mode)...")
@@ -5570,12 +5595,12 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
                         for shot in shots:
                             # Validate timestamp
                             if not shot.get("srt_start") or not shot.get("srt_end"):
-                                self.logger.warning(f"    ⚠️ Shot thiếu timestamp, dùng fallback")
+                                self.logger.warning(f"    [WARN] Shot thiếu timestamp, dùng fallback")
                                 continue
 
                             # Validate prompt
                             if not shot.get("img_prompt") or len(shot.get("img_prompt", "")) < 20:
-                                self.logger.warning(f"    ⚠️ Shot thiếu prompt, dùng fallback")
+                                self.logger.warning(f"    [WARN] Shot thiếu prompt, dùng fallback")
                                 continue
 
                             # Validate references - đảm bảo luôn có
@@ -5589,7 +5614,7 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
 
                         # Nếu không có shot valid, dùng fallback cho scene
                         if not validated_shots:
-                            self.logger.warning(f"    ⚠️ Scene {scene['scene_id']} không có shot valid, tạo fallback...")
+                            self.logger.warning(f"    [WARN] Scene {scene['scene_id']} không có shot valid, tạo fallback...")
                             num_shots = max(1, int(scene.get("duration_seconds", 5) / 8) + 1)
                             start_secs = self._timestamp_to_seconds_v2(scene.get("srt_start", "00:00:00,000"))
                             validated_shots = self._create_fallback_shots_v2(
@@ -5601,7 +5626,7 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
                         self.logger.info(f"    Scene {scene['scene_id']}: {len(validated_shots)} shots ({scene['srt_start']} - {scene['srt_end']})")
 
                     except Exception as scene_err:
-                        self.logger.error(f"    ❌ Scene {scene['scene_id']} lỗi: {scene_err}, tạo fallback...")
+                        self.logger.error(f"    [FAIL] Scene {scene['scene_id']} lỗi: {scene_err}, tạo fallback...")
                         # Tạo fallback cho scene lỗi
                         num_shots = max(1, int(scene.get("duration_seconds", 5) / 8) + 1)
                         start_secs = self._timestamp_to_seconds_v2(scene.get("srt_start", "00:00:00,000"))
@@ -5616,7 +5641,7 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
                     import time
                     time.sleep(1)
 
-            self.logger.info(f"\n[V2 BƯỚC 3] ✓ Tạo được {len(all_shots)} shots tổng cộng")
+            self.logger.info(f"\n[V2 BƯỚC 3] [v] Tạo được {len(all_shots)} shots tổng cộng")
 
             # === SẮP XẾP VÀ VALIDATE TIMESTAMPS ===
             # Đảm bảo thứ tự đúng và không có timestamp nhảy bất thường
@@ -5628,7 +5653,7 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
                     return 0
 
             all_shots.sort(key=get_start_seconds)
-            self.logger.info("[V2] ✓ Đã sắp xếp shots theo timestamp")
+            self.logger.info("[V2] [v] Đã sắp xếp shots theo timestamp")
 
             # === VALIDATE: Kiểm tra timestamp không nhảy bất thường ===
             # Nếu shot N có start_time > shot N-1 end_time + 10s → cảnh báo
@@ -5648,7 +5673,7 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
                 # Kiểm tra gap bất thường
                 gap = shot_start - prev_end_seconds
                 if prev_end_seconds > 0 and gap > MAX_GAP_SECONDS:
-                    self.logger.warning(f"  ⚠️ Gap bất thường {gap:.1f}s tại {shot['srt_start']}, điều chỉnh...")
+                    self.logger.warning(f"  [WARN] Gap bất thường {gap:.1f}s tại {shot['srt_start']}, điều chỉnh...")
                     # Điều chỉnh timestamp để liên tục
                     duration = shot_end - shot_start
                     shot["srt_start"] = self._seconds_to_timestamp(prev_end_seconds)
@@ -5659,7 +5684,7 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
                 prev_end_seconds = shot_end
 
             all_shots = validated_shots
-            self.logger.info(f"[V2] ✓ Validated {len(all_shots)} shots với timestamps liên tục")
+            self.logger.info(f"[V2] [v] Validated {len(all_shots)} shots với timestamps liên tục")
 
             # BƯỚC 4: Lưu vào Excel
             self.logger.info("\n[V2 BƯỚC 4] Lưu vào Excel...")
@@ -5670,7 +5695,7 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
 
             # === CLEAR SCENES CŨ TRƯỚC KHI THÊM MỚI ===
             workbook.clear_scenes()
-            self.logger.info("[V2] ✓ Đã xóa scenes cũ")
+            self.logger.info("[V2] [v] Đã xóa scenes cũ")
 
             # Đánh số scene_id mới theo thứ tự
             for idx, shot in enumerate(all_shots):
@@ -5721,7 +5746,7 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
                 workbook.add_scene(scene_obj)
 
             workbook.save()
-            self.logger.info(f"[V2 BƯỚC 4] ✓ Đã lưu {len(all_shots)} shots vào Excel")
+            self.logger.info(f"[V2 BƯỚC 4] [v] Đã lưu {len(all_shots)} shots vào Excel")
 
             self.logger.info("\n" + "=" * 60)
             self.logger.info("[V2 FLOW] HOÀN THÀNH!")
@@ -5735,6 +5760,288 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
             self.logger.error(traceback.format_exc())
             return False
 
+    def _analyze_srt_for_characters(self, srt_entries: List) -> dict:
+        """
+        Phân tích nội dung SRT để đoán nhân vật và bối cảnh.
+        TRÍCH XUẤT mô tả chi tiết từ SRT để tạo prompt độc đáo cho mỗi project.
+
+        Returns:
+            dict với keys: narrator_type, characters, locations, theme, extracted_descriptions
+        """
+        import re
+
+        # Gộp tất cả text từ SRT - giữ nguyên case để trích xuất mô tả
+        all_text_original = " ".join([
+            entry.get("text", "") if isinstance(entry, dict) else str(entry)
+            for entry in srt_entries
+        ])
+        all_text = all_text_original.lower()
+
+        result = {
+            "narrator_gender": "neutral",  # male, female, neutral
+            "narrator_age": "adult",       # child, young, adult, elderly
+            "characters": [],              # List of detected character types with descriptions
+            "locations": [],               # List of detected location types with descriptions
+            "theme": "general",            # romance, action, family, horror, etc.
+            "ethnicity": "western",        # western (default/American), asian, african
+            "extracted_char_descriptions": [],  # Mô tả nhân vật trích từ SRT
+            "extracted_loc_descriptions": [],   # Mô tả bối cảnh trích từ SRT
+        }
+
+        # === TRÍCH XUẤT MÔ TẢ NHÂN VẬT TỪ SRT ===
+        # Tìm các pattern mô tả người: "a/an/the [adj] [adj] man/woman/boy/girl..."
+        char_patterns = [
+            # English patterns
+            r'(?:a|an|the)\s+((?:\w+\s+){0,3})(man|woman|boy|girl|child|lady|gentleman|guy|person|old man|old woman|young man|young woman)',
+            r'((?:\w+\s+){0,3})(father|mother|dad|mom|grandfather|grandmother|grandpa|grandma|uncle|aunt|brother|sister|son|daughter)',
+            r'(?:he|she) (?:was|is|looked|appeared)\s+((?:\w+\s*){1,5})',
+            r'(?:his|her) ((?:\w+\s+){0,2})(face|eyes|hair|smile|voice|hands)',
+            # Vietnamese patterns
+            r'(?:một|người)\s+((?:\w+\s+){0,3})(đàn ông|phụ nữ|con trai|con gái|ông già|bà già|thanh niên|cô gái|chàng trai)',
+            r'((?:\w+\s+){0,3})(bố|mẹ|cha|má|ông|bà|anh|chị|em|con)',
+        ]
+
+        extracted_chars = []
+        for pattern in char_patterns:
+            matches = re.findall(pattern, all_text, re.IGNORECASE)
+            for match in matches:
+                if isinstance(match, tuple):
+                    desc = " ".join(match).strip()
+                else:
+                    desc = match.strip()
+                if desc and len(desc) > 3 and desc not in extracted_chars:
+                    extracted_chars.append(desc)
+
+        result["extracted_char_descriptions"] = extracted_chars[:10]  # Max 10
+
+        # === TRÍCH XUẤT MÔ TẢ BỐI CẢNH TỪ SRT ===
+        loc_patterns = [
+            # English patterns
+            r'(?:in|at|on|inside|outside|near|by)\s+(?:a|an|the)\s+((?:\w+\s+){0,4})(house|home|room|office|street|park|beach|mountain|city|village|hospital|school|restaurant|cafe|garden|forest|lake|river|building|church|store|shop)',
+            r'(?:the)\s+((?:\w+\s+){0,3})(sky|sun|moon|rain|snow|night|morning|evening|sunset|sunrise)',
+            r'(?:a|an|the)\s+((?:\w+\s+){0,3})(old|abandoned|beautiful|dark|bright|quiet|busy|empty|crowded)\s+(\w+)',
+            # Vietnamese patterns
+            r'(?:ở|tại|trong|ngoài|bên)\s+((?:\w+\s+){0,4})(nhà|phòng|đường|công viên|bãi biển|núi|thành phố|làng|bệnh viện|trường|quán|vườn|rừng|hồ|sông)',
+            r'((?:\w+\s+){0,3})(trời|nắng|mưa|tuyết|đêm|sáng|chiều|hoàng hôn|bình minh)',
+        ]
+
+        extracted_locs = []
+        for pattern in loc_patterns:
+            matches = re.findall(pattern, all_text, re.IGNORECASE)
+            for match in matches:
+                if isinstance(match, tuple):
+                    desc = " ".join(match).strip()
+                else:
+                    desc = match.strip()
+                if desc and len(desc) > 3 and desc not in extracted_locs:
+                    extracted_locs.append(desc)
+
+        result["extracted_loc_descriptions"] = extracted_locs[:10]  # Max 10
+
+        # === PHÁT HIỆN GIỚI TÍNH NGƯỜI KỂ ===
+        male_vi = ["tôi là đàn ông", "anh ấy", "ông ấy", "chú ấy", "bố tôi", "cha tôi", "con trai"]
+        female_vi = ["tôi là phụ nữ", "cô ấy", "bà ấy", "dì ấy", "mẹ tôi", "con gái"]
+        male_en = ["i am a man", "he said", "his father", "my father", "the boy", "the man"]
+        female_en = ["i am a woman", "she said", "her mother", "my mother", "the girl", "the woman"]
+
+        male_count = sum(1 for k in male_vi + male_en if k in all_text)
+        female_count = sum(1 for k in female_vi + female_en if k in all_text)
+
+        if male_count > female_count + 2:
+            result["narrator_gender"] = "male"
+        elif female_count > male_count + 2:
+            result["narrator_gender"] = "female"
+
+        # === PHÁT HIỆN TUỔI ===
+        child_kw = ["con nít", "em bé", "trẻ con", "child", "kid", "baby", "tuổi thơ", "childhood"]
+        elderly_kw = ["ông bà", "già", "elderly", "grandfather", "grandmother", "old age", "về già"]
+        young_kw = ["thanh niên", "trẻ tuổi", "young", "teenager", "youth", "tuổi trẻ"]
+
+        if any(k in all_text for k in child_kw):
+            result["narrator_age"] = "child"
+        elif any(k in all_text for k in elderly_kw):
+            result["narrator_age"] = "elderly"
+        elif any(k in all_text for k in young_kw):
+            result["narrator_age"] = "young"
+
+        # === PHÁT HIỆN NHÂN VẬT ===
+        char_patterns = [
+            # (pattern keywords, character type, gender, age)
+            (["mẹ", "mother", "mom", "má"], "Mother Figure", "female", "adult"),
+            (["bố", "father", "dad", "ba", "cha"], "Father Figure", "male", "adult"),
+            (["con trai", "son", "cậu bé", "boy"], "Son/Boy", "male", "young"),
+            (["con gái", "daughter", "cô bé", "girl"], "Daughter/Girl", "female", "young"),
+            (["ông", "grandfather", "ông nội", "ông ngoại"], "Grandfather", "male", "elderly"),
+            (["bà", "grandmother", "bà nội", "bà ngoại"], "Grandmother", "female", "elderly"),
+            (["vợ", "wife", "người yêu", "girlfriend", "bạn gái"], "Wife/Lover", "female", "adult"),
+            (["chồng", "husband", "boyfriend", "bạn trai"], "Husband/Lover", "male", "adult"),
+            (["bạn", "friend", "đồng nghiệp", "colleague"], "Friend", "neutral", "adult"),
+            (["thầy", "teacher", "giáo viên", "professor"], "Teacher", "neutral", "adult"),
+            (["bác sĩ", "doctor", "y tá", "nurse"], "Doctor", "neutral", "adult"),
+            (["em bé", "baby", "infant", "trẻ sơ sinh"], "Baby", "neutral", "child"),
+        ]
+
+        detected_chars = []
+        for keywords, char_type, gender, age in char_patterns:
+            if any(k in all_text for k in keywords):
+                detected_chars.append({
+                    "type": char_type,
+                    "gender": gender,
+                    "age": age
+                })
+        result["characters"] = detected_chars[:4]  # Max 4 characters
+
+        # === PHÁT HIỆN BỐI CẢNH ===
+        loc_patterns = [
+            (["nhà", "home", "phòng", "room", "căn hộ", "apartment"], "Home Interior"),
+            (["trường", "school", "lớp học", "classroom"], "School"),
+            (["bệnh viện", "hospital", "phòng khám", "clinic"], "Hospital"),
+            (["công viên", "park", "vườn", "garden"], "Park/Garden"),
+            (["biển", "beach", "ocean", "sea", "bãi biển"], "Beach/Ocean"),
+            (["núi", "mountain", "đồi", "hill"], "Mountain"),
+            (["thành phố", "city", "downtown", "urban"], "City"),
+            (["làng", "village", "quê", "countryside", "nông thôn"], "Village/Countryside"),
+            (["nhà hàng", "restaurant", "quán", "cafe", "coffee"], "Restaurant/Cafe"),
+            (["văn phòng", "office", "công ty", "company"], "Office"),
+            (["đêm", "night", "tối", "dark"], "Night Scene"),
+            (["mưa", "rain", "storm", "bão"], "Rainy Scene"),
+        ]
+
+        detected_locs = []
+        for keywords, loc_type in loc_patterns:
+            if any(k in all_text for k in keywords):
+                detected_locs.append(loc_type)
+        result["locations"] = detected_locs[:5]  # Max 5 locations
+
+        # === PHÁT HIỆN CHỦ ĐỀ ===
+        theme_patterns = [
+            (["tình yêu", "love", "yêu", "hôn", "kiss", "trái tim", "heart"], "romance"),
+            (["gia đình", "family", "bố mẹ", "con cái", "parents", "children"], "family"),
+            (["chiến tranh", "war", "battle", "soldier", "lính"], "war"),
+            (["ma", "ghost", "horror", "sợ", "scary", "kinh dị"], "horror"),
+            (["hài", "comedy", "funny", "laugh", "cười"], "comedy"),
+            (["phiêu lưu", "adventure", "journey", "travel", "du lịch"], "adventure"),
+            (["thành công", "success", "business", "kinh doanh", "công việc"], "business"),
+        ]
+
+        for keywords, theme in theme_patterns:
+            if any(k in all_text for k in keywords):
+                result["theme"] = theme
+                break
+
+        # === PHÁT HIỆN DÂN TỘC/VĂN HÓA ===
+        # Mặc định là Western/American, chỉ đổi nếu phát hiện từ khóa khác
+        asian_kw = ["việt nam", "vietnam", "asian", "châu á", "nhật", "japan", "hàn", "korea",
+                    "trung quốc", "china", "thái lan", "thailand", "singapore"]
+        african_kw = ["africa", "african", "châu phi"]
+
+        if any(k in all_text for k in asian_kw):
+            result["ethnicity"] = "asian"
+        elif any(k in all_text for k in african_kw):
+            result["ethnicity"] = "african"
+        # else: giữ mặc định "western"
+
+        return result
+
+    def _build_character_prompt(self, char_info: dict, ethnicity: str) -> str:
+        """Tạo prompt cho nhân vật dựa trên thông tin phân tích."""
+        gender = char_info.get("gender", "neutral")
+        age = char_info.get("age", "adult")
+        char_type = char_info.get("type", "Person")
+
+        # Base ethnicity
+        eth_map = {
+            "asian": "Asian",
+            "western": "Caucasian",
+            "african": "African",
+            "neutral": ""
+        }
+        eth_str = eth_map.get(ethnicity, "")
+
+        # Gender
+        gender_map = {
+            "male": "man",
+            "female": "woman",
+            "neutral": "person"
+        }
+        gender_str = gender_map.get(gender, "person")
+
+        # Age
+        age_map = {
+            "child": "young child",
+            "young": "young adult in their 20s",
+            "adult": "adult in their 30s-40s",
+            "elderly": "elderly person in their 60s-70s"
+        }
+        age_str = age_map.get(age, "adult")
+
+        # Build prompt
+        prompt = f"{age_str} {eth_str} {gender_str}".strip()
+        prompt = prompt.replace("  ", " ")
+
+        # Add character-specific details
+        type_details = {
+            "Mother Figure": "warm maternal expression, caring demeanor, comfortable home attire",
+            "Father Figure": "strong protective presence, kind eyes, casual smart clothing",
+            "Son/Boy": "energetic expression, casual youthful clothing, bright eyes",
+            "Daughter/Girl": "sweet expression, youthful clothing, innocent charm",
+            "Grandfather": "wise weathered face, gentle smile, traditional comfortable clothing",
+            "Grandmother": "warm nurturing face, silver hair, traditional comfortable clothing",
+            "Wife/Lover": "loving expression, elegant casual wear, graceful demeanor",
+            "Husband/Lover": "devoted expression, smart casual clothing, strong presence",
+            "Friend": "friendly open expression, casual modern clothing, approachable demeanor",
+            "Teacher": "intelligent expression, professional attire, authoritative but kind",
+            "Doctor": "professional appearance, white coat or medical attire, competent demeanor",
+            "Baby": "innocent cherubic face, soft features, baby clothing",
+        }
+
+        details = type_details.get(char_type, "expressive face, appropriate attire for the scene")
+
+        return f"{prompt}, {details}, photorealistic portrait, cinematic lighting, 8K quality"
+
+    def _build_narrator_from_analysis(self, analysis: dict) -> tuple:
+        """Tạo CHARACTER_LOCK và COSTUME_LOCK cho narrator dựa trên phân tích."""
+        gender = analysis.get("narrator_gender", "neutral")
+        age = analysis.get("narrator_age", "adult")
+        ethnicity = analysis.get("ethnicity", "western")
+
+        eth_map = {"asian": "Asian", "western": "Caucasian", "african": "African", "neutral": ""}
+        eth_str = eth_map.get(ethnicity, "Caucasian")
+
+        # Build character description based on analysis
+        if gender == "male":
+            if age == "elderly":
+                char_lock = f"elderly {eth_str} man in his 60s, silver-grey hair, wise weathered face, gentle tired eyes, dignified expression"
+            elif age == "young":
+                char_lock = f"young {eth_str} man in his 20s, youthful face, expressive eyes, slight smile, energetic yet thoughtful"
+            else:
+                char_lock = f"middle-aged {eth_str} man in his 30s-40s, short dark hair, gentle tired eyes, slight stubble, warm complexion"
+        elif gender == "female":
+            if age == "elderly":
+                char_lock = f"elderly {eth_str} woman in her 60s, silver hair, warm weathered face, kind eyes, graceful aging"
+            elif age == "young":
+                char_lock = f"young {eth_str} woman in her 20s, expressive face, gentle features, bright eyes, youthful glow"
+            else:
+                char_lock = f"middle-aged {eth_str} woman in her 30s-40s, elegant features, warm eyes, gentle expression, graceful demeanor"
+        else:
+            # Neutral - default to contemplative adult
+            char_lock = f"adult {eth_str} person, contemplative expression, gentle eyes, thoughtful demeanor, timeless appearance"
+
+        # Costume based on theme
+        theme = analysis.get("theme", "general")
+        costume_map = {
+            "romance": "wearing elegant casual attire, soft colors, romantic style",
+            "family": "wearing comfortable home clothes, warm sweater, relaxed appearance",
+            "war": "wearing simple practical clothing, muted colors, weathered appearance",
+            "horror": "wearing dark clothing, slightly disheveled, tense posture",
+            "business": "wearing smart business casual, neat appearance, professional",
+            "adventure": "wearing practical outdoor clothing, ready for action",
+            "general": "wearing comfortable dark blue knit sweater over white collared shirt, casual but neat"
+        }
+        costume_lock = costume_map.get(theme, costume_map["general"])
+
+        return char_lock, costume_lock
+
     def _generate_fallback_only(
         self,
         srt_entries: List,
@@ -5746,13 +6053,11 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
         """
         Tạo Excel với fallback prompts kiểu "Narrator + Flashback".
 
+        PHÂN TÍCH SRT để tạo nhân vật phù hợp với kịch bản.
+
         Ratio: 30% Narrator, 70% Flashback
         - Narrator: Nhân vật kể chuyện tại location cố định (an toàn, chỉ đổi góc máy)
         - Flashback: Minh họa nội dung SRT + ALL references (Flow tự chọn)
-
-        Ví dụ 10 scenes:
-        - Scene 1, 4, 7: Narrator (3 scenes = 30%)
-        - Scene 2, 3, 5, 6, 8, 9, 10: Flashback (7 scenes = 70%)
         """
         from .excel_manager import Scene, Character as CharObj
         from .utils import group_srt_into_scenes
@@ -5760,19 +6065,18 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
 
         self.logger.info("[FALLBACK] Bắt đầu tạo Excel (30% Narrator + 70% Flashback)...")
 
-        # === BƯỚC 1: Định nghĩa LOCK cố định cho Narrator ===
-        CHARACTER_LOCK = (
-            "35-year-old Asian man with short black hair, gentle tired eyes, "
-            "slight stubble on chin, warm complexion, expressive face showing life experience"
-        )
-        COSTUME_LOCK = (
-            "wearing a comfortable dark blue knit sweater over white collared shirt, "
-            "sleeves slightly rolled up, casual but neat appearance"
-        )
+        # === BƯỚC 0: PHÂN TÍCH SRT ĐỂ ĐOÁN NHÂN VẬT ===
+        analysis = self._analyze_srt_for_characters(srt_entries)
+        self.logger.info(f"[FALLBACK] Phân tích SRT: narrator={analysis['narrator_gender']}/{analysis['narrator_age']}, "
+                        f"theme={analysis['theme']}, chars={len(analysis['characters'])}, locs={len(analysis['locations'])}")
+
+        # === BƯỚC 1: Định nghĩa LOCK cho Narrator (dựa trên phân tích) ===
+        CHARACTER_LOCK, COSTUME_LOCK = self._build_narrator_from_analysis(analysis)
+
         LOCATION_LOCK = (
-            "cozy living room corner, warm soft lamp light from beside, "
-            "wooden bookshelf with old books in background, comfortable armchair, "
-            "evening atmosphere with soft shadows, intimate storytelling setting"
+            "cozy American living room corner, warm table lamp lighting, "
+            "wooden bookshelf with classic books, comfortable leather armchair, "
+            "fireplace in background, evening atmosphere, intimate storytelling setting"
         )
 
         # === BƯỚC 2: Tạo nhân vật narrator trong characters sheet ===
@@ -5780,25 +6084,66 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
             id="nvc",
             name="Narrator",
             role="narrator",
-            vietnamese_prompt="Người kể chuyện hồi tưởng",
+            vietnamese_prompt="Người kể chuyện",
             english_prompt=f"{CHARACTER_LOCK}, {COSTUME_LOCK}",
             character_lock=CHARACTER_LOCK,
             image_file="nvc.png",
             status="pending"
         )
         workbook.add_character(default_char)
-        self.logger.info("[FALLBACK] ✓ Đã tạo nhân vật narrator")
+        self.logger.info(f"[FALLBACK] [v] Narrator: {analysis['narrator_gender']}, {analysis['narrator_age']}")
 
-        # === BƯỚC 3: Tạo thêm các nhân vật placeholder cho Flashback ===
-        # Các nhân vật này sẽ được tạo ảnh, Flow sẽ tự chọn khi cần
-        flashback_chars = [
-            {"id": "char_01", "name": "Main Character", "role": "protagonist",
-             "english_prompt": "Young adult, expressive face, casual modern clothing"},
-            {"id": "char_02", "name": "Supporting Character", "role": "supporting",
-             "english_prompt": "Middle-aged person, warm appearance, neat attire"},
+        # === BƯỚC 3: Tạo nhân vật dựa trên phân tích SRT ===
+        # ID phải bắt đầu bằng "nv" để smart_engine nhận diện
+        flashback_chars = []
+        ethnicity = analysis.get("ethnicity", "western")
+
+        # Lấy mô tả đã trích xuất từ SRT
+        extracted_char_descs = analysis.get("extracted_char_descriptions", [])
+        extracted_loc_descs = analysis.get("extracted_loc_descriptions", [])
+
+        self.logger.info(f"[FALLBACK] Trích xuất từ SRT: {len(extracted_char_descs)} char, {len(extracted_loc_descs)} loc")
+        if extracted_char_descs:
+            self.logger.info(f"[FALLBACK] Mô tả nhân vật: {extracted_char_descs[:3]}")
+        if extracted_loc_descs:
+            self.logger.info(f"[FALLBACK] Mô tả bối cảnh: {extracted_loc_descs[:3]}")
+
+        # Thêm nhân vật từ phân tích (kết hợp với mô tả trích xuất)
+        for i, char_info in enumerate(analysis.get("characters", [])[:3]):
+            char_prompt = self._build_character_prompt(char_info, ethnicity)
+            # Thêm mô tả trích xuất từ SRT nếu có
+            if i < len(extracted_char_descs):
+                srt_desc = extracted_char_descs[i]
+                char_prompt = f"{char_prompt}. Story context: {srt_desc}"
+            flashback_chars.append({
+                "id": f"nv{i+1}",
+                "name": char_info.get("type", f"Character {i+1}"),
+                "role": "supporting",
+                "english_prompt": char_prompt
+            })
+
+        # Nếu không đủ 3 nhân vật, thêm từ mô tả trích xuất hoặc generic
+        generic_chars = [
+            {"type": "Main Character", "gender": "neutral", "age": "adult"},
+            {"type": "Supporting Character", "gender": "neutral", "age": "adult"},
+            {"type": "Background Character", "gender": "neutral", "age": "adult"},
         ]
-        all_char_refs = ["nvc.png"]  # Start with narrator
+        while len(flashback_chars) < 3:
+            idx = len(flashback_chars)
+            char_info = generic_chars[idx]
+            char_prompt = self._build_character_prompt(char_info, ethnicity)
+            # Thêm mô tả từ SRT nếu có
+            if idx < len(extracted_char_descs):
+                srt_desc = extracted_char_descs[idx]
+                char_prompt = f"{char_prompt}. Story context: {srt_desc}"
+            flashback_chars.append({
+                "id": f"nv{idx+1}",
+                "name": char_info.get("type", f"Character {idx+1}"),
+                "role": "supporting",
+                "english_prompt": char_prompt
+            })
 
+        all_char_refs = ["nvc.png"]
         for fc in flashback_chars:
             char_obj = Character(
                 id=fc["id"],
@@ -5811,8 +6156,7 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
             )
             workbook.add_character(char_obj)
             all_char_refs.append(f"{fc['id']}.png")
-
-        self.logger.info(f"[FALLBACK] ✓ Đã tạo {len(flashback_chars) + 1} nhân vật")
+            self.logger.info(f"[FALLBACK] [v] {fc['id']}: {fc['name']}")
 
         # === BƯỚC 4: Lưu backup_characters ===
         backup_chars = [{
@@ -5828,26 +6172,135 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
             })
         workbook.save_backup_characters(backup_chars)
 
-        # === BƯỚC 5: Tạo locations cho Flashback ===
-        flashback_locs = [
-            {"id": "loc_narrator", "name": "Storytelling Room", "lock": LOCATION_LOCK},
-            {"id": "loc_01", "name": "Outdoor Scene", "lock": "outdoor natural setting, daylight, trees and sky visible"},
-            {"id": "loc_02", "name": "Indoor Scene", "lock": "indoor room, warm lighting, comfortable atmosphere"},
-            {"id": "loc_03", "name": "Urban Scene", "lock": "city street, buildings, urban environment"},
-        ]
-        all_loc_refs = []
+        # === BƯỚC 5: Tạo locations dựa trên phân tích SRT ===
+        # QUAN TRỌNG: Locations cũng add vào CHARACTERS sheet (như Character với role=location)
 
+        # Bảng mapping location type -> prompt details (American/Western style)
+        location_prompts = {
+            "Home Interior": {
+                "lock": "American suburban home interior, comfortable sofa, family photos, warm lighting, modern decor",
+                "english_prompt": "Photorealistic American home interior. Spacious living room with comfortable leather sofa, family photos on mantle, warm lamp lighting, hardwood floors. Cozy suburban atmosphere, 8K cinematic quality."
+            },
+            "School": {
+                "lock": "American high school, lockers in hallway, classroom with desks, bright fluorescent lighting",
+                "english_prompt": "Photorealistic American school scene. High school hallway with metal lockers, classroom with individual desks, American flag, bright lighting. Typical US school atmosphere, 8K cinematic quality."
+            },
+            "Hospital": {
+                "lock": "modern American hospital, clean corridors, medical equipment, professional healthcare",
+                "english_prompt": "Photorealistic American hospital scene. Modern medical facility with clean white corridors, advanced equipment, professional staff atmosphere. Contemporary healthcare setting, 8K cinematic quality."
+            },
+            "Park/Garden": {
+                "lock": "American city park, green lawn, oak trees, park benches, joggers",
+                "english_prompt": "Photorealistic American park scene. Beautiful city park with manicured lawns, tall oak trees, wooden benches, people jogging. Central Park style atmosphere, 8K cinematic quality."
+            },
+            "Beach/Ocean": {
+                "lock": "California beach, golden sand, Pacific ocean waves, palm trees, surfers",
+                "english_prompt": "Photorealistic California beach scene. Golden sandy beach, Pacific ocean waves, palm trees swaying, surfers in distance. West coast vibes, sunset lighting, 8K cinematic quality."
+            },
+            "Mountain": {
+                "lock": "Rocky Mountains landscape, snow-capped peaks, pine forests, vast American wilderness",
+                "english_prompt": "Photorealistic Rocky Mountains landscape. Majestic snow-capped peaks, dense pine forests, crystal clear lake, American wilderness. Epic national park scenery, 8K cinematic quality."
+            },
+            "City": {
+                "lock": "New York City street, skyscrapers, yellow taxis, busy sidewalks, urban energy",
+                "english_prompt": "Photorealistic New York City scene. Iconic Manhattan street with towering skyscrapers, yellow taxi cabs, busy pedestrians, steam rising from manholes. Iconic American urban atmosphere, 8K cinematic quality."
+            },
+            "Village/Countryside": {
+                "lock": "American countryside, farmland, red barn, white picket fence, rolling hills",
+                "english_prompt": "Photorealistic American countryside scene. Peaceful farmland with iconic red barn, white picket fence, golden wheat fields, rolling green hills. Heartland America atmosphere, 8K cinematic quality."
+            },
+            "Restaurant/Cafe": {
+                "lock": "American diner or coffee shop, booth seating, neon signs, classic Americana",
+                "english_prompt": "Photorealistic American diner scene. Classic 50s-style diner with red leather booths, chrome counter stools, neon signs, coffee and pie. Nostalgic Americana atmosphere, 8K cinematic quality."
+            },
+            "Office": {
+                "lock": "modern American corporate office, glass walls, ergonomic desks, Silicon Valley style",
+                "english_prompt": "Photorealistic American office scene. Modern open-plan workspace with glass partitions, standing desks, tech startup vibes. Contemporary corporate America, 8K cinematic quality."
+            },
+            "Night Scene": {
+                "lock": "American city at night, neon lights, downtown nightlife, urban noir atmosphere",
+                "english_prompt": "Photorealistic American city night scene. Downtown at night with neon signs, streetlights reflecting on wet pavement, late-night diners glowing. Cinematic noir atmosphere, 8K quality."
+            },
+            "Rainy Scene": {
+                "lock": "rainy American city, wet streets, umbrellas, yellow taxis, reflections",
+                "english_prompt": "Photorealistic rainy New York scene. Rain falling on city streets, yellow taxis with headlights, people with umbrellas, reflections in puddles. Melancholic urban beauty, 8K cinematic quality."
+            },
+        }
+
+        # Tạo locations từ phân tích SRT (kết hợp mô tả trích xuất)
+        # ID format đơn giản: loc1, loc2, loc3...
+        flashback_locs = [
+            {"id": "loc1", "name": "Storytelling Room",  # loc1 cho narrator
+             "lock": LOCATION_LOCK,
+             "english_prompt": f"Photorealistic scene. {LOCATION_LOCK}. Cinematic lighting, 8K quality."}
+        ]
+
+        detected_locs = analysis.get("locations", [])
+        for i, loc_type in enumerate(detected_locs[:5]):  # Max 5 detected locations
+            loc_data = location_prompts.get(loc_type, {
+                "lock": f"{loc_type.lower()}, atmospheric setting, cinematic mood",
+                "english_prompt": f"Photorealistic {loc_type.lower()} scene. Atmospheric setting with beautiful lighting, cinematic composition. 8K quality."
+            })
+            # Thêm mô tả trích xuất từ SRT nếu có
+            english_prompt = loc_data["english_prompt"]
+            if i < len(extracted_loc_descs):
+                srt_loc_desc = extracted_loc_descs[i]
+                english_prompt = f"{english_prompt} Story setting: {srt_loc_desc}."
+            flashback_locs.append({
+                "id": f"loc{i+2}",  # loc2, loc3, loc4... (loc1 đã dùng cho narrator)
+                "name": loc_type,
+                "lock": loc_data["lock"],
+                "english_prompt": english_prompt
+            })
+
+        # Nếu không đủ 6 locations, thêm generic (với mô tả từ SRT nếu có)
+        generic_locs = ["Home Interior", "City", "Park/Garden", "Night Scene", "Village/Countryside"]
+        while len(flashback_locs) < 6:
+            next_id = len(flashback_locs) + 1  # loc2, loc3, loc4...
+            idx = len(flashback_locs) - 1
+            loc_type = generic_locs[idx % len(generic_locs)]
+            if loc_type not in [l["name"] for l in flashback_locs]:
+                loc_data = location_prompts.get(loc_type)
+                english_prompt = loc_data["english_prompt"]
+                # Thêm mô tả từ SRT nếu còn
+                if idx < len(extracted_loc_descs):
+                    srt_loc_desc = extracted_loc_descs[idx]
+                    english_prompt = f"{english_prompt} Story setting: {srt_loc_desc}."
+                flashback_locs.append({
+                    "id": f"loc{next_id}",  # Đơn giản: loc2, loc3, loc4...
+                    "name": loc_type,
+                    "lock": loc_data["lock"],
+                    "english_prompt": english_prompt
+                })
+        all_loc_refs = []
         backup_locs = []
+
         for fl in flashback_locs:
+            # Tạo Character object cho location (role=location) → vào characters sheet
+            loc_as_char = Character(
+                id=fl["id"],
+                name=fl["name"],
+                role="location",  # Đánh dấu là location
+                vietnamese_prompt=fl["name"],
+                english_prompt=fl["english_prompt"],
+                character_lock=fl["lock"],
+                image_file=f"{fl['id']}.png",
+                status="pending"
+            )
+            workbook.add_character(loc_as_char)
+            all_loc_refs.append(f"{fl['id']}.png")
+
+            # Backup data
             backup_locs.append({
                 "id": fl["id"], "name": fl["name"],
                 "location_lock": fl["lock"],
                 "image_file": f"{fl['id']}.png"
             })
-            all_loc_refs.append(f"{fl['id']}.png")
 
         workbook.save_backup_locations(backup_locs)
-        self.logger.info(f"[FALLBACK] ✓ Đã tạo {len(flashback_locs)} locations")
+        for fl in flashback_locs:
+            self.logger.info(f"[FALLBACK] [v] {fl['id']}: {fl['name']}")
+        self.logger.info(f"[FALLBACK] [v] Tổng {len(flashback_locs)} locations từ phân tích SRT")
 
         # === BƯỚC 6: Nhóm SRT thành scenes ===
         scenes_data = group_srt_into_scenes(
@@ -5856,7 +6309,7 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
             max_duration=self.max_scene_duration
         )
         total_scenes = len(scenes_data)
-        self.logger.info(f"[FALLBACK] ✓ Chia thành {total_scenes} scenes từ SRT")
+        self.logger.info(f"[FALLBACK] [v] Chia thành {total_scenes} scenes từ SRT")
 
         # === BƯỚC 7: Xác định scenes nào là Narrator (30%) ===
         # Logic: Mỗi 10 scenes có 3 Narrator ở vị trí 1, 4, 7 (tức index 0, 3, 6)
@@ -6001,7 +6454,7 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
 
             if is_narrator_scene(scene_id):
                 # === NARRATOR SCENE (30%) ===
-                # Chỉ dùng người kể (nvc) + bối cảnh cố định (loc_narrator)
+                # Chỉ dùng người kể (nvc) + bối cảnh cố định (loc1)
                 narrator_count += 1
                 angle_idx = narrator_count % len(narrator_angles)
                 shot_type, lens, composition, lighting, atmosphere, emotion = narrator_angles[angle_idx]
@@ -6009,8 +6462,8 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
                 # References CỐ ĐỊNH cho Narrator - an toàn, nhất quán
                 # Format giống API: characters_used = comma-separated, reference_files = JSON
                 characters_used = "nvc"  # Comma-separated (like API)
-                location_used = "loc_narrator"
-                reference_files = '["nvc.png", "loc_narrator.png"]'  # JSON array (like API)
+                location_used = "loc1"
+                reference_files = '["nvc.png", "loc1.png"]'  # JSON array (like API)
 
                 fallback_prompt = (
                     f"{shot_type}, {lens}. {composition}. "
@@ -6019,12 +6472,11 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
                     f"{LOCATION_LOCK}. "
                     f"Mood: {emotion}. "
                     f"Photorealistic, 8K cinematic quality, film grain, shallow depth of field. "
-                    f"(nvc.png, loc_narrator.png)"
+                    f"(nvc.png, loc1.png)"
                 )
 
             else:
                 # === FLASHBACK SCENE (70%) ===
-                # Dùng TẤT CẢ references - Flow tự chọn phù hợp với SRT content
                 flashback_count += 1
                 angle_idx = flashback_count % len(flashback_angles)
                 shot_type, lens, composition, lighting, atmosphere, emotion = flashback_angles[angle_idx]
@@ -6032,8 +6484,11 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
                 # Format giống API: characters_used = comma-separated, reference_files = JSON
                 all_char_ids = ["nvc"] + [c["id"] for c in flashback_chars]
                 characters_used = ", ".join(all_char_ids)  # Comma-separated (like API)
-                location_used = "loc_01"
-                reference_files = json.dumps(all_refs)  # JSON array (like API)
+                location_used = "loc2"  # Flashback dùng loc2 (loc1 là narrator)
+
+                # Build reference_files từ characters_used và location_used (KHÔNG dùng all_refs)
+                scene_refs = [f"{cid}.png" for cid in all_char_ids] + [f"{location_used}.png"]
+                reference_files = json.dumps(scene_refs)  # Chỉ refs của scene này
 
                 fallback_prompt = (
                     f"{shot_type}, {lens}. {composition}. "
@@ -6085,7 +6540,7 @@ NOW CREATE {num_shots} SHOTS that VISUALLY TELL THIS STORY MOMENT: "{scene_summa
         narrator_pct = round(narrator_count / total_scenes * 100) if total_scenes > 0 else 0
         flashback_pct = round(flashback_count / total_scenes * 100) if total_scenes > 0 else 0
 
-        self.logger.info(f"[FALLBACK] ✓ Excel hoàn thành:")
+        self.logger.info(f"[FALLBACK] [v] Excel hoàn thành:")
         self.logger.info(f"[FALLBACK]   - Narrator: {narrator_count} scenes ({narrator_pct}%) - fixed character/location")
         self.logger.info(f"[FALLBACK]   - Flashback: {flashback_count} scenes ({flashback_pct}%) - có SRT content")
         self.logger.info(f"[FALLBACK]   - ALL scenes có {len(all_refs)} references (Flow tự chọn)")

@@ -10,7 +10,11 @@ import json
 import shutil
 import zipfile
 import urllib.request
+import ssl
 from pathlib import Path
+
+# Disable SSL verification (fix for Windows)
+ssl._create_default_https_context = ssl._create_unverified_context
 
 TOOL_DIR = Path(__file__).parent
 CONFIG_DIR = TOOL_DIR / "config"
@@ -112,6 +116,19 @@ def main():
     print("=" * 40)
     print("  VE3 Tool - Auto Updater")
     print("=" * 40)
+
+    # Clear Python cache to prevent stale bytecode issues
+    print("[*] Clearing Python cache...")
+    for cache_dir in TOOL_DIR.rglob("__pycache__"):
+        try:
+            shutil.rmtree(cache_dir)
+        except:
+            pass
+    for pyc_file in TOOL_DIR.rglob("*.pyc"):
+        try:
+            pyc_file.unlink()
+        except:
+            pass
 
     # Check for branch argument
     if len(sys.argv) > 1:

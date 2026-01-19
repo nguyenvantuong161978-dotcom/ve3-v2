@@ -10,6 +10,23 @@ Workflow:
 4. Cập nhật Excel với đường dẫn ảnh và status
 """
 
+import sys
+import os
+
+# Fix Windows encoding issues
+if sys.platform == "win32":
+    if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        except:
+            pass
+    if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+        try:
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        except:
+            pass
+
+
 import os
 import time
 import yaml
@@ -180,7 +197,7 @@ class FlowImageGenerator:
 
                 # Skip children (status="skip" or english_prompt="DO_NOT_GENERATE")
                 if status == "skip" or prompt == "DO_NOT_GENERATE":
-                    self._log(f"  ⏭️  {char_id}: Child character, skipping (will use inline description)")
+                    self._log(f"  [SKIP]  {char_id}: Child character, skipping (will use inline description)")
                     continue
 
                 self.stats["characters_total"] += 1
@@ -189,12 +206,12 @@ class FlowImageGenerator:
                 output_file = self.nv_path / image_file
                 if output_file.exists() and not overwrite:
                     if status == "done":
-                        self._log(f"  ⏭️  {char_id}: Already done, skipping")
+                        self._log(f"  [SKIP]  {char_id}: Already done, skipping")
                         success_count += 1
                         self.stats["characters_success"] += 1
                         continue
 
-                self._log(f"\n🎨 Generating image for character: {char_id}")
+                self._log(f"\n[GEN] Generating image for character: {char_id}")
                 self._log(f"   Prompt: {prompt[:80]}...")
                 
                 # Generate image
@@ -214,7 +231,7 @@ class FlowImageGenerator:
                     )
                     
                     if downloaded:
-                        self._log(f"   ✅ Saved to: {downloaded}")
+                        self._log(f"   [OK] Saved to: {downloaded}")
                         success_count += 1
                         self.stats["characters_success"] += 1
                         
@@ -222,12 +239,12 @@ class FlowImageGenerator:
                         if col_idx["status"] >= 0:
                             row[col_idx["status"]].value = "done"
                     else:
-                        self._log(f"   ❌ Download failed")
+                        self._log(f"   [FAIL] Download failed")
                         failed_count += 1
                         self.stats["characters_failed"] += 1
                         errors.append(f"{char_id}: Download failed")
                 else:
-                    self._log(f"   ❌ Generation failed: {error}")
+                    self._log(f"   [FAIL] Generation failed: {error}")
                     failed_count += 1
                     self.stats["characters_failed"] += 1
                     errors.append(f"{char_id}: {error}")
@@ -238,13 +255,13 @@ class FlowImageGenerator:
             
             # Save workbook
             wb.save(excel_path)
-            self._log(f"\n💾 Excel updated: {excel_path}")
+            self._log(f"\n[SAVE] Excel updated: {excel_path}")
             
         except Exception as e:
             errors.append(f"Excel error: {str(e)}")
-            self._log(f"❌ Error: {e}")
+            self._log(f"[FAIL] Error: {e}")
         
-        self._log(f"\n📊 Characters: {success_count} success, {failed_count} failed")
+        self._log(f"\n[STATS] Characters: {success_count} success, {failed_count} failed")
         return success_count, failed_count, errors
     
     def generate_scene_images(
@@ -333,12 +350,12 @@ class FlowImageGenerator:
                 # Check if already done
                 if output_file.exists() and not overwrite:
                     if status == "done":
-                        self._log(f"  ⏭️  Scene {scene_id}: Already done, skipping")
+                        self._log(f"  [SKIP]  Scene {scene_id}: Already done, skipping")
                         success_count += 1
                         self.stats["scenes_success"] += 1
                         continue
                 
-                self._log(f"\n🎬 Generating image for Scene {scene_id}")
+                self._log(f"\n[VIDEO] Generating image for Scene {scene_id}")
                 self._log(f"   Prompt: {prompt[:100]}...")
                 
                 # Generate image
@@ -357,7 +374,7 @@ class FlowImageGenerator:
                     )
                     
                     if downloaded:
-                        self._log(f"   ✅ Saved to: {downloaded}")
+                        self._log(f"   [OK] Saved to: {downloaded}")
                         success_count += 1
                         self.stats["scenes_success"] += 1
                         
@@ -367,12 +384,12 @@ class FlowImageGenerator:
                         if col_idx["status_img"] >= 0:
                             row[col_idx["status_img"]].value = "done"
                     else:
-                        self._log(f"   ❌ Download failed")
+                        self._log(f"   [FAIL] Download failed")
                         failed_count += 1
                         self.stats["scenes_failed"] += 1
                         errors.append(f"Scene {scene_id}: Download failed")
                 else:
-                    self._log(f"   ❌ Generation failed: {error}")
+                    self._log(f"   [FAIL] Generation failed: {error}")
                     failed_count += 1
                     self.stats["scenes_failed"] += 1
                     errors.append(f"Scene {scene_id}: {error}")
@@ -383,13 +400,13 @@ class FlowImageGenerator:
             
             # Save workbook
             wb.save(excel_path)
-            self._log(f"\n💾 Excel updated: {excel_path}")
+            self._log(f"\n[SAVE] Excel updated: {excel_path}")
             
         except Exception as e:
             errors.append(f"Excel error: {str(e)}")
-            self._log(f"❌ Error: {e}")
+            self._log(f"[FAIL] Error: {e}")
         
-        self._log(f"\n📊 Scenes: {success_count} success, {failed_count} failed")
+        self._log(f"\n[STATS] Scenes: {success_count} success, {failed_count} failed")
         return success_count, failed_count, errors
     
     def generate_all(
@@ -547,8 +564,8 @@ if __name__ == "__main__":
         sys.exit(0 if total_failed == 0 else 1)
         
     except FileNotFoundError as e:
-        print(f"❌ Config file not found: {e}")
+        print(f"[FAIL] Config file not found: {e}")
         sys.exit(1)
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"[FAIL] Error: {e}")
         sys.exit(1)

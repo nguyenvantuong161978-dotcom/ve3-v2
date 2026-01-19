@@ -176,7 +176,7 @@ def scan_visual_projects() -> List[Dict]:
 
         # Debug: show why project is/isn't ready
         if info["already_done"]:
-            log(f"    - {code}: already done ✓")
+            log(f"    - {code}: already done [v]")
         elif info["ready_for_edit"]:
             log(f"    - {code}: ready ({info['video_count']}v + {info['image_count']}i / {info['total_scenes']} scenes)")
             projects.append(info)

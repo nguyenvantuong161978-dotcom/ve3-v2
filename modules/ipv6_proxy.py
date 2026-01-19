@@ -12,6 +12,23 @@ Proxy kết nối ra ngoài: IPv6 address
 Như vậy RDP vẫn dùng IPv4, Chrome dùng IPv6.
 """
 
+import sys
+import os
+
+# Fix Windows encoding issues
+if sys.platform == "win32":
+    if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        except:
+            pass
+    if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+        try:
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        except:
+            pass
+
+
 import socket
 import threading
 import select
@@ -62,13 +79,13 @@ class IPv6SocksProxy:
             self._thread = threading.Thread(target=self._accept_loop, daemon=True)
             self._thread.start()
 
-            self.log(f"[IPv6-Proxy] ✓ Started on localhost:{self.listen_port}")
+            self.log(f"[IPv6-Proxy] [v] Started on localhost:{self.listen_port}")
             if self.ipv6_address:
                 self.log(f"[IPv6-Proxy] → Routing via: {self.ipv6_address}")
             return True
 
         except Exception as e:
-            self.log(f"[IPv6-Proxy] ✗ Failed to start: {e}")
+            self.log(f"[IPv6-Proxy] [x] Failed to start: {e}")
             return False
 
     def stop(self):
@@ -191,7 +208,7 @@ class IPv6SocksProxy:
             return None
 
     def _connect_via_ipv6(self, host: str, port: int) -> Optional[socket.socket]:
-        """Connect to target - CHỈ dùng IPv6, KHÔNG fallback IPv4."""
+        """Connect to target - CHỈ dùng IPv6 và BIND vào source IPv6 cụ thể."""
         try:
             # CHỈ dùng IPv6 - ÉP BUỘC
             addrinfo = socket.getaddrinfo(host, port, socket.AF_INET6, socket.SOCK_STREAM)
@@ -203,8 +220,17 @@ class IPv6SocksProxy:
             family, socktype, proto, canonname, sockaddr = addrinfo[0]
             sock = socket.socket(family, socktype, proto)
             sock.settimeout(30)
+
+            # === QUAN TRỌNG: BIND vào IPv6 cụ thể để ép dùng đúng source IP ===
+            if self.ipv6_address:
+                try:
+                    # Bind socket vào IPv6 address đã chọn (port 0 = OS chọn port tự do)
+                    sock.bind((self.ipv6_address, 0, 0, 0))  # (host, port, flowinfo, scope_id)
+                except Exception as bind_err:
+                    self.log(f"[IPv6-Proxy] Bind warning: {bind_err}")
+                    # Vẫn thử connect dù bind fail
+
             sock.connect(sockaddr)
-            self.log(f"[IPv6-Proxy] ✓ Connected via IPv6: {host}")
             return sock
 
         except Exception as e:
