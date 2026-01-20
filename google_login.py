@@ -361,14 +361,41 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         except Exception as e:
             log(f"Password step error: {e}", "WARN")
 
-        # === XONG - Đợi login hoàn tất ===
+        # === KIỂM TRA LOGIN THỰC SỰ THÀNH CÔNG ===
         log("Waiting for login to complete...")
-        time.sleep(5)  # Đợi 5s cho login xong
-        log("Login completed!", "OK")
+        time.sleep(5)
+
+        # Kiểm tra URL sau khi login
+        max_check = 5
+        login_success = False
+        for check in range(max_check):
+            current_url = driver.url.lower()
+            log(f"Check {check+1}/{max_check}: URL = {current_url[:60]}...")
+
+            # Login thành công nếu URL không còn ở trang accounts.google.com/signin
+            if "accounts.google.com/signin" not in current_url and \
+               "accounts.google.com/v3/signin" not in current_url:
+                # Kiểm tra thêm: không phải trang error/challenge
+                if "accounts.google.com" not in current_url or \
+                   "myaccount.google.com" in current_url:
+                    login_success = True
+                    log("Login SUCCESS - URL changed!", "OK")
+                    break
+
+            time.sleep(2)
+
+        if not login_success:
+            log("Login FAILED - still on login page!", "ERROR")
+            # Đóng Chrome
+            try:
+                driver.quit()
+            except:
+                pass
+            return False
 
         # Đợi thêm để trang load đầy đủ trước khi tắt
         log("Waiting for page to fully load...")
-        time.sleep(10)  # Đợi thêm 10s cho trang load xong
+        time.sleep(5)
         log("Page loaded, closing browser...", "OK")
 
         # Đóng Chrome (drission_flow_api.py sẽ tự navigate đến project)

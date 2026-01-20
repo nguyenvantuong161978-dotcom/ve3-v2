@@ -199,12 +199,8 @@ class SettingsManager:
         return {}
 
     def save_config(self):
-        print(f"[DEBUG] Saving config to {CONFIG_FILE}")
-        print(f"[DEBUG] video_mode = {self.config.get('video_mode', 'NOT SET')}")
-        print(f"[DEBUG] excel_mode = {self.config.get('excel_mode', 'NOT SET')}")
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             yaml.dump(self.config, f, default_flow_style=False, allow_unicode=True)
-        print(f"[DEBUG] Config saved!")
 
     # Chrome settings
     @property
@@ -1516,13 +1512,89 @@ class VMManager:
     # ================================================================================
 
     def kill_all_chrome(self):
-        self.log("Killing Chrome...", "SYSTEM")
+        """Kill TẤT CẢ Chrome + CMD windows khi tắt tool."""
+        self.log("Killing all Chrome + CMD processes...", "SYSTEM")
         if sys.platform == "win32":
+            # 1. Kill Chrome browsers
             subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"], capture_output=True)
             subprocess.run(["taskkill", "/F", "/IM", "GoogleChromePortable.exe"], capture_output=True)
+            self.log("Killed Chrome processes", "SYSTEM")
+
+            # 2. Force kill Python worker processes bằng WMIC
+            try:
+                result = subprocess.run(
+                    ["wmic", "process", "where", "name='python.exe'", "get", "processid,commandline"],
+                    capture_output=True, text=True, timeout=5
+                )
+                killed_count = 0
+                for line in result.stdout.split('\n'):
+                    if any(x in line for x in ['_run_chrome1', '_run_chrome2', 'run_excel_api', 'run_worker']):
+                        # Extract PID and kill
+                        parts = line.strip().split()
+                        if parts:
+                            pid = parts[-1]
+                            if pid.isdigit():
+                                subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
+                                killed_count += 1
+                self.log(f"Killed {killed_count} Python worker processes", "SYSTEM")
+            except Exception as e:
+                self.log(f"Error killing Python processes: {e}", "SYSTEM", "WARN")
+
+            # 3. Kill ALL CMD windows liên quan đến tool
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                user32 = ctypes.windll.user32
+                killed_cmd = 0
+
+                def enum_and_kill_cmd(hwnd, lParam):
+                    nonlocal killed_cmd
+                    if user32.IsWindowVisible(hwnd):
+                        # Get window class name
+                        class_name = ctypes.create_unicode_buffer(256)
+                        user32.GetClassNameW(hwnd, class_name, 256)
+
+                        # Check if it's a CMD/Console window
+                        if class_name.value in ["ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS"]:
+                            # Get window title
+                            length = user32.GetWindowTextLengthW(hwnd)
+                            title = ""
+                            if length > 0:
+                                title_buf = ctypes.create_unicode_buffer(length + 1)
+                                user32.GetWindowTextW(hwnd, title_buf, length + 1)
+                                title = title_buf.value.upper()
+
+                            # Kill CMD windows có title liên quan đến tool
+                            keywords = ["EXCEL", "CHROME", "PYTHON", "_RUN_CHROME", "RUN_WORKER", "RUN_EXCEL"]
+                            if any(kw in title for kw in keywords) or not title:
+                                # Force close window
+                                user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+                                killed_cmd += 1
+                    return True
+
+                WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+                user32.EnumWindows(WNDENUMPROC(enum_and_kill_cmd), 0)
+                self.log(f"Closed {killed_cmd} CMD windows", "SYSTEM")
+            except Exception as e:
+                self.log(f"Error closing CMD windows: {e}", "SYSTEM", "WARN")
+
+            # 4. Final cleanup - kill any remaining related processes
+            time.sleep(0.5)
+            try:
+                # Kill cmd.exe spawned by our tool
+                subprocess.run(["taskkill", "/F", "/FI", "WINDOWTITLE eq *EXCEL*"], capture_output=True)
+                subprocess.run(["taskkill", "/F", "/FI", "WINDOWTITLE eq *CHROME*"], capture_output=True)
+            except:
+                pass
+
         else:
             subprocess.run(["pkill", "-f", "chrome"], capture_output=True)
-        time.sleep(2)
+            subprocess.run(["pkill", "-f", "_run_chrome"], capture_output=True)
+            subprocess.run(["pkill", "-f", "run_excel_api"], capture_output=True)
+
+        time.sleep(1)
+        self.log("All processes killed", "SYSTEM")
 
     # ================================================================================
     # CHROME WINDOW MANAGEMENT (Hide/Show by moving off-screen)
@@ -1636,7 +1708,7 @@ class VMManager:
             return False
 
     def get_cmd_windows(self) -> List[int]:
-        """Lấy danh sách handle của các cửa sổ CMD cho Chrome workers."""
+        """Lấy danh sách handle của TẤT CẢ cửa sổ CMD (Excel, Chrome 1, Chrome 2)."""
         if sys.platform != "win32":
             return []
 
@@ -1653,16 +1725,24 @@ class VMManager:
                     if length > 0:
                         title = ctypes.create_unicode_buffer(length + 1)
                         user32.GetWindowTextW(hwnd, title, length + 1)
-                        # CMD windows have titles like "CHROME 1" or "CHROME 2"
-                        if "CHROME" in title.value.upper() and "CHROME" not in title.value.lower().replace("chrome ", ""):
+                        title_upper = title.value.upper()
+                        # Tìm TẤT CẢ CMD windows: EXCEL, CHROME 1, CHROME 2
+                        if any(x in title_upper for x in ["EXCEL", "CHROME 1", "CHROME 2", "CHROME1", "CHROME2"]):
                             cmd_windows.append((hwnd, title.value))
                 return True
 
             WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
             user32.EnumWindows(WNDENUMPROC(enum_windows_callback), 0)
 
-            # Sort by title to ensure consistent ordering (CHROME 1 before CHROME 2)
-            cmd_windows.sort(key=lambda x: x[1])
+            # Sort: EXCEL first, then CHROME 1, then CHROME 2
+            def sort_key(x):
+                t = x[1].upper()
+                if "EXCEL" in t:
+                    return 0
+                if "CHROME 1" in t or "CHROME1" in t:
+                    return 1
+                return 2
+            cmd_windows.sort(key=sort_key)
             return [hwnd for hwnd, _ in cmd_windows]
         except Exception as e:
             self.log(f"Error getting CMD windows: {e}", "CHROME", "ERROR")
@@ -1691,10 +1771,10 @@ class VMManager:
 
     def show_chrome_with_cmd(self):
         """
-        Show Chrome và CMD windows cạnh nhau.
-        Layout: [CMD 1][Chrome 1]
-                [CMD 2][Chrome 2]
-        CMD bên trái, Chrome bên phải (cùng hàng)
+        Show TẤT CẢ windows (CMD, Chrome browsers).
+        Layout: 1 hàng ngang trên cùng màn hình
+
+        [Excel CMD] [Chrome 1] [Chrome 1 CMD] [Chrome 2] [Chrome 2 CMD]
         """
         if sys.platform != "win32":
             self.log("Window showing only supported on Windows", "CHROME", "WARN")
@@ -1705,42 +1785,54 @@ class VMManager:
             user32 = ctypes.windll.user32
 
             chrome_windows = self.get_chrome_windows()
-            cmd_windows = self.get_cmd_windows()
+            cmd_windows = self.get_cmd_windows()  # [Excel, Chrome1 CMD, Chrome2 CMD]
 
             # Get screen size
             screen_width = user32.GetSystemMetrics(0)
             screen_height = user32.GetSystemMetrics(1)
 
-            # Sizes
-            cmd_width = 490
+            # Kich thuoc - Chrome TO HON de de quan sat
+            cmd_width = 350
             cmd_height = 450
-            chrome_width = 500
+            chrome_width = 550  # TO HON
             chrome_height = 450
 
-            # Position from right side: [CMD][Chrome]
-            x_cmd = screen_width - cmd_width - chrome_width - 20  # CMD bên trái
-            x_chrome = screen_width - chrome_width - 10  # Chrome bên phải
-            y_start = 50
+            gap = 5
+            y_top = 20  # Tat ca tren cung 1 hang
 
-            # Position CMD windows (bên trái)
-            for i, hwnd in enumerate(cmd_windows):
-                y = y_start + (i * (cmd_height + 10))
-                if y + cmd_height > screen_height:
-                    y = y_start
-                user32.SetWindowPos(hwnd, 0, x_cmd, y, cmd_width, cmd_height, 0x0004)
-                # Restore if minimized
-                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            # Layout: [Excel CMD] [Chrome1] [Chrome1 CMD] [Chrome2] [Chrome2 CMD]
+            x = 10
 
-            # Position Chrome windows (bên phải, cùng hàng với CMD)
-            for i, hwnd in enumerate(chrome_windows):
-                y = y_start + (i * (chrome_height + 10))
-                if y + chrome_height > screen_height:
-                    y = y_start
-                user32.SetWindowPos(hwnd, 0, x_chrome, y, chrome_width, chrome_height, 0x0004)
-                # Restore if minimized
-                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            # 1. Excel CMD (nho, goc trai)
+            if len(cmd_windows) >= 1:
+                user32.SetWindowPos(cmd_windows[0], 0, x, y_top, cmd_width, cmd_height, 0x0004)
+                user32.ShowWindow(cmd_windows[0], 9)
+                x += cmd_width + gap
 
-            self.log(f"Shown {len(cmd_windows)} CMD + {len(chrome_windows)} Chrome windows (side by side)", "CHROME", "SUCCESS")
+            # 2. Chrome 1 (to, de xem)
+            if len(chrome_windows) >= 1:
+                user32.SetWindowPos(chrome_windows[0], 0, x, y_top, chrome_width, chrome_height, 0x0004)
+                user32.ShowWindow(chrome_windows[0], 9)
+                x += chrome_width + gap
+
+            # 3. Chrome 1 CMD (nho)
+            if len(cmd_windows) >= 2:
+                user32.SetWindowPos(cmd_windows[1], 0, x, y_top, cmd_width, cmd_height, 0x0004)
+                user32.ShowWindow(cmd_windows[1], 9)
+                x += cmd_width + gap
+
+            # 4. Chrome 2 (to, de xem)
+            if len(chrome_windows) >= 2:
+                user32.SetWindowPos(chrome_windows[1], 0, x, y_top, chrome_width, chrome_height, 0x0004)
+                user32.ShowWindow(chrome_windows[1], 9)
+                x += chrome_width + gap
+
+            # 5. Chrome 2 CMD (nho)
+            if len(cmd_windows) >= 3:
+                user32.SetWindowPos(cmd_windows[2], 0, x, y_top, cmd_width, cmd_height, 0x0004)
+                user32.ShowWindow(cmd_windows[2], 9)
+
+            self.log(f"Shown {len(cmd_windows)} CMD + {len(chrome_windows)} Chrome (1 row)", "CHROME", "SUCCESS")
             return True
         except Exception as e:
             self.log(f"Error showing Chrome with CMD: {e}", "CHROME", "ERROR")
@@ -1824,35 +1916,15 @@ class VMManager:
                 worker_env['PYTHONUTF8'] = '1'
 
                 if gui_mode:
-                    # GUI mode - minimize CMD window, redirect output to log file
-                    # Chrome will still open and be visible (can be hidden later with hide_chrome_windows)
-                    cmd_list = [sys.executable, '-X', 'utf8', str(script)]
-                    if args:
-                        cmd_list.extend(args.split())
+                    # GUI mode - start with visible CMD, will be moved off-screen later
+                    cmd = f'start "{title}" cmd /k "chcp 65001 >nul && cd /d {TOOL_DIR} && {cmd_args}"'
+                    w.process = subprocess.Popen(cmd, shell=True, cwd=str(TOOL_DIR), env=worker_env)
 
-                    # Open log file
-                    log_handle = open(log_file, 'a', encoding='utf-8', buffering=1)
-                    log_handle.write(f"\n{'='*60}\n")
-                    log_handle.write(f"[{datetime.now().isoformat()}] Starting {worker_id}\n")
-                    log_handle.write(f"Command: {' '.join(cmd_list)}\n")
-                    log_handle.write(f"{'='*60}\n")
-                    log_handle.flush()
-
-                    # Minimize CMD window but let Chrome be visible
-                    startupinfo = subprocess.STARTUPINFO()
-                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                    startupinfo.wShowWindow = 6  # SW_SHOWMINNOACTIVE
-
-                    w.process = subprocess.Popen(
-                        cmd_list,
-                        cwd=str(TOOL_DIR),
-                        stdout=log_handle,
-                        stderr=subprocess.STDOUT,
-                        startupinfo=startupinfo,
-                        creationflags=subprocess.CREATE_NEW_CONSOLE,
-                        env=worker_env
-                    )
-                    w._log_handle = log_handle
+                    # Move CMD windows off-screen after a short delay
+                    def move_cmd_offscreen():
+                        time.sleep(2)  # Wait for CMD to open
+                        self.hide_cmd_windows()
+                    threading.Thread(target=move_cmd_offscreen, daemon=True).start()
                 else:
                     # Normal mode - visible CMD window with UTF-8 code page
                     cmd = f'start "{title}" cmd /k "chcp 65001 >nul && cd /d {TOOL_DIR} && {cmd_args}"'

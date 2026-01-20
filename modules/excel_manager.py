@@ -383,15 +383,15 @@ class PromptWorkbook:
     SRT_COVERAGE_SHEET = "srt_coverage"  # Đối chiếu SRT entries với segments/scenes
     PROCESSING_STATUS_SHEET = "processing_status"  # Trạng thái xử lý từng step
 
-    # Step definitions for tracking
+    # Step definitions for tracking (7 steps)
     STEPS = [
         ("step_1", "Story Analysis", "Phân tích tổng quan câu chuyện"),
-        ("step_1.5", "Story Segments", "Chia câu chuyện thành segments"),
-        ("step_2", "Characters", "Tạo danh sách nhân vật"),
-        ("step_3", "Locations", "Tạo danh sách bối cảnh"),
-        ("step_4", "Director Plan", "Tạo kế hoạch đạo diễn"),
-        ("step_4.5", "Scene Planning", "Lên ý đồ nghệ thuật"),
-        ("step_5", "Scene Prompts", "Tạo prompts cho từng scene"),
+        ("step_2", "Story Segments", "Chia câu chuyện thành segments"),
+        ("step_3", "Characters", "Tạo danh sách nhân vật"),
+        ("step_4", "Locations", "Tạo danh sách bối cảnh"),
+        ("step_5", "Director Plan", "Tạo kế hoạch đạo diễn"),
+        ("step_6", "Scene Planning", "Lên ý đồ nghệ thuật"),
+        ("step_7", "Scene Prompts", "Tạo prompts cho từng scene"),
     ]
 
     def __init__(self, path: Union[str, Path]):
@@ -421,7 +421,12 @@ class PromptWorkbook:
             self._create_new_workbook()
         
         return self
-    
+
+    def _ensure_workbook(self) -> None:
+        """Đảm bảo workbook đã được load."""
+        if self.workbook is None:
+            self.load_or_create()
+
     def _create_new_workbook(self) -> None:
         """Tạo workbook mới với cấu trúc chuẩn."""
         self.workbook = Workbook()
@@ -1802,8 +1807,22 @@ class PromptWorkbook:
     # ========================================================================
 
     def _ensure_processing_status_sheet(self) -> None:
-        """Tạo sheet processing_status nếu chưa có."""
+        """Tạo hoặc migrate sheet processing_status."""
+        self._ensure_workbook()
+
+        # Mapping từ step IDs cũ sang mới
+        OLD_TO_NEW_STEPS = {
+            "step_1": "step_1",      # Story Analysis
+            "step_1.5": "step_2",    # Segments
+            "step_2": "step_3",      # Characters
+            "step_3": "step_4",      # Locations
+            "step_4": "step_5",      # Director Plan
+            "step_4.5": "step_6",    # Scene Planning
+            "step_5": "step_7",      # Scene Prompts
+        }
+
         if self.PROCESSING_STATUS_SHEET not in self.workbook.sheetnames:
+            # Tạo mới
             ws = self.workbook.create_sheet(self.PROCESSING_STATUS_SHEET)
             headers = [
                 "step_id", "step_name", "description", "status",
@@ -1839,6 +1858,87 @@ class PromptWorkbook:
             ws.column_dimensions['G'].width = 12
             ws.column_dimensions['H'].width = 50
             ws.column_dimensions['I'].width = 20
+        else:
+            # Kiểm tra và migrate step IDs cũ
+            ws = self.workbook[self.PROCESSING_STATUS_SHEET]
+            needs_save = False
+
+            # Đọc dữ liệu cũ
+            old_data = {}
+            for row in range(2, ws.max_row + 1):
+                step_id = ws.cell(row=row, column=1).value
+                if step_id and step_id in OLD_TO_NEW_STEPS:
+                    # Lưu dữ liệu
+                    old_data[step_id] = {
+                        'status': ws.cell(row=row, column=4).value,
+                        'items_total': ws.cell(row=row, column=5).value,
+                        'items_done': ws.cell(row=row, column=6).value,
+                        'coverage_pct': ws.cell(row=row, column=7).value,
+                        'notes': ws.cell(row=row, column=8).value,
+                        'last_updated': ws.cell(row=row, column=9).value,
+                    }
+
+            # Kiểm tra nếu cần migrate (có step_1.5 hoặc step_4.5)
+            if 'step_1.5' in old_data or 'step_4.5' in old_data:
+                needs_save = True
+                # Xóa rows cũ và tạo mới
+                self.workbook.remove(ws)
+                ws = self.workbook.create_sheet(self.PROCESSING_STATUS_SHEET)
+
+                headers = [
+                    "step_id", "step_name", "description", "status",
+                    "items_total", "items_done", "coverage_pct", "notes", "last_updated"
+                ]
+                header_font = Font(bold=True, color="FFFFFF")
+                header_fill = PatternFill(start_color="1565C0", end_color="1565C0", fill_type="solid")
+
+                for col, header in enumerate(headers, 1):
+                    cell = ws.cell(row=1, column=col, value=header)
+                    cell.font = header_font
+                    cell.fill = header_fill
+
+                # Initialize steps với dữ liệu migrate
+                for i, (new_step_id, step_name, desc) in enumerate(self.STEPS, 2):
+                    ws.cell(row=i, column=1, value=new_step_id)
+                    ws.cell(row=i, column=2, value=step_name)
+                    ws.cell(row=i, column=3, value=desc)
+
+                    # Tìm dữ liệu từ step cũ
+                    old_step_id = None
+                    for old_id, new_id in OLD_TO_NEW_STEPS.items():
+                        if new_id == new_step_id:
+                            old_step_id = old_id
+                            break
+
+                    if old_step_id and old_step_id in old_data:
+                        d = old_data[old_step_id]
+                        ws.cell(row=i, column=4, value=d.get('status', 'PENDING'))
+                        ws.cell(row=i, column=5, value=d.get('items_total', 0))
+                        ws.cell(row=i, column=6, value=d.get('items_done', 0))
+                        ws.cell(row=i, column=7, value=d.get('coverage_pct', 0))
+                        ws.cell(row=i, column=8, value=d.get('notes', ''))
+                        ws.cell(row=i, column=9, value=d.get('last_updated', ''))
+                    else:
+                        ws.cell(row=i, column=4, value="PENDING")
+                        ws.cell(row=i, column=5, value=0)
+                        ws.cell(row=i, column=6, value=0)
+                        ws.cell(row=i, column=7, value=0)
+                        ws.cell(row=i, column=8, value="")
+                        ws.cell(row=i, column=9, value="")
+
+                # Set column widths
+                ws.column_dimensions['A'].width = 10
+                ws.column_dimensions['B'].width = 18
+                ws.column_dimensions['C'].width = 35
+                ws.column_dimensions['D'].width = 12
+                ws.column_dimensions['E'].width = 12
+                ws.column_dimensions['F'].width = 12
+                ws.column_dimensions['G'].width = 12
+                ws.column_dimensions['H'].width = 50
+                ws.column_dimensions['I'].width = 20
+
+            if needs_save:
+                self.save()
 
     def update_step_status(self, step_id: str, status: str, items_total: int = 0,
                            items_done: int = 0, notes: str = "") -> None:
@@ -1846,7 +1946,7 @@ class PromptWorkbook:
         Cập nhật trạng thái của một step.
 
         Args:
-            step_id: ID của step (step_1, step_1.5, etc.)
+            step_id: ID của step (step_1 to step_7)
             status: PENDING, IN_PROGRESS, COMPLETED, PARTIAL, ERROR
             items_total: Tổng số items cần xử lý
             items_done: Số items đã xong

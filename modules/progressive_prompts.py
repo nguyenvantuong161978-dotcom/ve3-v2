@@ -556,8 +556,11 @@ Return JSON only:
         - visual_style: Phong cách visual
         - context_lock: Prompt context chung
         """
+        import time
+        step_start = time.time()
+
         self._log("\n" + "="*60)
-        self._log("[STEP 1] Phân tích story...")
+        self._log("[STEP 1/7] Phân tích story...")
         self._log("="*60)
 
         # Check if already done
@@ -565,6 +568,7 @@ Return JSON only:
             existing = workbook.get_story_analysis()
             if existing and existing.get("setting"):
                 self._log("  -> Đã có story_analysis, skip!")
+                workbook.update_step_status("step_1", "COMPLETED", 1, 1, "Already done")
                 return StepResult("analyze_story", StepStatus.COMPLETED, "Already done")
         except:
             pass
@@ -624,18 +628,20 @@ Return JSON only:
             self._log(f"     Setting: {data.get('setting', {}).get('era', 'N/A')}, {data.get('setting', {}).get('location', 'N/A')}")
             self._log(f"     Context: {data.get('context_lock', 'N/A')[:80]}...")
 
-            # TRACKING: Cập nhật trạng thái
+            # TRACKING: Cập nhật trạng thái với thời gian
+            elapsed = int(time.time() - step_start)
             workbook.update_step_status("step_1", "COMPLETED", 1, 1,
-                f"context_lock: {data.get('context_lock', '')[:50]}...")
+                f"{elapsed}s - {data.get('context_lock', '')[:40]}...")
 
             return StepResult("analyze_story", StepStatus.COMPLETED, "Success", data)
         except Exception as e:
             self._log(f"  ERROR: Could not save to Excel: {e}", "ERROR")
-            workbook.update_step_status("step_1", "ERROR", 0, 0, str(e)[:100])
+            elapsed = int(time.time() - step_start)
+            workbook.update_step_status("step_1", "ERROR", 0, 0, f"{elapsed}s - {str(e)[:80]}")
             return StepResult("analyze_story", StepStatus.FAILED, str(e))
 
     # =========================================================================
-    # STEP 1.5: PHÂN TÍCH NỘI DUNG CON (STORY SEGMENTS)
+    # STEP 2: PHÂN TÍCH NỘI DUNG CON (STORY SEGMENTS)
     # =========================================================================
 
     def step_analyze_story_segments(
@@ -657,8 +663,11 @@ Return JSON only:
 
         Output sheet: story_segments
         """
+        import time
+        step_start = time.time()
+
         self._log("\n" + "="*60)
-        self._log("[STEP 1.5] Phân tích nội dung con (story segments)...")
+        self._log("[STEP 2/7] Phân tích nội dung con (story segments)...")
         self._log("="*60)
 
         # Check if already done
@@ -666,6 +675,7 @@ Return JSON only:
             existing = workbook.get_story_segments()
             if existing and len(existing) > 0:
                 self._log(f"  -> Đã có {len(existing)} segments, skip!")
+                workbook.update_step_status("step_2", "COMPLETED", len(existing), len(existing), "Already done")
                 return StepResult("analyze_story_segments", StepStatus.COMPLETED, "Already done")
         except:
             pass
@@ -784,7 +794,13 @@ Return JSON only:
             # === FALLBACK: Tạo segments đơn giản dựa trên SRT ===
             self._log("  -> Creating FALLBACK segments based on SRT duration...")
             total_srt = len(srt_entries)
-            total_duration = srt_entries[-1].end if srt_entries else 300
+            # Parse end_time from last SRT entry
+            try:
+                last_entry = srt_entries[-1]
+                parts = last_entry.end_time.replace(',', ':').split(':')
+                total_duration = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2]) + int(parts[3])/1000
+            except:
+                total_duration = len(srt_entries) * 3  # Fallback: 3s per entry
 
             # Tính số segments (~60s mỗi segment, ~12 ảnh)
             num_segments = max(1, int(total_duration / 60))
@@ -880,21 +896,23 @@ Return JSON only:
             self._log(f"     Covered by segments: {coverage['covered_by_segment']} ({coverage['coverage_percent']}%)")
 
             # Determine status based on coverage
+            elapsed = int(time.time() - step_start)
             if coverage['uncovered'] > 0:
                 self._log(f"     [WARN] UNCOVERED: {coverage['uncovered']} entries", "WARN")
                 status = "PARTIAL" if coverage['coverage_percent'] >= 50 else "ERROR"
-                workbook.update_step_status("step_1.5", status,
+                workbook.update_step_status("step_2", status,
                     coverage['total_srt'], coverage['covered_by_segment'],
-                    f"{len(data['segments'])} segments, {coverage['uncovered']} SRT uncovered")
+                    f"{elapsed}s - {len(data['segments'])} segs, {coverage['uncovered']} uncovered")
             else:
-                workbook.update_step_status("step_1.5", "COMPLETED",
+                workbook.update_step_status("step_2", "COMPLETED",
                     coverage['total_srt'], coverage['covered_by_segment'],
-                    f"{len(data['segments'])} segments, {total_images} images planned")
+                    f"{elapsed}s - {len(data['segments'])} segs, {total_images} imgs")
 
             return StepResult("analyze_story_segments", StepStatus.COMPLETED, "Success", data)
         except Exception as e:
             self._log(f"  ERROR: Could not save to Excel: {e}", "ERROR")
-            workbook.update_step_status("step_1.5", "ERROR", 0, 0, str(e)[:100])
+            elapsed = int(time.time() - step_start)
+            workbook.update_step_status("step_2", "ERROR", 0, 0, f"{elapsed}s - {str(e)[:80]}")
             return StepResult("analyze_story_segments", StepStatus.FAILED, str(e))
 
     # =========================================================================
@@ -915,14 +933,18 @@ Return JSON only:
         Input: Đọc story_analysis từ Excel
         Output sheet: characters
         """
+        import time
+        step_start = time.time()
+
         self._log("\n" + "="*60)
-        self._log("[STEP 2] Tạo characters...")
+        self._log("[STEP 3/7] Tạo characters...")
         self._log("="*60)
 
         # Check if already done
         existing_chars = workbook.get_characters()
         if existing_chars and len(existing_chars) > 0:
             self._log(f"  -> Đã có {len(existing_chars)} characters, skip!")
+            workbook.update_step_status("step_3", "COMPLETED", len(existing_chars), len(existing_chars), "Already done")
             return StepResult("create_characters", StepStatus.COMPLETED, "Already done")
 
         # Read story_analysis from Excel
@@ -1081,13 +1103,20 @@ Return JSON:
             if len(data["characters"]) > 3:
                 self._log(f"     ... và {len(data['characters']) - 3} characters khác")
 
+            # Update step status with duration
+            elapsed = int(time.time() - step_start)
+            workbook.update_step_status("step_3", "COMPLETED", len(data['characters']), len(data['characters']),
+                f"{elapsed}s - {len(data['characters'])} chars")
+
             return StepResult("create_characters", StepStatus.COMPLETED, "Success", data)
         except Exception as e:
             self._log(f"  ERROR: Could not save to Excel: {e}", "ERROR")
+            elapsed = int(time.time() - step_start)
+            workbook.update_step_status("step_3", "ERROR", 0, 0, f"{elapsed}s - {str(e)[:80]}")
             return StepResult("create_characters", StepStatus.FAILED, str(e))
 
     # =========================================================================
-    # STEP 3: TẠO LOCATIONS
+    # STEP 4: TẠO LOCATIONS
     # =========================================================================
 
     def step_create_locations(
@@ -1104,14 +1133,18 @@ Return JSON:
         Input: Đọc story_analysis, characters từ Excel
         Output sheet: locations
         """
+        import time
+        step_start = time.time()
+
         self._log("\n" + "="*60)
-        self._log("[STEP 3] Tạo locations...")
+        self._log("[STEP 4/7] Tạo locations...")
         self._log("="*60)
 
         # Check if already done
         existing_locs = workbook.get_locations()
         if existing_locs and len(existing_locs) > 0:
             self._log(f"  -> Đã có {len(existing_locs)} locations, skip!")
+            workbook.update_step_status("step_4", "COMPLETED", len(existing_locs), len(existing_locs), "Already done")
             return StepResult("create_locations", StepStatus.COMPLETED, "Already done")
 
         # Read context from Excel
@@ -1247,13 +1280,20 @@ Return JSON only:
             for loc in data["locations"][:3]:
                 self._log(f"     - {loc.get('name', 'N/A')}")
 
+            # Update step status with duration
+            elapsed = int(time.time() - step_start)
+            workbook.update_step_status("step_4", "COMPLETED", len(data['locations']), len(data['locations']),
+                f"{elapsed}s - {len(data['locations'])} locs")
+
             return StepResult("create_locations", StepStatus.COMPLETED, "Success", data)
         except Exception as e:
             self._log(f"  ERROR: Could not save to Excel: {e}", "ERROR")
+            elapsed = int(time.time() - step_start)
+            workbook.update_step_status("step_4", "ERROR", 0, 0, f"{elapsed}s - {str(e)[:80]}")
             return StepResult("create_locations", StepStatus.FAILED, str(e))
 
     # =========================================================================
-    # STEP 4: TẠO DIRECTOR'S PLAN (OPTIMIZED - SEGMENT-FIRST)
+    # STEP 5: TẠO DIRECTOR'S PLAN (OPTIMIZED - SEGMENT-FIRST)
     # =========================================================================
 
     def step_create_director_plan(
@@ -1280,204 +1320,112 @@ Return JSON only:
 
         → API chỉ cần quyết định HOW to visualize, không cần re-read toàn bộ story
         """
-        self._log("\n" + "="*60)
-        self._log("[STEP 4] Tạo director's plan (Segment-First)...")
-        self._log("="*60)
+        import time
+        step_start = time.time()
 
-        # Check if already done
-        try:
-            existing_plan = workbook.get_director_plan()
-            if existing_plan and len(existing_plan) > 0:
-                self._log(f"  -> Đã có {len(existing_plan)} scenes trong plan, skip!")
-                return StepResult("create_director_plan", StepStatus.COMPLETED, "Already done")
-        except:
-            pass
+    def _process_segment_sub_batch(self, seg_name, message, visual_summary, key_elements,
+                                    mood, chars_involved, image_count, srt_start, srt_end,
+                                    srt_entries, context_lock, char_locks, loc_locks):
+        """Helper: Xử lý sub-batch nhỏ của segment (dùng khi segment quá lớn hoặc retry fail)."""
+        import time
 
-        # Read context from Excel
-        story_analysis = {}
-        try:
-            story_analysis = workbook.get_story_analysis() or {}
-        except:
-            pass
+        # Lấy SRT text cho sub-batch
+        seg_srt_text = self._get_srt_for_range(srt_entries, srt_start, srt_end)
 
-        characters = workbook.get_characters()
-        locations = workbook.get_locations()
+        # Tính duration
+        seg_duration = (srt_end - srt_start + 1) * 3  # ~3s per entry
 
-        # Đọc story segments - CORE của segment-first approach
-        story_segments = workbook.get_story_segments() or []
-        if not story_segments:
-            self._log("  WARNING: No story segments! Falling back to character-batch mode.", "WARNING")
-            return self._step_create_director_plan_legacy(project_dir, code, workbook, srt_entries)
+        # Build character/location info
+        relevant_chars = []
+        if isinstance(chars_involved, list):
+            for char_name in chars_involved:
+                for cid, clock in char_locks.items():
+                    if char_name.lower() in clock.lower() or char_name.lower() in cid.lower():
+                        relevant_chars.append(f"- {cid}: {clock}")
+                        break
+        if not relevant_chars:
+            relevant_chars = [f"- {cid}: {clock}" for cid, clock in list(char_locks.items())[:5]]
 
-        total_planned_images = sum(s.get("image_count", 0) for s in story_segments)
-        self._log(f"  Story segments: {len(story_segments)} segments, {total_planned_images} planned images")
+        relevant_locs = [f"- {lid}: {llock}" for lid, llock in list(loc_locks.items())[:3]]
 
-        context_lock = story_analysis.get("context_lock", "")
+        # Build prompt
+        prompt = f"""Create {image_count} cinematic shots for this story segment.
 
-        # Build character locks - COMPACT format
-        char_locks = {c.id: c.character_lock for c in characters if c.character_lock}
-        loc_locks = {}
-        for loc in locations:
-            if hasattr(loc, 'location_lock') and loc.location_lock:
-                loc_locks[loc.id] = loc.location_lock
-
-        all_scenes = []
-        scene_id_counter = 1
-        total_entries = len(srt_entries)
-
-        self._log(f"  Total SRT entries: {total_entries}")
-        self._log(f"  Processing {len(story_segments)} segments...")
-
-        # Process BY SEGMENT - tận dụng segment insights
-        for seg_idx, seg in enumerate(story_segments):
-            seg_id = seg.get("segment_id", seg_idx + 1)
-            seg_name = seg.get("segment_name", f"Segment {seg_id}")
-            message = seg.get("message", "")
-            visual_summary = seg.get("visual_summary", "")
-            key_elements = seg.get("key_elements", [])
-            mood = seg.get("mood", "")
-            chars_involved = seg.get("characters_involved", [])
-            image_count = seg.get("image_count", 3)
-            srt_start = seg.get("srt_range_start", 1)
-            srt_end = seg.get("srt_range_end", total_entries)
-
-            self._log(f"  Segment {seg_id}/{len(story_segments)}: {seg_name} ({image_count} images, SRT {srt_start}-{srt_end})")
-
-            # Lấy SRT entries cho segment này
-            seg_srt_text = self._get_srt_for_range(srt_entries, srt_start, srt_end)
-
-            # Tính duration của segment
-            seg_duration = 0
-            for i, entry in enumerate(srt_entries, 1):
-                if srt_start <= i <= srt_end:
-                    try:
-                        parts = entry.end_time.replace(',', ':').split(':')
-                        end_sec = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2]) + int(parts[3])/1000
-                        seg_duration = max(seg_duration, end_sec)
-                        if i == srt_start:
-                            parts = entry.start_time.replace(',', ':').split(':')
-                            start_sec = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2]) + int(parts[3])/1000
-                            seg_duration -= start_sec
-                    except:
-                        pass
-
-            if seg_duration <= 0:
-                seg_duration = (srt_end - srt_start + 1) * 3  # Fallback: 3s per entry
-
-            # Build COMPACT character/location info - chỉ những cái liên quan
-            relevant_chars = []
-            if isinstance(chars_involved, list):
-                for char_name in chars_involved:
-                    # Tìm character ID từ tên
-                    for cid, clock in char_locks.items():
-                        if char_name.lower() in clock.lower() or char_name.lower() in cid.lower():
-                            relevant_chars.append(f"- {cid}: {clock}")
-                            break
-
-            if not relevant_chars:
-                relevant_chars = [f"- {cid}: {clock}" for cid, clock in list(char_locks.items())[:5]]
-
-            relevant_locs = [f"- {lid}: {llock}" for lid, llock in list(loc_locks.items())[:3]]
-
-            # Build OPTIMIZED prompt - sử dụng segment insights
-            prompt = f"""Create {image_count} cinematic shots for this story segment.
-
-SEGMENT CONTEXT (from Step 1.5 analysis - this tells you WHAT to show):
-- Name: "{seg_name}"
-- Story: {message}
-- Visuals to show: {visual_summary}
-- Mood/Tone: {mood}
-- Key elements: {', '.join(key_elements) if isinstance(key_elements, list) else key_elements}
+SEGMENT: "{seg_name}"
+Story: {message}
+Visuals: {visual_summary}
+Mood: {mood}
+Key elements: {', '.join(key_elements) if isinstance(key_elements, list) else key_elements}
 
 VISUAL STYLE: {context_lock}
 
-CHARACTERS (use EXACT IDs):
+CHARACTERS:
 {chr(10).join(relevant_chars) if relevant_chars else 'Use generic descriptions'}
 
-LOCATIONS (use EXACT IDs):
+LOCATIONS:
 {chr(10).join(relevant_locs) if relevant_locs else 'Use generic descriptions'}
 
-SRT CONTENT ({srt_end - srt_start + 1} entries, ~{seg_duration:.0f}s):
-{seg_srt_text[:4000]}
+SRT ({srt_end - srt_start + 1} entries):
+{seg_srt_text[:3000]}
 
 TASK: Create EXACTLY {image_count} scenes (~{seg_duration/image_count:.1f}s each)
-
-RULES:
-1. Each scene = ONE cinematic shot
-2. visual_moment: What viewer SEES - specific, purposeful
-3. Use character/location IDs from lists above
-4. Vary shot types: close-up, medium, wide, etc.
-5. scene_id starts from {scene_id_counter}
 
 Return JSON only:
 {{
     "scenes": [
         {{
-            "scene_id": {scene_id_counter},
+            "scene_id": 1,
             "srt_indices": [list of SRT indices],
             "srt_start": "00:00:00,000",
             "srt_end": "00:00:05,000",
             "duration": {seg_duration/image_count:.1f},
-            "srt_text": "narration text",
-            "visual_moment": "specific visual description",
+            "srt_text": "narration",
+            "visual_moment": "specific visual",
             "characters_used": "nv_xxx",
             "location_used": "loc_xxx",
             "camera": "shot type",
-            "lighting": "lighting style"
+            "lighting": "lighting"
         }}
     ]
 }}
 """
 
-            # Call API with retry
-            MAX_RETRIES = 3
-            data = None
+        # Call API with retry (simpler - 3 retries)
+        MAX_RETRIES = 3
+        for retry in range(MAX_RETRIES):
+            response = self._call_api(prompt, temperature=0.5, max_tokens=4096)
+            if response:
+                data = self._extract_json(response)
+                if data and "scenes" in data:
+                    self._log(f"     -> Sub-batch got {len(data['scenes'])} scenes")
+                    return data["scenes"]
+            time.sleep(2 ** retry)
 
-            for retry in range(MAX_RETRIES):
-                response = self._call_api(prompt, temperature=0.5, max_tokens=4096)
-                if response:
-                    data = self._extract_json(response)
-                    if data and "scenes" in data:
-                        break
-                time.sleep(2 ** retry)
+        # Nếu fail, trả về empty list (không tạo fallback cho sub-batch)
+        self._log(f"     -> Sub-batch failed after {MAX_RETRIES} retries", "WARNING")
+        return []
 
-            if not data or "scenes" not in data:
-                # Fallback: tạo basic scenes
-                self._log(f"     -> API failed, creating {image_count} fallback scenes", "WARNING")
-                entries_per_scene = max(1, (srt_end - srt_start + 1) // image_count)
+        # Execute segments in parallel
+        segment_results = {}
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL) as executor:
+            futures = {executor.submit(process_segment, (i, seg)): i for i, seg in enumerate(story_segments)}
+            for future in as_completed(futures):
+                seg_idx = futures[future]
+                try:
+                    result_idx, scenes = future.result()
+                    segment_results[result_idx] = scenes
+                except Exception as e:
+                    self._log(f"     -> Segment {seg_idx+1} failed: {e}", "ERROR")
+                    segment_results[seg_idx] = []
 
-                for i in range(image_count):
-                    scene_srt_start = srt_start + i * entries_per_scene
-                    scene_srt_end = min(scene_srt_start + entries_per_scene - 1, srt_end)
-
-                    fallback_scene = {
-                        "scene_id": scene_id_counter,
-                        "srt_indices": list(range(scene_srt_start, scene_srt_end + 1)),
-                        "srt_start": srt_entries[scene_srt_start - 1].start_time if scene_srt_start <= len(srt_entries) else "",
-                        "srt_end": srt_entries[scene_srt_end - 1].end_time if scene_srt_end <= len(srt_entries) else "",
-                        "duration": seg_duration / image_count,
-                        "srt_text": " ".join([srt_entries[j-1].text for j in range(scene_srt_start, min(scene_srt_end + 1, len(srt_entries) + 1))]),
-                        "visual_moment": f"[Auto] {seg_name} - Part {i+1}/{image_count}",
-                        "characters_used": "",
-                        "location_used": "",
-                        "camera": "Medium shot",
-                        "lighting": "Natural lighting"
-                    }
-                    all_scenes.append(fallback_scene)
-                    scene_id_counter += 1
-            else:
-                # Thêm scenes từ API
-                seg_scenes = data["scenes"]
-                self._log(f"     -> Got {len(seg_scenes)} scenes from API")
-
-                for scene in seg_scenes:
-                    scene["scene_id"] = scene_id_counter
-                    all_scenes.append(scene)
-                    scene_id_counter += 1
-
-            # Small delay between segments
-            if seg_idx < len(story_segments) - 1:
-                time.sleep(0.5)
+        # Merge results in order and assign scene_ids
+        scene_id_counter = 1
+        for seg_idx in range(len(story_segments)):
+            seg_scenes = segment_results.get(seg_idx, [])
+            for scene in seg_scenes:
+                scene["scene_id"] = scene_id_counter
+                all_scenes.append(scene)
+                scene_id_counter += 1
 
         # Kiểm tra có scenes không
         if not all_scenes:
@@ -1500,24 +1448,26 @@ Return JSON only:
             total_duration = sum(s.get('duration', 0) for s in all_scenes)
 
             # Determine status based on coverage
+            elapsed = int(time.time() - step_start)
             if coverage['uncovered'] > 0:
                 self._log(f"     [WARN] UNCOVERED: {coverage['uncovered']} entries", "WARN")
                 uncovered_list = workbook.get_uncovered_srt_entries()
                 if uncovered_list:
                     self._log(f"     Missing SRT: {[u['srt_index'] for u in uncovered_list[:10]]}...")
                 status = "PARTIAL" if coverage['coverage_percent'] >= 80 else "ERROR"
-                workbook.update_step_status("step_4", status,
+                workbook.update_step_status("step_5", status,
                     coverage['total_srt'], coverage['covered_by_scene'],
-                    f"{len(all_scenes)} scenes, {total_duration:.0f}s, {coverage['uncovered']} SRT uncovered")
+                    f"{elapsed}s - {len(all_scenes)} scenes, {coverage['uncovered']} uncovered")
             else:
-                workbook.update_step_status("step_4", "COMPLETED",
+                workbook.update_step_status("step_5", "COMPLETED",
                     coverage['total_srt'], coverage['covered_by_scene'],
-                    f"{len(all_scenes)} scenes, {total_duration:.0f}s total")
+                    f"{elapsed}s - {len(all_scenes)} scenes, {total_duration:.0f}s")
 
             return StepResult("create_director_plan", StepStatus.COMPLETED, "Success", {"scenes": all_scenes})
         except Exception as e:
             self._log(f"  ERROR: Could not save to Excel: {e}", "ERROR")
-            workbook.update_step_status("step_4", "ERROR", 0, 0, str(e)[:100])
+            elapsed = int(time.time() - step_start)
+            workbook.update_step_status("step_5", "ERROR", 0, 0, f"{elapsed}s - {str(e)[:80]}")
             return StepResult("create_director_plan", StepStatus.FAILED, str(e))
 
     def _step_create_director_plan_legacy(
@@ -1618,7 +1568,7 @@ Create scenes (~8s each). Return JSON:
         return StepResult("create_director_plan", StepStatus.COMPLETED, "Success (legacy)", {"scenes": all_scenes})
 
     # =========================================================================
-    # STEP 4 BASIC: TẠO DIRECTOR'S PLAN (SEGMENT-BASED, NO 8s LIMIT)
+    # STEP 5 BASIC: TẠO DIRECTOR'S PLAN (SEGMENT-BASED, NO 8s LIMIT)
     # =========================================================================
 
     def step_create_director_plan_basic(
@@ -1641,7 +1591,7 @@ Create scenes (~8s each). Return JSON:
         Output: director_plan với số scenes = planned images
         """
         self._log("\n" + "="*60)
-        self._log("[STEP 4 BASIC] Creating director's plan (segment-based)...")
+        self._log("[STEP 5/7] Creating director's plan (segment-based)...")
         self._log("="*60)
 
         # Check if already done
@@ -1687,26 +1637,33 @@ Create scenes (~8s each). Return JSON:
         self._log(f"  Valid char IDs: {valid_char_ids}")
         self._log(f"  Valid loc IDs: {valid_loc_ids}")
 
-        # Process each segment
+        # Process segments in PARALLEL
         all_scenes = []
-        scene_id_counter = 1
+        total_entries = len(srt_entries)
+        MAX_PARALLEL = self.config.get("max_parallel_api", 6)
 
-        for seg in story_segments:
-            seg_id = seg.get("segment_id", 0)
+        self._log(f"  Processing {len(story_segments)} segments in parallel (max {MAX_PARALLEL} concurrent)...")
+
+        # HELPER: Process single segment - returns (seg_idx, scenes_list, actual_image_count)
+        def process_segment_basic(seg_idx_seg):
+            seg_idx, seg = seg_idx_seg
+            local_scenes = []
+
+            seg_id = seg.get("segment_id", seg_idx + 1)
             seg_name = seg.get("segment_name", "")
             image_count = seg.get("image_count", 1)
             srt_start = seg.get("srt_range_start", 1)
-            srt_end = seg.get("srt_range_end", len(srt_entries))
+            srt_end = seg.get("srt_range_end", total_entries)
             message = seg.get("message", "")
 
-            self._log(f"  Segment {seg_id}: {seg_name} ({image_count} images, SRT {srt_start}-{srt_end})")
+            self._log(f"  Segment {seg_id}/{len(story_segments)}: {seg_name} ({image_count} images, SRT {srt_start}-{srt_end})")
 
             # Get SRT entries for this segment
             seg_entries = [e for i, e in enumerate(srt_entries, 1) if srt_start <= i <= srt_end]
 
             if not seg_entries:
                 self._log(f"     -> No SRT entries for this segment, skip")
-                continue
+                return (seg_idx, [], 0)
 
             # Calculate segment duration
             try:
@@ -1724,18 +1681,14 @@ Create scenes (~8s each). Return JSON:
             except:
                 seg_duration = len(seg_entries) * 5  # Fallback: 5s per entry
 
-            # SEGMENT 1 SPECIAL: Tuân thủ 8s limit như bản worker_pic
-            # Các segment khác: dùng image_count từ Step 1.5
+            # SEGMENT 1 SPECIAL: Tuân thủ 8s limit
             if seg_id == 1:
-                # Segment 1: tính số scenes theo 8s limit
                 original_image_count = image_count
-                image_count = max(1, int(seg_duration / 8) + 1)  # Target ~8s per scene
+                image_count = max(1, int(seg_duration / 8) + 1)
                 self._log(f"     -> Segment 1 special: {original_image_count} planned -> {image_count} scenes (8s limit)")
 
             # Calculate duration per scene
             scene_duration = seg_duration / image_count if image_count > 0 else seg_duration
-
-            # Distribute SRT entries among scenes
             entries_per_scene = len(seg_entries) / image_count if image_count > 0 else len(seg_entries)
 
             # Build SRT text for API prompt
@@ -1744,7 +1697,7 @@ Create scenes (~8s each). Return JSON:
                 idx = srt_start + i
                 srt_text += f"[{idx}] {entry.start_time} --> {entry.end_time}\n{entry.text}\n\n"
 
-            # Call API to create scenes for this segment
+            # Call API to create scenes (scene_id will be assigned after merge)
             prompt = f"""You are a FILM DIRECTOR. Create exactly {image_count} cinematic shots for this story segment.
 
 SEGMENT INFO:
@@ -1771,13 +1724,13 @@ INSTRUCTIONS:
 3. Distribute the SRT content evenly across all {image_count} scenes
 4. Each scene = one cinematic shot that supports the narration
 5. Use EXACT character/location IDs from the lists above
-6. Think like a film director - what shot best conveys each moment?
+6. scene_id: just use 1, 2, 3... (will be renumbered later)
 
 Return JSON only:
 {{
     "scenes": [
         {{
-            "scene_id": {scene_id_counter},
+            "scene_id": 1,
             "srt_indices": [list of SRT indices covered],
             "srt_start": "timestamp",
             "srt_end": "timestamp",
@@ -1799,17 +1752,11 @@ Create exactly {image_count} scenes!"""
 
             for retry in range(MAX_RETRIES):
                 response = self._call_api(prompt, temperature=0.5, max_tokens=8192)
-                if not response:
-                    self._log(f"     Retry {retry+1}/{MAX_RETRIES}: API call failed", "WARNING")
-                    time.sleep(2 ** retry)
-                    continue
-
-                data = self._extract_json(response)
-                if data and "scenes" in data:
-                    break  # Success!
-                else:
-                    self._log(f"     Retry {retry+1}/{MAX_RETRIES}: JSON parse failed", "WARNING")
-                    time.sleep(2 ** retry)
+                if response:
+                    data = self._extract_json(response)
+                    if data and "scenes" in data:
+                        break
+                time.sleep(2 ** retry)
 
             # If all retries failed, create fallback scenes
             if not data or "scenes" not in data:
@@ -1817,67 +1764,57 @@ Create exactly {image_count} scenes!"""
                 for i in range(image_count):
                     start_idx = int(i * entries_per_scene)
                     end_idx = min(int((i + 1) * entries_per_scene), len(seg_entries))
-                    scene_entries = seg_entries[start_idx:end_idx] if seg_entries else []
+                    scene_ents = seg_entries[start_idx:end_idx] if seg_entries else []
 
                     fallback_scene = {
-                        "scene_id": scene_id_counter,
+                        "scene_id": 0,  # Will be assigned after merge
                         "srt_indices": list(range(srt_start + start_idx, srt_start + end_idx)),
-                        "srt_start": scene_entries[0].start_time if scene_entries else "",
-                        "srt_end": scene_entries[-1].end_time if scene_entries else "",
+                        "srt_start": scene_ents[0].start_time if scene_ents else "",
+                        "srt_end": scene_ents[-1].end_time if scene_ents else "",
                         "duration": scene_duration,
-                        "srt_text": " ".join([e.text for e in scene_entries]) if scene_entries else "",
+                        "srt_text": " ".join([e.text for e in scene_ents]) if scene_ents else "",
                         "visual_moment": f"[Auto] Scene {i+1}/{image_count} from: {seg_name}",
                         "characters_used": "",
                         "location_used": "",
                         "camera": "Medium shot",
                         "lighting": "Natural lighting"
                     }
-                    all_scenes.append(fallback_scene)
-                    scene_id_counter += 1
-                continue
+                    local_scenes.append(fallback_scene)
+                return (seg_idx, local_scenes, image_count)
 
-            # Add scenes from API response
+            # Process API response
             api_scenes = data["scenes"]
             self._log(f"     -> Got {len(api_scenes)} scenes from API")
 
-            # Ensure correct scene count - TẠO THÊM NẾU THIẾU
+            # Ensure correct scene count - add missing if needed
             if len(api_scenes) < image_count:
-                self._log(f"     -> Warning: Expected {image_count}, got {len(api_scenes)} - ADDING MISSING SCENES")
-
-                # Tạo thêm scenes từ SRT entries chưa được cover
+                self._log(f"     -> Warning: Expected {image_count}, got {len(api_scenes)} - ADDING MISSING")
                 existing_srt_indices = set()
                 for s in api_scenes:
                     indices = s.get("srt_indices", [])
                     if isinstance(indices, list):
                         existing_srt_indices.update(indices)
 
-                # Tìm SRT entries chưa được assign
                 all_seg_indices = list(range(srt_start, srt_end + 1))
                 missing_indices = [i for i in all_seg_indices if i not in existing_srt_indices]
 
-                # Chia missing_indices cho số scenes còn thiếu
                 scenes_needed = image_count - len(api_scenes)
                 if missing_indices and scenes_needed > 0:
-                    indices_per_scene = max(1, len(missing_indices) // scenes_needed)
-
+                    indices_per_scene_fill = max(1, len(missing_indices) // scenes_needed)
                     for i in range(scenes_needed):
-                        start_idx = i * indices_per_scene
-                        end_idx = min((i + 1) * indices_per_scene, len(missing_indices))
-                        scene_indices = missing_indices[start_idx:end_idx]
-
+                        start_i = i * indices_per_scene_fill
+                        end_i = min((i + 1) * indices_per_scene_fill, len(missing_indices))
+                        scene_indices = missing_indices[start_i:end_i]
                         if not scene_indices:
                             continue
-
-                        # Lấy SRT entries cho scene này
-                        scene_entries = [e for idx, e in enumerate(srt_entries, 1) if idx in scene_indices]
-
+                        scene_ents = [e for idx, e in enumerate(srt_entries, 1) if idx in scene_indices]
                         fill_scene = {
-                            "scene_id": scene_id_counter + len(api_scenes) + i,
+                            "scene_id": 0,
                             "srt_indices": scene_indices,
-                            "srt_start": scene_entries[0].start_time if scene_entries else "",
-                            "srt_end": scene_entries[-1].end_time if scene_entries else "",
+                            "srt_start": scene_ents[0].start_time if scene_ents else "",
+                            "srt_end": scene_ents[-1].end_time if scene_ents else "",
                             "duration": scene_duration,
-                            "srt_text": " ".join([e.text for e in scene_entries]) if scene_entries else "",
+                            "srt_text": " ".join([e.text for e in scene_ents]) if scene_ents else "",
                             "visual_moment": f"[Auto-fill] Scene covering SRT {scene_indices[0]}-{scene_indices[-1]}",
                             "characters_used": "",
                             "location_used": "",
@@ -1885,25 +1822,37 @@ Create exactly {image_count} scenes!"""
                             "lighting": "Natural lighting"
                         }
                         api_scenes.append(fill_scene)
-
                     self._log(f"     -> Added {scenes_needed} auto-fill scenes, total: {len(api_scenes)}")
 
-            # Update scene IDs to be continuous + NORMALIZE character/location IDs
-            for scene in api_scenes:
-                scene["scene_id"] = scene_id_counter
+            local_scenes.extend(api_scenes)
+            return (seg_idx, local_scenes, image_count)
 
-                # Normalize IDs từ API response về format chuẩn
+        # Execute segments in parallel
+        segment_results = {}
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL) as executor:
+            futures = {executor.submit(process_segment_basic, (i, seg)): i for i, seg in enumerate(story_segments)}
+            for future in as_completed(futures):
+                seg_idx = futures[future]
+                try:
+                    result_idx, scenes, _ = future.result()
+                    segment_results[result_idx] = scenes
+                except Exception as e:
+                    self._log(f"     -> Segment {seg_idx+1} failed: {e}", "ERROR")
+                    segment_results[seg_idx] = []
+
+        # Merge results in order and assign scene_ids
+        scene_id_counter = 1
+        for seg_idx in range(len(story_segments)):
+            seg_scenes = segment_results.get(seg_idx, [])
+            for scene in seg_scenes:
+                scene["scene_id"] = scene_id_counter
+                # Normalize IDs
                 raw_chars = scene.get("characters_used", "")
                 raw_loc = scene.get("location_used", "")
-
                 scene["characters_used"] = self._normalize_character_ids(raw_chars, valid_char_ids)
                 scene["location_used"] = self._normalize_location_id(raw_loc, valid_loc_ids)
-
                 all_scenes.append(scene)
                 scene_id_counter += 1
-
-            # Delay between segments
-            time.sleep(0.5)
 
         # Verify total scene count
         if len(all_scenes) != total_planned_images:
@@ -1937,7 +1886,7 @@ Create exactly {image_count} scenes!"""
             return StepResult("create_director_plan_basic", StepStatus.FAILED, str(e))
 
     # =========================================================================
-    # STEP 4.5: LÊN KẾ HOẠCH CHI TIẾT TỪNG SCENE
+    # STEP 6: LÊN KẾ HOẠCH CHI TIẾT TỪNG SCENE
     # =========================================================================
 
     def step_plan_scenes(
@@ -1958,8 +1907,11 @@ Create exactly {image_count} scenes!"""
         Input: director_plan, story_segments, characters, locations
         Output: scene_planning sheet
         """
+        import time
+        step_start = time.time()
+
         self._log("\n" + "="*60)
-        self._log("[STEP 4.5] Lên kế hoạch chi tiết từng scene...")
+        self._log("[STEP 6/7] Lên kế hoạch chi tiết từng scene...")
         self._log("="*60)
 
         # Check if already done
@@ -1967,6 +1919,7 @@ Create exactly {image_count} scenes!"""
             existing = workbook.get_scene_planning()
             if existing and len(existing) > 0:
                 self._log(f"  -> Đã có {len(existing)} scene plans, skip!")
+                workbook.update_step_status("step_6", "COMPLETED", len(existing), len(existing), "Already done")
                 return StepResult("plan_scenes", StepStatus.COMPLETED, "Already done")
         except:
             pass
@@ -2136,13 +2089,21 @@ Return JSON only:
             workbook.save_scene_planning(all_plans)
             workbook.save()
             self._log(f"  -> Saved {len(all_plans)} scene plans to Excel")
+
+            # Update step status with duration
+            elapsed = int(time.time() - step_start)
+            workbook.update_step_status("step_6", "COMPLETED", len(all_plans), len(all_plans),
+                f"{elapsed}s - {len(all_plans)} plans")
+
             return StepResult("plan_scenes", StepStatus.COMPLETED, "Success", {"plans": all_plans})
         except Exception as e:
             self._log(f"  ERROR: Could not save: {e}", "ERROR")
+            elapsed = int(time.time() - step_start)
+            workbook.update_step_status("step_6", "ERROR", 0, 0, f"{elapsed}s - {str(e)[:80]}")
             return StepResult("plan_scenes", StepStatus.FAILED, str(e))
 
     # =========================================================================
-    # STEP 5: TẠO SCENE PROMPTS (BATCH)
+    # STEP 7: TẠO SCENE PROMPTS (BATCH)
     # =========================================================================
 
     def step_create_scene_prompts(
@@ -2158,8 +2119,11 @@ Return JSON only:
         Input: Đọc director_plan, characters, locations từ Excel
         Output: Thêm scenes vào sheet scenes
         """
+        import time
+        step_start = time.time()
+
         self._log("\n" + "="*60)
-        self._log("[STEP 5] Tạo scene prompts...")
+        self._log("[STEP 7/7] Tạo scene prompts...")
         self._log("="*60)
 
         # Read director plan
@@ -2181,6 +2145,7 @@ Return JSON only:
 
         if not pending_scenes:
             self._log(f"  -> Đã có {len(existing_scenes)} scenes, skip!")
+            workbook.update_step_status("step_7", "COMPLETED", len(existing_scenes), len(existing_scenes), "Already done")
             return StepResult("create_scene_prompts", StepStatus.COMPLETED, "Already done")
 
         self._log(f"  -> Cần tạo prompts cho {len(pending_scenes)} scenes...")
@@ -2378,8 +2343,8 @@ Return JSON only with EXACTLY {len(batch)} scenes:
                         # Tạo fallback prompt
                         srt_text = original.get("srt_text", "")
                         visual_moment = original.get("visual_moment", "")
-                        chars_used = original.get("characters_used", "")
-                        loc_used = original.get("location_used", "")
+                        chars_used = original.get("characters_used") or ""
+                        loc_used = original.get("location_used") or ""
 
                         fallback_prompt = f"Cinematic scene: {visual_moment or srt_text[:200]}. "
                         fallback_prompt += "4K photorealistic, dramatic lighting, film quality."
@@ -2403,11 +2368,18 @@ Return JSON only with EXACTLY {len(batch)} scenes:
                         api_scenes.append(fallback_scene)
                         self._log(f"     -> Created fallback for scene {orig_id}")
 
-            # Check duplicates
+            # Check duplicates - chỉ skip nếu >80% trùng lặp
             seen_prompts = set()
-            duplicate_count = sum(1 for s in api_scenes if (p := s.get("img_prompt", "")[:100]) in seen_prompts or seen_prompts.add(p))
-            if duplicate_count > len(api_scenes) * 0.5:
-                self._log(f"  Batch {batch_num}: >50% duplicates, skipped!", "ERROR")
+            duplicate_count = 0
+            for s in api_scenes:
+                prompt_key = s.get("img_prompt", "")[:100]
+                if prompt_key in seen_prompts:
+                    duplicate_count += 1
+                else:
+                    seen_prompts.add(prompt_key)
+
+            if len(api_scenes) > 0 and duplicate_count > len(api_scenes) * 0.8:
+                self._log(f"  Batch {batch_num}: >80% duplicates ({duplicate_count}/{len(api_scenes)}), skipped!", "ERROR")
                 continue
 
             # Save scenes
@@ -2421,8 +2393,8 @@ Return JSON only with EXACTLY {len(batch)} scenes:
                     img_prompt = scene_data.get("img_prompt", "")
 
                     # Post-process: ensure reference annotations
-                    char_ids = [cid.strip() for cid in original.get("characters_used", "").split(",") if cid.strip()]
-                    loc_id = original.get("location_used", "")
+                    char_ids = [cid.strip() for cid in (original.get("characters_used") or "").split(",") if cid.strip()]
+                    loc_id = original.get("location_used") or ""
 
                     for cid in char_ids:
                         img_file = char_image_lookup.get(cid, f"{cid}.png")
@@ -2461,9 +2433,14 @@ Return JSON only with EXACTLY {len(batch)} scenes:
 
         self._log(f"\n  -> Total: Created {total_created} scene prompts")
 
+        elapsed = int(time.time() - step_start)
         if total_created > 0:
+            # Update step status with duration
+            workbook.update_step_status("step_7", "COMPLETED", total_created, total_created,
+                f"{elapsed}s - {total_created} prompts")
             return StepResult("create_scene_prompts", StepStatus.COMPLETED, f"Created {total_created} scenes")
         else:
+            workbook.update_step_status("step_7", "ERROR", 0, 0, f"{elapsed}s - No scenes created")
             return StepResult("create_scene_prompts", StepStatus.FAILED, "No scenes created")
 
     # =========================================================================

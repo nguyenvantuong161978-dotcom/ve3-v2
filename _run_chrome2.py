@@ -49,6 +49,14 @@ except ImportError:
     AGENT_ENABLED = False
     AgentWorker = None
 
+# Central Logger - để log hiển thị trong GUI
+try:
+    from modules.central_logger import log as central_log
+    CENTRAL_LOGGER = True
+except ImportError:
+    CENTRAL_LOGGER = False
+    central_log = None
+
 # Global agent instance
 _agent = None
 
@@ -83,10 +91,18 @@ def safe_str(s) -> str:
 
 
 def agent_log(msg: str, level: str = "INFO"):
-    """Log và gửi đến Agent."""
+    """Log và gửi đến Agent + Central Logger (cho GUI)."""
     global _agent
     safe_msg = safe_str(msg)
+
+    # Print to console
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {safe_msg}")
+
+    # Send to central logger for GUI display
+    if CENTRAL_LOGGER and central_log:
+        central_log(WORKER_ID, safe_msg, level)
+
+    # Send to agent
     if _agent:
         if level == "ERROR":
             _agent.log_error(safe_msg)

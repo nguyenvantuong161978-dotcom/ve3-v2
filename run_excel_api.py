@@ -48,6 +48,17 @@ except ImportError:
     AGENT_ENABLED = False
     AgentWorker = None
 
+# Central Logger
+try:
+    from modules.central_logger import get_logger
+    _logger = get_logger("excel")
+except ImportError:
+    class FakeLogger:
+        def info(self, msg): print(f"[excel] {msg}")
+        def warn(self, msg): print(f"[excel] WARN: {msg}")
+        def error(self, msg): print(f"[excel] ERROR: {msg}")
+    _logger = FakeLogger()
+
 # Global agent instance
 _agent: Optional['AgentWorker'] = None
 
@@ -82,7 +93,15 @@ def log(msg: str, level: str = "INFO"):
         "ERROR": " [FAIL]",
         "SUCCESS": " [OK]",
     }.get(level, "   ")
-    print(f"[{timestamp}]{prefix} {msg}")
+
+    # Log to central logger
+    full_msg = f"{prefix} {msg}"
+    if level == "ERROR":
+        _logger.error(full_msg)
+    elif level == "WARN":
+        _logger.warn(full_msg)
+    else:
+        _logger.info(full_msg)
 
     # Gửi đến Agent nếu có
     if _agent and AGENT_ENABLED:
@@ -313,6 +332,7 @@ def has_excel_with_prompts(project_dir: Path, name: str) -> bool:
     try:
         from modules.excel_manager import PromptWorkbook
         wb = PromptWorkbook(str(excel_path))
+        wb.load_or_create()  # PHẢI load trước khi dùng
         scenes = wb.get_scenes()
         return any(s.img_prompt for s in scenes)
     except:
@@ -328,6 +348,7 @@ def needs_api_completion(project_dir: Path, name: str) -> bool:
     try:
         from modules.excel_manager import PromptWorkbook
         wb = PromptWorkbook(str(excel_path))
+        wb.load_or_create()  # PHẢI load trước khi dùng
         scenes = wb.get_scenes()
         return any("[FALLBACK]" in (s.img_prompt or "") for s in scenes)
     except:

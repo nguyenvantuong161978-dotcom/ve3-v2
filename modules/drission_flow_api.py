@@ -1465,19 +1465,49 @@ class DrissionFlowAPI:
             self.close()
             time.sleep(2)
 
-            # 4. Chạy login với retry
-            # QUAN TRỌNG: Truyền chrome_portable, profile_dir và worker_id
-            # Khi có 2 Chrome song song (Chrome 1 tạo ảnh, Chrome 2 tạo video),
-            # cần login đúng Chrome bị logout, không phải Chrome kia
-            for attempt in range(max_retries):
+            # 4. XÓA PROFILE DATA (như xử lý 403)
+            if self.profile_dir:
+                self.log(f"[CLEAR] Xóa profile data...")
+                try:
+                    import shutil
+                    profile_path = Path(self.profile_dir)
+                    if profile_path.exists():
+                        for folder in ["Default/Cache", "Default/Code Cache", "Default/GPUCache",
+                                       "Default/Service Worker", "Default/Session Storage",
+                                       "Default/Local Storage", "Default/IndexedDB",
+                                       "Default/Cookies", "Default/Cookies-journal"]:
+                            target = profile_path / folder
+                            if target.exists():
+                                try:
+                                    if target.is_dir():
+                                        shutil.rmtree(str(target), ignore_errors=True)
+                                    else:
+                                        target.unlink(missing_ok=True)
+                                except:
+                                    pass
+                        self.log("[CLEAR] Đã xóa profile data")
+                except Exception as e:
+                    self.log(f"[CLEAR] Lỗi: {e}", "WARN")
+                time.sleep(1)
+
+            # 5. Chạy login với retry
+            # Logic: Thử 2 lần → nếu fail → xóa profile → thử thêm 2 lần
+            fail_count = 0
+            total_attempts = max_retries * 2  # 6 lần tổng
+
+            for attempt in range(total_attempts):
+                # Sau 2 lần fail liên tiếp → xóa profile data
+                if fail_count >= 2:
+                    self.log("[CLEAR] 2 lần login fail → Xóa profile data...")
+                    self._clear_profile_data()
+                    fail_count = 0  # Reset counter
+                    time.sleep(2)
+
                 if attempt > 0:
-                    self.log(f"[SYNC] Retry login ({attempt + 1}/{max_retries})...")
+                    self.log(f"[SYNC] Retry login ({attempt + 1}/{total_attempts})...")
                     time.sleep(3)
 
                 self.log("Bắt đầu đăng nhập Google...")
-                self.log(f"  Chrome: {self._chrome_portable or 'default'}")
-                self.log(f"  Profile: {self.profile_dir}")
-                self.log(f"  Worker ID: {self.worker_id}")
 
                 try:
                     success = login_google_chrome(
@@ -1489,17 +1519,17 @@ class DrissionFlowAPI:
 
                     if success:
                         self.log("[v] Đăng nhập thành công!")
-                        # Đóng Chrome login để setup lại từ đầu
                         time.sleep(2)
                         return True
                     else:
-                        self.log(f"[x] Đăng nhập thất bại (attempt {attempt + 1}/{max_retries})", "WARN")
-                        # Kill Chrome trước khi retry
+                        fail_count += 1
+                        self.log(f"[x] Đăng nhập thất bại ({fail_count} lần liên tiếp)", "WARN")
                         self._kill_chrome()
                         time.sleep(2)
 
                 except Exception as login_err:
-                    self.log(f"[x] Login error (attempt {attempt + 1}): {login_err}", "WARN")
+                    fail_count += 1
+                    self.log(f"[x] Login error ({fail_count} lần): {login_err}", "WARN")
                     self._kill_chrome()
                     time.sleep(2)
 
@@ -1542,6 +1572,15 @@ class DrissionFlowAPI:
             time.sleep(1)
         except Exception as e:
             pass
+
+    def _clear_profile_data(self):
+        """Xóa profile data như xử lý 403 - dùng reset_chrome_profile()."""
+        self.log("[CLEAR] Xóa profile data (như 403)...")
+        try:
+            # Dùng cùng logic với 403 handling
+            self.reset_chrome_profile()
+        except Exception as e:
+            self.log(f"[CLEAR] Lỗi: {e}", "WARN")
 
     def clear_cookies_only(self) -> bool:
         """

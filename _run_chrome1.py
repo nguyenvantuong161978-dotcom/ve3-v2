@@ -48,6 +48,14 @@ except ImportError:
     AGENT_ENABLED = False
     AgentWorker = None
 
+# Central Logger - để log hiển thị trong GUI
+try:
+    from modules.central_logger import log as central_log
+    CENTRAL_LOGGER = True
+except ImportError:
+    CENTRAL_LOGGER = False
+    central_log = None
+
 # Global agent instance
 _agent = None
 
@@ -82,10 +90,18 @@ def safe_str(s) -> str:
 
 
 def agent_log(msg: str, level: str = "INFO"):
-    """Log và gửi đến Agent."""
+    """Log và gửi đến Agent + Central Logger (cho GUI)."""
     global _agent
     safe_msg = safe_str(msg)
+
+    # Print to console
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {safe_msg}")
+
+    # Send to central logger for GUI display
+    if CENTRAL_LOGGER and central_log:
+        central_log(WORKER_ID, safe_msg, level)
+
+    # Send to agent
     if _agent:
         if level == "ERROR":
             _agent.log_error(safe_msg)
@@ -147,104 +163,6 @@ else:
 
 LOCAL_PROJECTS = TOOL_DIR / "PROJECTS"
 WORKER_CHANNEL = get_channel_from_folder()
-
-
-def create_excel_with_api_basic(project_dir: Path, code: str, callback=None) -> bool:
-    """
-    Create Excel with prompts using API - BASIC mode.
-    Uses segment-based image counts (no 8s limit).
-    """
-    def log(msg, level="INFO"):
-        if callback:
-            callback(msg, level)
-        else:
-            print(msg)
-
-    try:
-        import yaml
-        from modules.progressive_prompts import ProgressivePromptsGenerator
-        from modules.excel_manager import PromptWorkbook
-        from modules.utils import parse_srt_file
-
-        # Load config from settings.yaml
-        config = {}
-        config_path = TOOL_DIR / "config" / "settings.yaml"
-        if config_path.exists():
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f) or {}
-
-        # Collect API keys
-        deepseek_key = config.get('deepseek_api_key', '')
-        if deepseek_key:
-            config['deepseek_api_keys'] = [deepseek_key]
-
-        # Check SRT file
-        srt_path = project_dir / f"{code}.srt"
-        txt_path = project_dir / f"{code}.txt"
-
-        if not srt_path.exists():
-            log(f"  ERROR: No SRT file found!", "ERROR")
-            return False
-
-        srt_entries = parse_srt_file(srt_path)
-        txt_content = txt_path.read_text(encoding='utf-8') if txt_path.exists() else ""
-
-        # Create workbook
-        excel_path = project_dir / f"{code}_prompts.xlsx"
-        workbook = PromptWorkbook(str(excel_path))
-
-        # Create generator
-        generator = ProgressivePromptsGenerator(config)
-        generator.log_callback = callback
-
-        # Run steps - BASIC mode (segment-based)
-        log(f"\n[STEP 1] Analyzing story...")
-        result = generator.step_analyze_story(project_dir, code, workbook, srt_entries, txt_content)
-        if result.status.value == "failed":
-            log(f"  FAILED: {result.message}", "ERROR")
-            return False
-
-        log(f"\n[STEP 1.5] Analyzing story segments...")
-        result = generator.step_analyze_story_segments(project_dir, code, workbook, srt_entries)
-        if result.status.value == "failed":
-            log(f"  FAILED: {result.message}", "ERROR")
-            return False
-
-        log(f"\n[STEP 2] Creating characters...")
-        result = generator.step_create_characters(project_dir, code, workbook, srt_entries, txt_content)
-        if result.status.value == "failed":
-            log(f"  FAILED: {result.message}", "ERROR")
-            return False
-
-        log(f"\n[STEP 3] Creating locations...")
-        result = generator.step_create_locations(project_dir, code, workbook, srt_entries, txt_content)
-        if result.status.value == "failed":
-            log(f"  FAILED: {result.message}", "ERROR")
-            return False
-
-        # BASIC MODE: Use segment-based director plan
-        log(f"\n[STEP 4] Creating director's plan (BASIC - segment-based)...")
-        result = generator.step_create_director_plan_basic(project_dir, code, workbook, srt_entries)
-        if result.status.value == "failed":
-            log(f"  FAILED: {result.message}", "ERROR")
-            return False
-
-        # Skip Step 4.5 in basic mode - not needed
-
-        log(f"\n[STEP 5] Creating scene prompts...")
-        result = generator.step_create_scene_prompts(project_dir, code, workbook)
-        if result.status.value == "failed":
-            log(f"  FAILED: {result.message}", "ERROR")
-            return False
-
-        log(f"\n[OK] Excel created successfully (BASIC mode)!")
-        return True
-
-    except Exception as e:
-        log(f"  ERROR: {e}", "ERROR")
-        import traceback
-        traceback.print_exc()
-        return False
 
 
 def is_local_pic_complete(project_dir: Path, name: str) -> bool:
@@ -336,7 +254,11 @@ def create_videos_for_project(project_dir: Path, code: str, callback=None) -> bo
 
 
 def process_project_pic_basic(code: str, callback=None) -> bool:
-    """Process a single project - BASIC mode (no IP rotation)."""
+    """Process a single project - BASIC mode (no IP rotation).
+
+    NOTE: Chrome workers CHỈ tạo ảnh/video.
+    Excel được tạo bởi Excel Worker (run_excel_api.py).
+    """
 
     def log(msg, level="INFO"):
         if callback:
@@ -358,25 +280,17 @@ def process_project_pic_basic(code: str, callback=None) -> bool:
     if not local_dir:
         return False
 
-    # Step 3: Check/Create Excel (BASIC mode)
+    # Step 3: Check Excel - CHỈ XỬ LÝ NẾU ĐÃ CÓ EXCEL VỚI PROMPTS
+    # Excel được tạo bởi Excel Worker, Chrome chỉ tạo ảnh
     excel_path = local_dir / f"{code}_prompts.xlsx"
-    srt_path = local_dir / f"{code}.srt"
 
     if not excel_path.exists():
-        if srt_path.exists():
-            log(f"  No Excel found, creating (BASIC mode)...")
-            if not create_excel_with_api_basic(local_dir, code, callback):
-                log(f"  Failed to create Excel, skip!", "ERROR")
-                return False
-        else:
-            log(f"  No Excel and no SRT, skip!")
-            return False
-    elif not has_excel_with_prompts(local_dir, code):
-        log(f"  Excel empty/corrupt, recreating (BASIC mode)...")
-        excel_path.unlink()
-        if not create_excel_with_api_basic(local_dir, code, callback):
-            log(f"  Failed to recreate Excel, skip!", "ERROR")
-            return False
+        log(f"  No Excel found - waiting for Excel Worker to create it")
+        return False
+
+    if not has_excel_with_prompts(local_dir, code):
+        log(f"  Excel exists but no prompts - waiting for Excel Worker to complete")
+        return False
 
     # Step 4: Create images using SmartEngine (same as worker_pic)
     # Basic mode just means we created Excel with segment-based approach

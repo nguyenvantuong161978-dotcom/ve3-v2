@@ -61,3 +61,23 @@ config/blocked_proxies.json
 
 # IPv6 list (different per machine)
 ipv6_list.txt
+config/ipv6_list.txt
+
+# Sensitive files - DO NOT TRACK
+config/config.json
+config/creds.json
+
+# Chrome portable (too large)
+GoogleChromePortable/
+GoogleChromePortable - Copy/
+
+# Trash and temp
+_trash/
+nul
+
+# Agent/Claude files
+.agent/
+.claude/
+
+# Notes
+NOTES.md
