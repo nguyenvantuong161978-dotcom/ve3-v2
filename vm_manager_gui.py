@@ -686,6 +686,11 @@ class SimpleGUI(tk.Tk):
                   activebackground='#0f3460', activeforeground='#00ff88')
         self.ipv6_check.pack(side="left", padx=15)
 
+        # Setup button - cai thu vien
+        self.setup_btn = tk.Button(top, text="SETUP", command=self._run_setup,
+                  bg='#ff9f43', fg='white', font=("Arial", 9, "bold"), relief="flat", padx=10)
+        self.setup_btn.pack(side="left", padx=5)
+
         # Status
         self.status_var = tk.StringVar(value="San sang")
         tk.Label(top, textvariable=self.status_var, bg='#0f3460', fg='#00d9ff',
@@ -1199,6 +1204,43 @@ class SimpleGUI(tk.Tk):
         except:
             pass
         return True  # Mac dinh enabled
+
+    def _run_setup(self):
+        """Chay pip install de cai thu vien."""
+        import subprocess
+
+        def do_setup():
+            self.setup_btn.config(state="disabled", text="DANG CAI...", bg='#666')
+            self.status_var.set("Dang cai thu vien...")
+
+            try:
+                # Chay pip install
+                req_file = TOOL_DIR / "requirements.txt"
+                if req_file.exists():
+                    result = subprocess.run(
+                        [sys.executable, "-m", "pip", "install", "-r", str(req_file)],
+                        capture_output=True,
+                        text=True,
+                        timeout=300  # 5 phut
+                    )
+
+                    if result.returncode == 0:
+                        self.status_var.set("Cai xong! Khoi dong lai de ap dung.")
+                        self.setup_btn.config(text="XONG", bg='#00ff88')
+                    else:
+                        self.status_var.set("Loi khi cai!")
+                        self.setup_btn.config(text="LOI", bg='#e94560')
+                        print(f"Setup error: {result.stderr}")
+                else:
+                    self.status_var.set("Khong tim thay requirements.txt!")
+                    self.setup_btn.config(text="LOI", bg='#e94560')
+            except Exception as e:
+                self.status_var.set(f"Loi: {e}")
+                self.setup_btn.config(text="LOI", bg='#e94560')
+            finally:
+                self.after(3000, lambda: self.setup_btn.config(state="normal", text="SETUP", bg='#ff9f43'))
+
+        threading.Thread(target=do_setup, daemon=True).start()
 
     def _toggle_ipv6(self):
         """Bat/tat IPv6 va luu vao settings.yaml."""
