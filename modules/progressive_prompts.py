@@ -1320,8 +1320,8 @@ Return JSON only:
 
         → API chỉ cần quyết định HOW to visualize, không cần re-read toàn bộ story
         """
-        import time
-        step_start = time.time()
+        # Redirect to basic version which is complete
+        return self.step_create_director_plan_basic(project_dir, code, workbook, srt_entries)
 
     def _process_segment_sub_batch(self, seg_name, message, visual_summary, key_elements,
                                     mood, chars_involved, image_count, srt_start, srt_end,
