@@ -691,6 +691,11 @@ class SimpleGUI(tk.Tk):
                   bg='#ff9f43', fg='white', font=("Arial", 9, "bold"), relief="flat", padx=10)
         self.setup_btn.pack(side="left", padx=5)
 
+        # Update button - cap nhat tu GitHub
+        self.update_btn = tk.Button(top, text="UPDATE", command=self._run_update,
+                  bg='#0984e3', fg='white', font=("Arial", 9, "bold"), relief="flat", padx=10)
+        self.update_btn.pack(side="left", padx=5)
+
         # Status
         self.status_var = tk.StringVar(value="San sang")
         tk.Label(top, textvariable=self.status_var, bg='#0f3460', fg='#00d9ff',
@@ -1204,6 +1209,51 @@ class SimpleGUI(tk.Tk):
         except:
             pass
         return True  # Mac dinh enabled
+
+    def _run_update(self):
+        """Cap nhat code tu GitHub."""
+        import subprocess
+
+        def do_update():
+            self.update_btn.config(state="disabled", text="DANG CAP NHAT...", bg='#666')
+            self.status_var.set("Dang cap nhat tu GitHub...")
+
+            try:
+                # Fetch va reset ve main branch
+                cmds = [
+                    ["git", "fetch", "origin", "main"],
+                    ["git", "reset", "--hard", "origin/main"]
+                ]
+
+                for cmd in cmds:
+                    result = subprocess.run(
+                        cmd,
+                        cwd=str(TOOL_DIR),
+                        capture_output=True,
+                        text=True,
+                        timeout=60
+                    )
+                    if result.returncode != 0:
+                        raise Exception(result.stderr or "Git command failed")
+
+                self.status_var.set("Cap nhat xong! Khoi dong lai tool.")
+                self.update_btn.config(text="XONG", bg='#00ff88')
+
+                # Hoi co muon khoi dong lai khong
+                from tkinter import messagebox
+                if messagebox.askyesno("Cap nhat xong", "Da cap nhat xong!\nBan co muon khoi dong lai tool?"):
+                    # Khoi dong lai
+                    import os
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+            except Exception as e:
+                self.status_var.set(f"Loi: {e}")
+                self.update_btn.config(text="LOI", bg='#e94560')
+                print(f"Update error: {e}")
+            finally:
+                self.after(3000, lambda: self.update_btn.config(state="normal", text="UPDATE", bg='#0984e3'))
+
+        threading.Thread(target=do_update, daemon=True).start()
 
     def _run_setup(self):
         """Chay pip install de cai thu vien."""
