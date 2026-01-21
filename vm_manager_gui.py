@@ -1913,11 +1913,16 @@ class SimpleGUI(tk.Tk):
 
                     # Download - bo qua SSL certificate
                     import ssl
+                    import time
                     ssl_context = ssl.create_default_context()
                     ssl_context.check_hostname = False
                     ssl_context.verify_mode = ssl.CERT_NONE
 
-                    with urllib.request.urlopen(GITHUB_ZIP_URL, context=ssl_context) as response:
+                    # Cache-busting: them timestamp vao URL
+                    cache_buster = f"?t={int(time.time())}"
+                    download_url = GITHUB_ZIP_URL + cache_buster
+
+                    with urllib.request.urlopen(download_url, context=ssl_context) as response:
                         with open(str(zip_path), 'wb') as out_file:
                             out_file.write(response.read())
 
@@ -1965,12 +1970,16 @@ class SimpleGUI(tk.Tk):
                     if extract_dir.exists():
                         shutil.rmtree(str(extract_dir))
 
+                # Lay version moi sau khi update
+                new_version = self._get_git_version()
+
                 self.status_var.set("Cap nhat xong! Khoi dong lai tool.")
                 self.update_btn.config(text="XONG", bg='#00ff88')
 
                 # Hoi co muon khoi dong lai khong
                 from tkinter import messagebox
-                if messagebox.askyesno("Cap nhat xong", "Da cap nhat xong!\nBan co muon khoi dong lai tool?"):
+                update_msg = f"Da cap nhat xong!\n\nPhien ban moi: {new_version}\n\nBan co muon khoi dong lai tool?"
+                if messagebox.askyesno("Cap nhat xong", update_msg):
                     import os
                     os.execv(sys.executable, [sys.executable] + sys.argv)
 
