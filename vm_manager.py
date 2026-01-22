@@ -1695,21 +1695,32 @@ class VMManager:
             chrome_windows = []
 
             def enum_windows_callback(hwnd, lParam):
-                # Check visible state (even if off-screen)
-                if user32.IsWindowVisible(hwnd):
-                    # Get class name
-                    class_name = ctypes.create_unicode_buffer(256)
-                    user32.GetClassNameW(hwnd, class_name, 256)
+                try:
+                    # Check visible state (even if off-screen)
+                    if user32.IsWindowVisible(hwnd):
+                        # Get class name
+                        class_name = ctypes.create_unicode_buffer(256)
+                        user32.GetClassNameW(hwnd, class_name, 256)
 
-                    # Chrome browser windows have class "Chrome_WidgetWin_*"
-                    if class_name.value.startswith("Chrome_WidgetWin"):
-                        length = user32.GetWindowTextLengthW(hwnd)
-                        if length > 0:
-                            title = ctypes.create_unicode_buffer(length + 1)
-                            user32.GetWindowTextW(hwnd, title, length + 1)
-                            # Skip Chrome.exe windows (only get browser windows)
-                            if "chrome.exe" not in title.value.lower():
+                        # Chrome browser windows have class "Chrome_WidgetWin_*"
+                        if class_name.value.startswith("Chrome_WidgetWin"):
+                            # Get title (safe)
+                            skip = False
+                            length = user32.GetWindowTextLengthW(hwnd)
+                            if length > 0:
+                                try:
+                                    title = ctypes.create_unicode_buffer(length + 1)
+                                    user32.GetWindowTextW(hwnd, title, length + 1)
+                                    # Skip Chrome.exe windows (only get browser windows)
+                                    if "chrome.exe" in title.value.lower():
+                                        skip = True
+                                except:
+                                    pass  # If error reading title, still include window
+
+                            if not skip:
                                 chrome_windows.append(hwnd)
+                except:
+                    pass  # Ignore errors in callback
                 return True
 
             WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
@@ -1793,10 +1804,11 @@ class VMManager:
                     x = screen_width - chrome_width - 10
                     y = screen_height - chrome_height - 50
 
-                # Set TOPMOST first to bring to front
-                user32.SetWindowPos(hwnd, -1, x, y, chrome_width, chrome_height, 0x0040)  # TOPMOST + SHOWWINDOW
-                # Then remove TOPMOST
-                user32.SetWindowPos(hwnd, -2, x, y, chrome_width, chrome_height, 0x0040 | 0x0002 | 0x0001)  # NOTOPMOST + SHOWWINDOW + NOMOVE + NOSIZE
+                # Use MoveWindow (works better than SetWindowPos)
+                user32.MoveWindow(hwnd, x, y, chrome_width, chrome_height, True)
+
+                # Bring to front
+                user32.SetForegroundWindow(hwnd)
 
             self.log(f"Shown {len(chrome_windows)} Chrome windows (right side, large)", "CHROME", "SUCCESS")
             return True
