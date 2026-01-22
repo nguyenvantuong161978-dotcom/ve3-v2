@@ -1985,6 +1985,14 @@ class VMManager:
             log_dir.mkdir(parents=True, exist_ok=True)
             log_file = log_dir / f"{worker_id}.log"
 
+            # Clear old log file for fresh start
+            if log_file.exists():
+                try:
+                    with open(log_file, 'w', encoding='utf-8') as f:
+                        f.write(f"[{datetime.now().strftime('%H:%M:%S')}] Worker {worker_id} started (fresh session)\n")
+                except:
+                    pass  # Ignore if can't clear
+
             if sys.platform == "win32":
                 # Windows - start with cmd window
                 title = f"{w.worker_type.upper()} {w.worker_num or ''}"
