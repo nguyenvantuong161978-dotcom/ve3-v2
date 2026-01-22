@@ -912,9 +912,9 @@ class SimpleGUI(tk.Tk):
         tk.Radiobutton(mode_frame, text="Full", variable=self.mode_var, value="full",
                        bg='#0f3460', fg='white', selectcolor='#1a1a2e', font=("Arial", 10)).pack(side="left")
 
-        # Show/Hide Workers button (Excel CMD + Chrome)
+        # Show/Hide Chrome button (CMD already hidden, shown in log viewer)
         self.windows_visible = False  # Start hidden
-        self.toggle_btn = tk.Button(top, text="HIEN WORKERS", command=self._toggle_windows,
+        self.toggle_btn = tk.Button(top, text="HIEN CHROME", command=self._toggle_windows,
                   bg='#6c5ce7', fg='white', font=("Arial", 9, "bold"), relief="flat", padx=10)
         self.toggle_btn.pack(side="left", padx=10)
 
@@ -1925,24 +1925,23 @@ class SimpleGUI(tk.Tk):
         threading.Thread(target=do_reset, daemon=True).start()
 
     def _toggle_windows(self):
-        """Toggle ALL worker windows (Excel CMD + Chrome) visibility."""
+        """Toggle Chrome windows only (CMD stays hidden, logs in GUI)."""
         if not self.manager:
             return
 
         if self.windows_visible:
-            # Hide all CMD + Chrome
-            self.manager.hide_cmd_windows()
+            # Hide Chrome only
             self.manager.hide_chrome_windows()
-            self.toggle_btn.config(text="HIEN WORKERS", bg='#6c5ce7')
+            self.toggle_btn.config(text="HIEN CHROME", bg='#6c5ce7')
             self.windows_visible = False
         else:
-            # Show and arrange nicely
-            self._arrange_worker_windows()
-            self.toggle_btn.config(text="AN WORKERS", bg='#00b894')
+            # Show Chrome and arrange nicely
+            self._arrange_chrome_windows()
+            self.toggle_btn.config(text="AN CHROME", bg='#00b894')
             self.windows_visible = True
 
-    def _arrange_worker_windows(self):
-        """Arrange worker windows in good positions on screen."""
+    def _arrange_chrome_windows(self):
+        """Arrange Chrome windows in good positions on screen."""
         if not self.manager:
             return
 
@@ -1952,72 +1951,51 @@ class SimpleGUI(tk.Tk):
         screen_width = win32gui.GetSystemMetrics(0)
         screen_height = win32gui.GetSystemMetrics(1)
 
-        # Window sizes
-        chrome_width = 900
-        chrome_height = 600
-        cmd_width = 600
-        cmd_height = 400
+        # Chrome window size
+        chrome_width = 1100
+        chrome_height = 700
 
-        def enum_handler(hwnd, results):
+        # Position Chrome 1: Top-right
+        # Position Chrome 2: Bottom-right
+
+        def enum_handler(hwnd, count):
             if win32gui.IsWindowVisible(hwnd):
                 title = win32gui.GetWindowText(hwnd).lower()
-                class_name = win32gui.GetClassName(hwnd)
 
-                # Excel CMD - Top-left
-                if "excel" in title and class_name == "ConsoleWindowClass":
-                    x = 20
-                    y = 50
-                    win32gui.SetWindowPos(hwnd, win32con.HWND_TOP,
-                                        x, y, cmd_width, cmd_height,
-                                        win32con.SWP_SHOWWINDOW)
-                    results['excel'] = True
+                # Only Chrome windows (skip CMD)
+                if "chrome" in title and "chrome.exe" not in title:
+                    class_name = win32gui.GetClassName(hwnd)
 
-                # Chrome 1 + CMD - Top-right
-                elif ("chrome" in title and "1" in title) or ("chrome_1" in title):
-                    if "chrome.exe" in title or "google chrome" in title:
-                        # Chrome window
-                        x = screen_width - chrome_width - 20
-                        y = 50
+                    # Check if it's actually Chrome browser window
+                    if class_name.startswith("Chrome_WidgetWin"):
+                        # Determine which Chrome (1 or 2)
+                        if count[0] == 0:
+                            # Chrome 1 - Top-right
+                            x = screen_width - chrome_width - 20
+                            y = 50
+                            count[0] += 1
+                        else:
+                            # Chrome 2 - Bottom-right
+                            x = screen_width - chrome_width - 20
+                            y = screen_height - chrome_height - 100
+                            count[0] += 1
+
                         win32gui.SetWindowPos(hwnd, win32con.HWND_TOP,
                                             x, y, chrome_width, chrome_height,
-                                            win32con.SWP_SHOWWINDOW)
-                    elif class_name == "ConsoleWindowClass":
-                        # CMD window - next to Chrome
-                        x = screen_width - chrome_width - cmd_width - 40
-                        y = 50
-                        win32gui.SetWindowPos(hwnd, win32con.HWND_TOP,
-                                            x, y, cmd_width, cmd_height,
-                                            win32con.SWP_SHOWWINDOW)
-
-                # Chrome 2 + CMD - Bottom-right
-                elif ("chrome" in title and "2" in title) or ("chrome_2" in title):
-                    if "chrome.exe" in title or "google chrome" in title:
-                        # Chrome window
-                        x = screen_width - chrome_width - 20
-                        y = screen_height - chrome_height - 100
-                        win32gui.SetWindowPos(hwnd, win32con.HWND_TOP,
-                                            x, y, chrome_width, chrome_height,
-                                            win32con.SWP_SHOWWINDOW)
-                    elif class_name == "ConsoleWindowClass":
-                        # CMD window
-                        x = screen_width - chrome_width - cmd_width - 40
-                        y = screen_height - chrome_height - 100
-                        win32gui.SetWindowPos(hwnd, win32con.HWND_TOP,
-                                            x, y, cmd_width, cmd_height,
                                             win32con.SWP_SHOWWINDOW)
 
         try:
-            results = {}
-            win32gui.EnumWindows(enum_handler, results)
+            count = [0]  # Chrome counter
+            win32gui.EnumWindows(enum_handler, count)
         except Exception as e:
-            print(f"Error arranging windows: {e}")
+            print(f"Error arranging Chrome windows: {e}")
 
     def _auto_hide_windows(self):
-        """Auto-hide all worker windows when GUI starts."""
+        """Auto-hide Chrome and CMD windows when GUI starts."""
         if self.manager and not self.windows_visible:
             self.manager.hide_cmd_windows()
             self.manager.hide_chrome_windows()
-            self.toggle_btn.config(text="HIEN WORKERS", bg='#6c5ce7')
+            self.toggle_btn.config(text="HIEN CHROME", bg='#6c5ce7')
 
     def _get_git_version(self) -> str:
         """Lay thong tin git commit cuoi cung."""
