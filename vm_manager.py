@@ -1783,26 +1783,29 @@ class VMManager:
             screen_width = user32.GetSystemMetrics(0)  # SM_CXSCREEN
             screen_height = user32.GetSystemMetrics(1)  # SM_CYSCREEN
 
-            # Chrome window size - TO HƠN để dễ quan sát
+            # Chrome window size - Chia đều chiều cao cho 2 Chrome
             chrome_width = max(int(screen_width * 0.55), 1200)  # 55% màn hình, tối thiểu 1200
-            chrome_height = max(int(screen_height * 0.45), 800)  # 45% màn hình, tối thiểu 800
 
-            # SW_RESTORE = 9 (restore if minimized)
-            # HWND_TOPMOST = -1, HWND_NOTOPMOST = -2
-            # SWP_SHOWWINDOW = 0x0040, SWP_NOMOVE = 0x0002, SWP_NOSIZE = 0x0001
+            # Mỗi Chrome chiếm 1/2 chiều cao màn hình, trừ đi khoảng cách
+            gap = 20  # Khoảng cách giữa 2 Chrome và với viền màn hình
+            chrome_height = (screen_height - gap * 3) // 2  # Chia đều cho 2 Chrome
+
+            # Tối thiểu 600px
+            chrome_height = max(chrome_height, 600)
 
             for i, hwnd in enumerate(chrome_windows):
                 # Restore window if minimized
                 user32.ShowWindow(hwnd, 9)  # SW_RESTORE
 
+                # Chiều rộng giống nhau, bên phải màn hình
+                x = screen_width - chrome_width - 10
+
                 if i == 0:
-                    # Chrome 1 - Top-right
-                    x = screen_width - chrome_width - 10
-                    y = 10
+                    # Chrome 1 - Top half (nửa trên)
+                    y = gap
                 else:
-                    # Chrome 2 - Bottom-right
-                    x = screen_width - chrome_width - 10
-                    y = screen_height - chrome_height - 50
+                    # Chrome 2 - Bottom half (nửa dưới)
+                    y = gap + chrome_height + gap
 
                 # Use MoveWindow (works better than SetWindowPos)
                 user32.MoveWindow(hwnd, x, y, chrome_width, chrome_height, True)
