@@ -852,7 +852,16 @@ class VMManager:
         self.consecutive_403_count = 0  # Tổng 403 liên tiếp (all workers)
         self.worker_error_counts: Dict[str, int] = {}  # Per-worker consecutive errors
         self.max_403_before_ipv6 = 5  # Đổi IPv6 sau 5 lần 403
-        self.max_errors_before_clear = 3  # Xóa data Chrome sau 3 lần lỗi liên tiếp
+        self.max_errors_before_clear = 3  # Xóa data Chrome sau 3 lần lỗi liên tiếu tiếp
+
+        # Auto-restart Chrome workers
+        self.chrome_restart_interval = 3600  # 1 tiếng = 3600 giây
+        self.chrome_last_restart = time.time()
+
+        # Project timeout
+        self.project_timeout = 6 * 3600  # 6 tiếng = 21600 giây
+        self.project_start_time = None
+        self.current_project_code = None
 
         # Auto-detect
         self.auto_path = self._detect_auto_path()
@@ -1523,8 +1532,45 @@ class VMManager:
                     projects.append(code)
         return sorted(projects)
 
+    def copy_project_to_master(self, project_code: str):
+        """Copy project folder to master (AUTO path)."""
+        if not self.auto_path:
+            self.log("No AUTO path detected, skip copy", "SYSTEM", "WARN")
+            return
+
+        src_dir = TOOL_DIR / "PROJECTS" / project_code
+        if not src_dir.exists():
+            self.log(f"Project {project_code} not found in PROJECTS/", "SYSTEM", "ERROR")
+            return
+
+        # Đích: AUTO/{project_code}/
+        dest_dir = self.auto_path / project_code
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy tất cả files và folders
+        import shutil
+        for item in src_dir.iterdir():
+            dest_item = dest_dir / item.name
+            try:
+                if item.is_dir():
+                    if dest_item.exists():
+                        shutil.rmtree(str(dest_item))
+                    shutil.copytree(str(item), str(dest_item))
+                else:
+                    shutil.copy2(str(item), str(dest_item))
+            except Exception as e:
+                self.log(f"Failed to copy {item.name}: {e}", "SYSTEM", "ERROR")
+
+        self.log(f"Copied {project_code} to {dest_dir}", "SYSTEM", "SUCCESS")
+
     def create_tasks_for_project(self, project_code: str):
         status = self.quality_checker.get_project_status(project_code)
+
+        # Start project timer nếu đây là project mới
+        if self.current_project_code != project_code:
+            self.current_project_code = project_code
+            self.project_start_time = time.time()
+            self.log(f"Started tracking project {project_code} (6h timeout)", "MANAGER")
 
         if status.current_step == "excel":
             self.create_task(TaskType.EXCEL, project_code)
@@ -2024,6 +2070,83 @@ class VMManager:
         w.restart_count += 1
         self.log(f"{worker_id} restarted (count: {w.restart_count})", worker_id, "SUCCESS")
 
+    def auto_restart_chrome_workers(self):
+        """Tự động restart Chrome workers mỗi 1 tiếng để tránh lỗi."""
+        self.log("=" * 60, "SYSTEM")
+        self.log("AUTO-RESTART CHROME WORKERS (1 TIẾNG)", "SYSTEM")
+        self.log("=" * 60, "SYSTEM")
+
+        # 1. Stop tất cả Chrome workers
+        chrome_workers = [wid for wid in self.workers if wid.startswith("chrome_")]
+        for wid in chrome_workers:
+            self.log(f"Stopping {wid}...", wid)
+            self.stop_worker(wid)
+
+        # 2. Kill all Chrome processes
+        self.log("Killing all Chrome processes...", "SYSTEM")
+        self.kill_all_chrome()
+        time.sleep(2)
+
+        # 3. Restart Chrome workers
+        for wid in chrome_workers:
+            self.log(f"Starting {wid}...", wid)
+            time.sleep(2)
+            self.start_worker(wid, gui_mode=self.gui_mode)
+
+            # Track restart
+            w = self.workers[wid]
+            w.last_restart_time = datetime.now()
+            w.restart_count += 1
+
+        self.log("Chrome workers restarted successfully", "SYSTEM", "SUCCESS")
+
+    def handle_project_timeout(self, project_code: str):
+        """Xử lý khi project quá 6 tiếng: Copy kết quả về máy chủ và chuyển project tiếp theo."""
+        self.log("=" * 60, "SYSTEM")
+        self.log(f"PROJECT TIMEOUT: {project_code} (6 TIẾNG)", "SYSTEM", "WARN")
+        self.log("=" * 60, "SYSTEM")
+
+        # 1. Stop tất cả workers
+        self.log("Stopping all workers...", "SYSTEM")
+        for wid in self.workers:
+            self.stop_worker(wid)
+
+        # 2. Copy kết quả về máy chủ (nếu có AUTO path)
+        if self.auto_path:
+            try:
+                self.log(f"Copying {project_code} to master...", "SYSTEM")
+                self.copy_project_to_master(project_code)
+                self.log(f"Copied {project_code} successfully", "SYSTEM", "SUCCESS")
+            except Exception as e:
+                self.log(f"Failed to copy {project_code}: {e}", "SYSTEM", "ERROR")
+
+        # 3. Mark project as completed (timeout)
+        if project_code in self.project_tasks:
+            for task_id in self.project_tasks[project_code]:
+                if task_id in self.tasks:
+                    task = self.tasks[task_id]
+                    if task.status != TaskStatus.COMPLETED:
+                        task.status = TaskStatus.COMPLETED
+                        task.note = "TIMEOUT_6H"
+
+        # 4. Kill all Chrome
+        self.log("Killing all Chrome processes...", "SYSTEM")
+        self.kill_all_chrome()
+        time.sleep(2)
+
+        # 5. Restart Chrome workers
+        chrome_workers = [wid for wid in self.workers if wid.startswith("chrome_")]
+        for wid in chrome_workers:
+            self.log(f"Restarting {wid}...", wid)
+            time.sleep(2)
+            self.start_worker(wid, gui_mode=self.gui_mode)
+
+        # 6. Reset project timer
+        self.project_start_time = None
+        self.current_project_code = None
+
+        self.log("Ready for next project", "SYSTEM", "SUCCESS")
+
     def check_and_auto_recover(self) -> bool:
         """Check for connection errors and auto-recover if needed.
 
@@ -2134,6 +2257,19 @@ class VMManager:
 
         while not self._stop_flag:
             try:
+                # 0. Check auto-restart Chrome workers (mỗi 1 tiếng)
+                if time.time() - self.chrome_last_restart >= self.chrome_restart_interval:
+                    self.log("Auto-restart Chrome workers (1 tiếng)", "MANAGER")
+                    self.auto_restart_chrome_workers()
+                    self.chrome_last_restart = time.time()
+
+                # 0b. Check project timeout (6 tiếng)
+                if self.project_start_time and self.current_project_code:
+                    elapsed = time.time() - self.project_start_time
+                    if elapsed >= self.project_timeout:
+                        self.log(f"Project {self.current_project_code} timeout (6 tiếng) - Moving to next", "MANAGER")
+                        self.handle_project_timeout(self.current_project_code)
+
                 # 1. Sync worker status từ Agent Protocol
                 self.sync_worker_status()
 
