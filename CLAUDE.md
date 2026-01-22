@@ -143,28 +143,48 @@ git push official main  # Push lên repo chính thức
   - Restart Chrome and retry immediately
   - Continue if retry succeeds
 
-**4. Kill All Chrome Logic**
-- If 10+ consecutive exceptions: `taskkill /F /IM chrome.exe`
-- Raise exception to trigger worker restart
-- Prevents infinite loop when Chrome is stuck
+**4. Selective Chrome Kill Logic (CRITICAL FIX)**
+- ❌ PROBLEM: Previous code killed ALL Chrome (`taskkill /IM chrome.exe`)
+  - Worker 1 error → Kills Chrome 1 AND Chrome 2
+  - Worker 2 fails because its Chrome was killed by Worker 1's error
+  - Cascade failures between workers
+- ✅ SOLUTION: Kill only worker's Chrome (commit 65fc79e)
+  - Method 1: `drission_api.close()` (kills only this worker's Chrome)
+  - Method 2 (backup): Kill by portable path
+    - Worker 1: Kill Chrome with "GoogleChromePortable" BUT NOT "Copy"
+    - Worker 2: Kill Chrome with "Copy"
+  - Prevents cascade failures between workers
+- 📄 Added `test_kill_chrome.py` to verify kill logic
 
 **Completed this session:**
 - [x] Fixed exception logging to show full details
 - [x] Added Vietnam timezone to GUI version display
 - [x] Added Chrome auto-restart when API/connection errors
-- [x] Added kill-all-Chrome logic when too many exceptions
-- [x] Tested and committed (3da0a85, 15f3a3f, cf77a30)
-- [x] Pushed to GitHub with force update
+- [x] Fixed kill logic - only kill worker's Chrome (NOT all)
+- [x] Created test script to verify selective kill
+- [x] Tested and committed (3da0a85, 15f3a3f, cf77a30, 65fc79e)
+- [x] Pushed to GitHub
 
 **How it works now:**
 1. Exception → Log type + traceback (debug)
-2. If Chrome/API error → Auto restart Chrome
-3. If 10+ consecutive exceptions → Kill all Chrome + worker restart
+2. If Chrome/API error → Auto restart Chrome (this worker only)
+3. If 10+ consecutive exceptions:
+   - Try: `drission_api.close()` (selective kill)
+   - Fallback: Kill by portable path (Worker 1: exclude "Copy", Worker 2: match "Copy")
+   - Raise exception → worker restarts
 4. Reset counter on success or successful restart
+
+**Testing:**
+Run `python test_kill_chrome.py` to verify:
+1. Open Chrome 1 and Chrome 2
+2. Script shows all Chrome PIDs
+3. Choose worker to kill (1 or 2)
+4. Verify other Chrome still alive ✓
 
 **User feedback:**
 - "NÓ CŨNG LÀ LỖI KHÔNG MỞ CHROME ĐÓ" ✅ Fixed with auto-restart
-- "NẾU CỨNG THÌ RESET ALL CÁC CMD ĐÓ" ✅ Fixed with kill-all logic
+- "NẾU CỨNG THÌ RESET ALL CÁC CMD ĐÓ" ✅ Fixed with selective kill
+- "KILL CHROME ĐÓ THÌ CÓ THỂ VÌ KILL CÁC CHROME MÀ CÓ CMD ĐANG ĐIỀU KHIỂN" ✅ Fixed - only kill worker's Chrome
 
 ### Backlog (việc cần làm)
 - [ ] Worker logs không hiển thị trong GUI (trade-off để Chrome automation hoạt động)
