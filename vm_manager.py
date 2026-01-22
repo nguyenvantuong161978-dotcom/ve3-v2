@@ -2044,7 +2044,7 @@ process.wait()
 
                 if gui_mode:
                     # GUI mode - start minimized CMD that will be hidden
-                    cmd = f'start /MIN "{title}" cmd /k "chcp 65001 >nul && cd /d {TOOL_DIR} && python -X utf8 {wrapper_script.name}"'
+                    cmd = f'start /MIN "{title}" cmd /k "chcp 65001 >nul && cd /d {TOOL_DIR} && python -X utf8 \"{wrapper_script}\""'
                     w.process = subprocess.Popen(cmd, shell=True, cwd=str(TOOL_DIR), env=worker_env)
 
                     # Move CMD windows off-screen after a short delay
@@ -2054,7 +2054,7 @@ process.wait()
                     threading.Thread(target=move_cmd_offscreen, daemon=True).start()
                 else:
                     # Normal mode - visible CMD window
-                    cmd = f'start "{title}" cmd /k "chcp 65001 >nul && cd /d {TOOL_DIR} && python -X utf8 {wrapper_script.name}"'
+                    cmd = f'start "{title}" cmd /k "chcp 65001 >nul && cd /d {TOOL_DIR} && python -X utf8 \"{wrapper_script}\""'
                     w.process = subprocess.Popen(cmd, shell=True, cwd=str(TOOL_DIR), env=worker_env)
             else:
                 # Linux/Mac
