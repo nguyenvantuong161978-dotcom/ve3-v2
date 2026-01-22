@@ -3682,6 +3682,10 @@ class BrowserFlowGenerator:
             else:
                 self._log(f"[PARALLEL] Chrome {worker_id}/{total_workers} - Worker sẽ xử lý scenes theo modulo")
 
+        # Counter để theo dõi exception liên tiếp - nếu quá nhiều thì kill all Chrome
+        consecutive_exceptions = 0
+        MAX_CONSECUTIVE_EXCEPTIONS = 10  # Ngưỡng kill all Chrome
+
         for i, prompt_data in enumerate(prompts):
             pid = str(prompt_data.get('id', i + 1))
             prompt = prompt_data.get('prompt', '')
@@ -3864,6 +3868,7 @@ class BrowserFlowGenerator:
                     self._log(f"   [v] Thành công! Saved {len(images)} image(s)")
                     self.stats["success"] += 1
                     consecutive_403 = 0  # Reset counter on success
+                    consecutive_exceptions = 0  # Reset exception counter
 
                     # Đánh dấu thành công với ChromeManager
                     try:
@@ -4128,6 +4133,39 @@ class BrowserFlowGenerator:
                 self._log(f"   [x] Exception: {type(e).__name__}: {str(e)}", "error")
                 self._log(f"   Traceback: {traceback.format_exc()}", "error")
                 self.stats["failed"] += 1
+                consecutive_exceptions += 1
+
+                # Check nếu exception quá nhiều lần liên tiếp → KILL ALL CHROME
+                if consecutive_exceptions >= MAX_CONSECUTIVE_EXCEPTIONS:
+                    self._log(f"[CRITICAL] {consecutive_exceptions} exceptions liên tiếp - KILL ALL CHROME!", "error")
+                    try:
+                        import subprocess
+                        # Kill all Chrome processes
+                        subprocess.run(['taskkill', '/F', '/IM', 'chrome.exe'], capture_output=True, timeout=10)
+                        self._log("   [v] Killed all Chrome processes", "warn")
+                        time.sleep(5)
+                        # Raise exception để worker restart
+                        raise Exception(f"Too many consecutive exceptions ({consecutive_exceptions}) - Chrome killed, worker needs restart")
+                    except subprocess.TimeoutExpired:
+                        self._log("   [x] Taskkill timeout", "error")
+                    except Exception as kill_e:
+                        if "Too many consecutive" in str(kill_e):
+                            raise  # Re-raise để worker restart
+                        self._log(f"   [x] Kill error: {kill_e}", "error")
+
+                # Nếu lỗi liên quan đến Chrome/API, thử restart Chrome 1 lần
+                error_msg = str(e).lower()
+                if any(keyword in error_msg for keyword in ['api', 'chrome', 'setup', 'connection', 'disconnect']):
+                    self._log(f"[WARN] Lỗi Chrome/API detected - thử restart Chrome...", "warn")
+                    try:
+                        if drission_api.restart_chrome():
+                            self._log(f"   [v] Chrome restarted - prompt {pid} sẽ retry ở RETRY PHASE", "info")
+                            consecutive_exceptions = 0  # Reset sau khi restart thành công
+                            # Không retry ngay đây, để RETRY PHASE xử lý
+                        else:
+                            self._log(f"   [x] Không restart được Chrome", "warn")
+                    except Exception as restart_e:
+                        self._log(f"   [x] Restart error: {restart_e}", "warn")
 
             # Rate limit
             time.sleep(1)
@@ -4253,6 +4291,34 @@ class BrowserFlowGenerator:
                             import traceback
                             self._log(f"   [x] Retry error: {type(e).__name__}: {str(e)}", "error")
                             self._log(f"   Traceback: {traceback.format_exc()}", "error")
+
+                            # Nếu lỗi liên quan đến Chrome/API, thử restart và retry NGAY
+                            error_msg = str(e).lower()
+                            if any(keyword in error_msg for keyword in ['api', 'chrome', 'setup', 'connection', 'disconnect', 'attributeerror']):
+                                self._log(f"[RETRY] Chrome/API error detected - restart và thử lại...", "warn")
+                                try:
+                                    if drission_api.restart_chrome():
+                                        self._log(f"   [v] Chrome restarted, retry {pid} ngay...", "info")
+                                        time.sleep(3)
+                                        # Retry ngay
+                                        success2, images2, error2 = drission_api.generate_image(
+                                            prompt=prompt,
+                                            save_dir=save_dir,
+                                            filename=pid,
+                                            image_inputs=image_inputs
+                                        )
+                                        if success2 and images2:
+                                            self._log(f"   [v] Retry sau restart OK: {pid}")
+                                            self.stats["success"] += 1
+                                            self.stats["failed"] -= 1
+                                            continue  # Skip adding to still_missing
+                                        else:
+                                            self._log(f"   [x] Retry sau restart vẫn fail: {error2}", "warn")
+                                    else:
+                                        self._log(f"   [x] Không restart được Chrome", "warn")
+                                except Exception as restart_e:
+                                    self._log(f"   [x] Restart/retry error: {restart_e}", "warn")
+
                             still_missing.append(prompt_data)
 
                         time.sleep(2)
