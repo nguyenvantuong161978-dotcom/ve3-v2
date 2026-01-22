@@ -862,6 +862,9 @@ class SimpleGUI(tk.Tk):
         self.configure(bg='#1a1a2e')
         self.minsize(1400, 800)
 
+        # Hide current CMD window if running from CMD
+        self._hide_current_cmd_window()
+
         # Khoi tao manager ngay de hien projects
         self.manager = VMManager(num_chrome_workers=2)
         self.running = False
@@ -872,6 +875,24 @@ class SimpleGUI(tk.Tk):
         self._build()
         self._load_projects_on_startup()  # Load projects ngay khi mo
         self._update_loop()
+
+    def _hide_current_cmd_window(self):
+        """Hide the CMD window that launched this GUI."""
+        try:
+            import win32gui
+            import win32con
+            import ctypes
+
+            # Get console window handle
+            kernel32 = ctypes.windll.kernel32
+            hwnd = kernel32.GetConsoleWindow()
+
+            if hwnd:
+                # Hide it
+                win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+                print("[GUI] Hidden launch CMD window")
+        except Exception as e:
+            print(f"[GUI] Could not hide CMD window: {e}")
 
     def _build(self):
         # === TOP: Controls ===
