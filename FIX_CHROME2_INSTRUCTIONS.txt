@@ -1,0 +1,84 @@
+======================================================================
+FIX FOR CHROME 2 NOT CONTROLLABLE - INSTRUCTIONS
+======================================================================
+
+PROBLEM:
+Chrome 2 worker cannot control Chrome browser because it's using the
+WRONG Chrome portable path (Chrome 1's path instead of Chrome 2's path).
+
+ROOT CAUSE:
+Auto-detection code in drission_flow_api.py was overriding the manually
+set chrome_portable parameter.
+
+FIXES APPLIED (in GitHub code):
+1. Auto-detect now skips if chrome_portable is already set
+2. Relative paths are converted to absolute paths correctly
+
+VERIFICATION:
+Run this command to check if your code has the fixes:
+    python check_version.py
+
+If both checks show "[OK] FOUND", your code is up-to-date.
+
+======================================================================
+SOLUTION FOR USER (thutruc):
+======================================================================
+
+STEP 1: Close the tool completely
+    - Stop all workers
+    - Close GUI
+
+STEP 2: Update the code (choose ONE method):
+
+    Method A - Use UPDATE button:
+        1. Start the tool
+        2. Click UPDATE button in GUI
+        3. Wait for download to complete
+        4. Restart tool
+
+    Method B - Run UPDATE_MANUAL.bat:
+        1. Double-click UPDATE_MANUAL.bat
+        2. Wait for update to complete
+        3. Start tool again
+
+    Method C - Git pull (if you have git):
+        git pull origin main
+
+STEP 3: Verify the fix
+    1. Start the tool
+    2. Check worker logs for Chrome 2
+    3. Should see:
+        [CHROME] Dùng chrome_portable: C:\Users\thutruc\...\GoogleChromePortable - Copy\GoogleChromePortable.exe
+
+    Note the " - Copy" at the end - this confirms correct path!
+
+STEP 4: Test Chrome 2 control
+    1. Let Chrome 2 worker run
+    2. Check if it can create images successfully
+    3. Click "HIEN CHROME" button to verify windows appear correctly
+
+======================================================================
+EXPECTED BEHAVIOR AFTER FIX:
+======================================================================
+
+Chrome 1 should use:
+    C:\Users\thutruc\Documents\AR8-T1\ve3-tool-simple\GoogleChromePortable\GoogleChromePortable.exe
+
+Chrome 2 should use:
+    C:\Users\thutruc\Documents\AR8-T1\ve3-tool-simple\GoogleChromePortable - Copy\GoogleChromePortable.exe
+
+Both Chrome windows should:
+    - Appear on the right side of screen
+    - Split evenly (Chrome 1 top half, Chrome 2 bottom half)
+    - Be controllable via DrissionPage
+
+======================================================================
+IF PROBLEM PERSISTS AFTER UPDATE:
+======================================================================
+
+1. Run check_version.py to verify both fixes are present
+2. Check worker logs carefully for the exact Chrome path being used
+3. Verify that both Chrome portable folders exist and contain GoogleChromePortable.exe
+4. May need additional debugging in smart_engine.py or drission_flow_api.py
+
+======================================================================
