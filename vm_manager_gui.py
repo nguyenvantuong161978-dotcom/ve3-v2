@@ -1960,70 +1960,11 @@ class SimpleGUI(tk.Tk):
             self.toggle_btn.config(text="HIEN CHROME", bg='#6c5ce7')
             self.windows_visible = False
         else:
-            # Show Chrome and arrange nicely
-            self._arrange_chrome_windows()
+            # Show Chrome and arrange nicely - use VMManager function
+            self.manager.show_chrome_windows()
             self.toggle_btn.config(text="AN CHROME", bg='#00b894')
             self.windows_visible = True
 
-    def _arrange_chrome_windows(self):
-        """Arrange Chrome windows in good positions on screen."""
-        if not self.manager:
-            return
-
-        import win32gui
-        import win32con
-
-        screen_width = win32gui.GetSystemMetrics(0)
-        screen_height = win32gui.GetSystemMetrics(1)
-
-        # Chrome window size - TO HƠN ĐỂ DỄ QUAN SÁT
-        chrome_width = int(screen_width * 0.55)  # 55% màn hình
-        chrome_height = int(screen_height * 0.45)  # 45% màn hình
-
-        # Tối thiểu 1200x800
-        chrome_width = max(chrome_width, 1200)
-        chrome_height = max(chrome_height, 800)
-
-        # Position Chrome 1: Top-right
-        # Position Chrome 2: Bottom-right
-
-        def enum_handler(hwnd, count):
-            if win32gui.IsWindowVisible(hwnd):
-                title = win32gui.GetWindowText(hwnd).lower()
-
-                # Only Chrome windows (skip CMD)
-                if "chrome" in title and "chrome.exe" not in title:
-                    class_name = win32gui.GetClassName(hwnd)
-
-                    # Check if it's actually Chrome browser window
-                    if class_name.startswith("Chrome_WidgetWin"):
-                        # Determine which Chrome (1 or 2)
-                        if count[0] == 0:
-                            # Chrome 1 - Top-right (phía trên bên phải)
-                            x = screen_width - chrome_width - 10
-                            y = 10
-                            count[0] += 1
-                        else:
-                            # Chrome 2 - Bottom-right (phía dưới bên phải)
-                            x = screen_width - chrome_width - 10
-                            y = screen_height - chrome_height - 50
-                            count[0] += 1
-
-                        # Show window và set position/size
-                        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)  # Restore nếu minimized
-                        win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST,
-                                            x, y, chrome_width, chrome_height,
-                                            win32con.SWP_SHOWWINDOW)
-                        # Remove TOPMOST sau khi hiện
-                        win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST,
-                                            x, y, chrome_width, chrome_height,
-                                            win32con.SWP_SHOWWINDOW | win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
-
-        try:
-            count = [0]  # Chrome counter
-            win32gui.EnumWindows(enum_handler, count)
-        except Exception as e:
-            print(f"Error arranging Chrome windows: {e}")
 
     def _auto_hide_windows(self):
         """Auto-hide Chrome and CMD windows when GUI starts."""
