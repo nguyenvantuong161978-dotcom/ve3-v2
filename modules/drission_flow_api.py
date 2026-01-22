@@ -2096,8 +2096,8 @@ class DrissionFlowAPI:
                             user_data = data_path
                             break
 
-            # 2. Tự động detect Chrome portable (bỏ qua nếu skip_portable_detection=True)
-            if not chrome_exe and platform.system() == 'Windows' and not self._skip_portable_detection:
+            # 2. Tự động detect Chrome portable (bỏ qua nếu skip_portable_detection=True HOẶC đã có chrome_portable từ constructor)
+            if not chrome_exe and not self._chrome_portable and platform.system() == 'Windows' and not self._skip_portable_detection:
                 chrome_locations = []
 
                 # 2a. Ưu tiên: Thư mục tool/GoogleChromePortable/GoogleChromePortable.exe
