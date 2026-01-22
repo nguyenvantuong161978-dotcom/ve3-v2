@@ -4380,7 +4380,8 @@ class SmartEngine:
                 verbose=True,
                 config_path=str(settings_path),
                 worker_id=self.worker_id,
-                total_workers=self.total_workers  # For window layout
+                total_workers=self.total_workers,  # For window layout
+                chrome_portable=self.chrome_portable if self._chrome_portable_override else None  # CRITICAL: Chrome 2 override
             )
 
             # Gọi generate_from_prompts_auto với prompts=[]
