@@ -19,20 +19,24 @@ if not drission_file.exists():
 with open(drission_file, 'r', encoding='utf-8') as f:
     content = f.read()
 
-# Check for the fix
+# Check for the fixes
 has_fix1 = "if not chrome_exe and not self._chrome_portable and platform.system()" in content
 has_fix2 = "if not os.path.isabs(chrome_exe):" in content
+has_fix3 = "self._chrome_portable = chrome_exe" not in content or "# NOTE: KHÔNG ghi đè self._chrome_portable" in content
 
 print("Checking for Chrome 2 portable path fixes:")
 print()
 print(f"1. Auto-detect skip check: {'[OK] FOUND' if has_fix1 else '[X] MISSING'}")
 print(f"2. Relative path conversion: {'[OK] FOUND' if has_fix2 else '[X] MISSING'}")
+print(f"3. No override in auto-detect: {'[OK] FOUND' if has_fix3 else '[X] MISSING'}")
 print()
 
-if has_fix1 and has_fix2:
-    print("[OK] Code has all fixes!")
+if has_fix1 and has_fix2 and has_fix3:
+    print("[OK] Code has all 3 fixes!")
     print()
-    print("If Chrome 2 still uses wrong portable, the issue is elsewhere.")
+    print("If Chrome 2 still uses wrong portable:")
+    print("  - RESTART all workers (stop and start again)")
+    print("  - Python caches modules, need fresh start!")
 else:
     print("[ERROR] Code MISSING fixes!")
     print()
@@ -41,5 +45,6 @@ else:
     print("  2. Run UPDATE_MANUAL.bat")
     print("  3. Or click UPDATE button in GUI")
     print("  4. Or: git pull origin main")
+    print("  5. RESTART all workers!")
 
 print("=" * 70)
