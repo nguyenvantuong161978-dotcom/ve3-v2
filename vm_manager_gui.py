@@ -2004,24 +2004,67 @@ class SimpleGUI(tk.Tk):
                 print(f"[GUI] Error hiding windows: {e}")
 
     def _get_git_version(self) -> str:
-        """Lay thong tin git commit cuoi cung."""
+        """Lay thong tin git commit cuoi cung - hien thi theo gio Viet Nam (GMT+7)."""
+        # 1. Try Git first
         try:
             import subprocess
+            from datetime import datetime, timezone, timedelta
+
             # Get commit hash (short)
             result = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
                                   capture_output=True, text=True, cwd=str(TOOL_DIR), timeout=2)
             if result.returncode == 0:
                 commit_hash = result.stdout.strip()
 
-                # Get commit date
-                result2 = subprocess.run(['git', 'log', '-1', '--format=%cd', '--date=format:%Y-%m-%d_%H:%M'],
+                # Get commit date as Unix timestamp (UTC)
+                result2 = subprocess.run(['git', 'log', '-1', '--format=%ct'],
                                        capture_output=True, text=True, cwd=str(TOOL_DIR), timeout=2)
                 if result2.returncode == 0:
-                    commit_date = result2.stdout.strip()
-                    return f"v{commit_hash} | {commit_date}"
+                    timestamp = int(result2.stdout.strip())
+                    # Convert to Vietnam timezone (GMT+7)
+                    vn_tz = timezone(timedelta(hours=7))
+                    commit_dt = datetime.fromtimestamp(timestamp, tz=vn_tz)
+                    commit_date = commit_dt.strftime('%Y-%m-%d %H:%M')
+                    version = f"v{commit_hash} | {commit_date} (VN)"
+
+                    # Save to VERSION.txt for machines without Git
+                    try:
+                        version_file = TOOL_DIR / "VERSION.txt"
+                        with open(version_file, 'w', encoding='utf-8') as f:
+                            f.write(version)
+                    except:
+                        pass
+
+                    return version
                 return f"v{commit_hash}"
+        except (FileNotFoundError, Exception) as e:
+            print(f"[GUI] Git not available: {e}")
+
+        # 2. Fallback: Read from VERSION.txt (for machines without Git)
+        try:
+            version_file = TOOL_DIR / "VERSION.txt"
+            if version_file.exists():
+                with open(version_file, 'r', encoding='utf-8') as f:
+                    version = f.read().strip()
+                    if version:
+                        print(f"[GUI] Using VERSION.txt: {version}")
+                        return version
         except Exception as e:
-            print(f"[GUI] Git version error: {e}")
+            print(f"[GUI] Cannot read VERSION.txt: {e}")
+
+        # 3. Last resort: Use file timestamp
+        try:
+            from datetime import datetime, timezone, timedelta
+            this_file = TOOL_DIR / "vm_manager_gui.py"
+            if this_file.exists():
+                mtime = this_file.stat().st_mtime
+                vn_tz = timezone(timedelta(hours=7))
+                file_dt = datetime.fromtimestamp(mtime, tz=vn_tz)
+                file_date = file_dt.strftime('%Y-%m-%d %H:%M')
+                return f"build | {file_date} (VN)"
+        except Exception as e:
+            print(f"[GUI] Cannot get file timestamp: {e}")
+
         return "unknown"
 
     def _get_ipv6_setting(self) -> bool:
