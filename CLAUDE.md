@@ -111,44 +111,60 @@ git push official main  # Push lên repo chính thức
 
 > **QUAN TRỌNG**: Claude Code phải cập nhật section này sau mỗi phiên làm việc để phiên sau sử dụng hiệu quả.
 
-### Phiên hiện tại: 2026-01-22 (Continued Session)
+### Phiên hiện tại: 2026-01-22 (Session 2 - Exception Handling & Auto Recovery)
 
-**RESOLUTION - Chrome 2 Portable Path Issue:**
-- ✅ Fixes are IMPLEMENTED and VERIFIED on codebase (commit 43d3158)
-- ✅ Both fixes confirmed present via check_version.py:
-  1. Auto-detect skip check - prevents override when chrome_portable is set
-  2. Relative-to-absolute path conversion - handles ./GoogleChromePortable paths
-- ⚠️ User (thutruc) needs to UPDATE their code to get fixes
-- 📄 Created FIX_CHROME2_INSTRUCTIONS.txt with step-by-step update guide
+**ISSUE: Chrome exception errors with no details**
+- User reported: "[ERROR] [x] Exception:" with no message
+- Root cause: Exception logging didn't show type/traceback
+- Impact: Cannot debug why image generation fails
 
-**Root Cause Identified:**
-- Auto-detect code in drission_flow_api.py was running even when chrome_portable was set
-- This caused Chrome 2 to use Chrome 1's portable path
-- Fix: Added `not self._chrome_portable` check to auto-detect condition (line 2104)
+**FIXES APPLIED:**
 
-**Fixes Applied (in modules/drission_flow_api.py):**
-1. Line 2104: `if not chrome_exe and not self._chrome_portable and platform.system()...`
-   - Auto-detect only runs if chrome_portable is NOT already set
-2. Lines 2086-2088: Convert relative paths to absolute
-   ```python
-   if not os.path.isabs(chrome_exe):
-       tool_dir = Path(__file__).parent.parent
-       chrome_exe = str(tool_dir / chrome_exe)
-   ```
+**1. Enhanced Exception Logging (browser_flow_generator.py)**
+- Line 4131-4134: Added exception type and full traceback
+- Line 4265-4268: Same for retry phase exceptions
+- Now shows: `{type(e).__name__}: {str(e)}` + traceback
+
+**2. GUI Timezone Fix (vm_manager_gui.py)**
+- Line 2006-2028: Changed `_get_git_version()` to use Vietnam timezone (GMT+7)
+- Display format: `v{hash} | YYYY-MM-DD HH:MM (VN)`
+- Commit: 52aee60
+
+**3. Chrome Auto-Restart Logic (browser_flow_generator.py)**
+- Line 3685-3687: Added `consecutive_exceptions` counter (max: 10)
+- Line 3871: Reset counter on successful image generation
+- Line 4131-4168: Main exception handler:
+  - Track consecutive exceptions
+  - If >= 10: Kill ALL Chrome processes + raise exception (worker restarts)
+  - If Chrome/API error: Auto restart Chrome once
+  - Reset counter after successful restart
+- Line 4265-4296: Retry phase exception handler:
+  - Detect Chrome/API errors
+  - Restart Chrome and retry immediately
+  - Continue if retry succeeds
+
+**4. Kill All Chrome Logic**
+- If 10+ consecutive exceptions: `taskkill /F /IM chrome.exe`
+- Raise exception to trigger worker restart
+- Prevents infinite loop when Chrome is stuck
 
 **Completed this session:**
-- [x] Created check_version.py script to verify fixes
-- [x] Fixed Unicode errors in check_version.py (use ASCII instead)
-- [x] Verified both fixes present in codebase
-- [x] Created FIX_CHROME2_INSTRUCTIONS.txt for user
-- [x] Committed and pushed to GitHub (commit 43d3158)
-- [x] Updated CLAUDE.md documentation
+- [x] Fixed exception logging to show full details
+- [x] Added Vietnam timezone to GUI version display
+- [x] Added Chrome auto-restart when API/connection errors
+- [x] Added kill-all-Chrome logic when too many exceptions
+- [x] Tested and committed (3da0a85, 15f3a3f, cf77a30)
+- [x] Pushed to GitHub with force update
 
-**Next Steps for User (thutruc):**
-1. Close tool completely
-2. Run UPDATE_MANUAL.bat OR click UPDATE in GUI OR git pull
-3. Run check_version.py to verify
-4. Start tool and verify Chrome 2 uses correct path with " - Copy"
+**How it works now:**
+1. Exception → Log type + traceback (debug)
+2. If Chrome/API error → Auto restart Chrome
+3. If 10+ consecutive exceptions → Kill all Chrome + worker restart
+4. Reset counter on success or successful restart
+
+**User feedback:**
+- "NÓ CŨNG LÀ LỖI KHÔNG MỞ CHROME ĐÓ" ✅ Fixed with auto-restart
+- "NẾU CỨNG THÌ RESET ALL CÁC CMD ĐÓ" ✅ Fixed with kill-all logic
 
 ### Backlog (việc cần làm)
 - [ ] Worker logs không hiển thị trong GUI (trade-off để Chrome automation hoạt động)
