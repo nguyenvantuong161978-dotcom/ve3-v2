@@ -2035,46 +2035,10 @@ class VMManager:
                 worker_env['PYTHONIOENCODING'] = 'utf-8'
                 worker_env['PYTHONUTF8'] = '1'
 
-                # Tạo wrapper script để capture output và ghi vào log file
-                wrapper_script = TOOL_DIR / f".agent" / f"_wrapper_{worker_id}.py"
-                wrapper_script.parent.mkdir(exist_ok=True)
-
-                wrapper_code = f'''
-import sys
-import subprocess
-from pathlib import Path
-
-# Chạy worker script và capture output
-log_file = Path(r"{log_file}")
-worker_script = Path(r"{script}")
-args = {repr(args.split()) if args else "[]"}
-
-# Chạy subprocess với output streaming
-cmd = [sys.executable, "-X", "utf8", str(worker_script)] + args
-process = subprocess.Popen(
-    cmd,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.STDOUT,
-    bufsize=1,
-    universal_newlines=True,
-    cwd=r"{TOOL_DIR}"
-)
-
-# Stream output to both console and log file
-with open(log_file, "a", encoding="utf-8") as f:
-    for line in process.stdout:
-        print(line, end="", flush=True)
-        f.write(line)
-        f.flush()
-
-process.wait()
-'''
-                with open(wrapper_script, 'w', encoding='utf-8') as f:
-                    f.write(wrapper_code)
-
                 if gui_mode:
-                    # GUI mode - start minimized CMD that will be hidden
-                    cmd = f'start /MIN "{title}" cmd /k "chcp 65001 >nul && cd /d {TOOL_DIR} && python -X utf8 \"{wrapper_script}\""'
+                    # GUI mode - start with visible CMD, will be moved off-screen later
+                    # Log viewing is handled by GUI reading log files written by workers
+                    cmd = f'start "{title}" cmd /k "chcp 65001 >nul && cd /d {TOOL_DIR} && {cmd_args}"'
                     w.process = subprocess.Popen(cmd, shell=True, cwd=str(TOOL_DIR), env=worker_env)
 
                     # Move CMD windows off-screen after a short delay
@@ -2083,8 +2047,8 @@ process.wait()
                         self.hide_cmd_windows()
                     threading.Thread(target=move_cmd_offscreen, daemon=True).start()
                 else:
-                    # Normal mode - visible CMD window
-                    cmd = f'start "{title}" cmd /k "chcp 65001 >nul && cd /d {TOOL_DIR} && python -X utf8 \"{wrapper_script}\""'
+                    # Normal mode - visible CMD window with UTF-8 code page
+                    cmd = f'start "{title}" cmd /k "chcp 65001 >nul && cd /d {TOOL_DIR} && {cmd_args}"'
                     w.process = subprocess.Popen(cmd, shell=True, cwd=str(TOOL_DIR), env=worker_env)
             else:
                 # Linux/Mac
