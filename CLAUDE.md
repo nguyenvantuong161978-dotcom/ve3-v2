@@ -156,13 +156,26 @@ git push official main  # Push lên repo chính thức
   - Prevents cascade failures between workers
 - 📄 Added `test_kill_chrome.py` to verify kill logic
 
+**5. GUI Version Display Fix (vm_manager_gui.py)**
+- ❌ PROBLEM: GUI shows "unknown" on machines without Git
+  - VMs often don't have Git installed
+  - Timezone fix (52aee60) was lost in merge (cf77a30)
+- ✅ SOLUTION: Fallback chain (commit ac5b5e0)
+  1. Try Git → Vietnam timezone (GMT+7)
+  2. No Git → Read VERSION.txt (created during UPDATE)
+  3. No VERSION.txt → Use file timestamp
+  4. All fail → Show "unknown"
+- 📄 VERSION.txt: Version snapshot for no-Git machines
+- Auto-creates VERSION.txt when Git is available
+
 **Completed this session:**
 - [x] Fixed exception logging to show full details
 - [x] Added Vietnam timezone to GUI version display
+- [x] Fixed "unknown" version on no-Git machines (VERSION.txt fallback)
 - [x] Added Chrome auto-restart when API/connection errors
 - [x] Fixed kill logic - only kill worker's Chrome (NOT all)
-- [x] Created test script to verify selective kill
-- [x] Tested and committed (3da0a85, 15f3a3f, cf77a30, 65fc79e)
+- [x] Created test scripts (test_kill_chrome.py, test_git_version.py)
+- [x] Tested and committed (3da0a85, 15f3a3f, cf77a30, 65fc79e, ac5b5e0)
 - [x] Pushed to GitHub
 
 **How it works now:**
@@ -185,6 +198,8 @@ Run `python test_kill_chrome.py` to verify:
 - "NÓ CŨNG LÀ LỖI KHÔNG MỞ CHROME ĐÓ" ✅ Fixed with auto-restart
 - "NẾU CỨNG THÌ RESET ALL CÁC CMD ĐÓ" ✅ Fixed with selective kill
 - "KILL CHROME ĐÓ THÌ CÓ THỂ VÌ KILL CÁC CHROME MÀ CÓ CMD ĐANG ĐIỀU KHIỂN" ✅ Fixed - only kill worker's Chrome
+- "TRÊN GIAO DIỆN TOOL BẢN CẬP NHẬP NÓ HIỆN UNKNOW" ✅ Fixed with VERSION.txt fallback
+- "MÁY KHÔNG GIT VẪN PHẢI HIỆN CHỨ" ✅ Fixed - shows version from VERSION.txt or file timestamp
 
 ### Backlog (việc cần làm)
 - [ ] Worker logs không hiển thị trong GUI (trade-off để Chrome automation hoạt động)
