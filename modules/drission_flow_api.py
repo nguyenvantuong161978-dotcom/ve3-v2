@@ -2080,8 +2080,12 @@ class DrissionFlowAPI:
 
             # 1. Ưu tiên chrome_portable từ config (KHÔNG check exists - để fail nếu sai)
             if self._chrome_portable:
-                # Expand environment variables như %USERNAME%
+                # Expand environment variables và convert to absolute path
                 chrome_exe = os.path.expandvars(self._chrome_portable)
+                # Convert relative path to absolute (from tool directory)
+                if not os.path.isabs(chrome_exe):
+                    tool_dir = Path(__file__).parent.parent  # ve3-tool-simple/
+                    chrome_exe = str(tool_dir / chrome_exe)
                 chrome_dir = Path(chrome_exe).parent
                 self.log(f"[CHROME] Dùng chrome_portable: {chrome_exe}")
                 # User Data: Nếu skip_portable_detection=True, dùng profile_dir thay vì built-in profile
