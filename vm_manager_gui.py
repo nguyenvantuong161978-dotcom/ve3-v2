@@ -1976,9 +1976,13 @@ class SimpleGUI(tk.Tk):
         screen_width = win32gui.GetSystemMetrics(0)
         screen_height = win32gui.GetSystemMetrics(1)
 
-        # Chrome window size
-        chrome_width = 1100
-        chrome_height = 700
+        # Chrome window size - TO HƠN ĐỂ DỄ QUAN SÁT
+        chrome_width = int(screen_width * 0.55)  # 55% màn hình
+        chrome_height = int(screen_height * 0.45)  # 45% màn hình
+
+        # Tối thiểu 1200x800
+        chrome_width = max(chrome_width, 1200)
+        chrome_height = max(chrome_height, 800)
 
         # Position Chrome 1: Top-right
         # Position Chrome 2: Bottom-right
@@ -1995,19 +1999,25 @@ class SimpleGUI(tk.Tk):
                     if class_name.startswith("Chrome_WidgetWin"):
                         # Determine which Chrome (1 or 2)
                         if count[0] == 0:
-                            # Chrome 1 - Top-right
-                            x = screen_width - chrome_width - 20
-                            y = 50
+                            # Chrome 1 - Top-right (phía trên bên phải)
+                            x = screen_width - chrome_width - 10
+                            y = 10
                             count[0] += 1
                         else:
-                            # Chrome 2 - Bottom-right
-                            x = screen_width - chrome_width - 20
-                            y = screen_height - chrome_height - 100
+                            # Chrome 2 - Bottom-right (phía dưới bên phải)
+                            x = screen_width - chrome_width - 10
+                            y = screen_height - chrome_height - 50
                             count[0] += 1
 
-                        win32gui.SetWindowPos(hwnd, win32con.HWND_TOP,
+                        # Show window và set position/size
+                        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)  # Restore nếu minimized
+                        win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST,
                                             x, y, chrome_width, chrome_height,
                                             win32con.SWP_SHOWWINDOW)
+                        # Remove TOPMOST sau khi hiện
+                        win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST,
+                                            x, y, chrome_width, chrome_height,
+                                            win32con.SWP_SHOWWINDOW | win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
 
         try:
             count = [0]  # Chrome counter
@@ -2034,20 +2044,20 @@ class SimpleGUI(tk.Tk):
             import subprocess
             # Get commit hash (short)
             result = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
-                                  capture_output=True, text=True, cwd=TOOL_DIR, timeout=2)
+                                  capture_output=True, text=True, cwd=str(TOOL_DIR), timeout=2)
             if result.returncode == 0:
                 commit_hash = result.stdout.strip()
 
                 # Get commit date
-                result2 = subprocess.run(['git', 'log', '-1', '--format=%cd', '--date=format:%Y-%m-%d %H:%M'],
-                                       capture_output=True, text=True, cwd=TOOL_DIR, timeout=2)
+                result2 = subprocess.run(['git', 'log', '-1', '--format=%cd', '--date=format:%Y-%m-%d_%H:%M'],
+                                       capture_output=True, text=True, cwd=str(TOOL_DIR), timeout=2)
                 if result2.returncode == 0:
                     commit_date = result2.stdout.strip()
                     return f"v{commit_hash} | {commit_date}"
                 return f"v{commit_hash}"
-        except:
-            pass
-        return "version: unknown"
+        except Exception as e:
+            print(f"[GUI] Git version error: {e}")
+        return "unknown"
 
     def _get_ipv6_setting(self) -> bool:
         """Doc IPv6 enabled tu settings.yaml. Mac dinh la True."""
