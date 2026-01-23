@@ -77,6 +77,126 @@
 - **Chrome Worker 1** (`_run_chrome1.py`): Tạo ảnh scenes chẵn (2,4,6...) + reference images (nv/loc)
 - **Chrome Worker 2** (`_run_chrome2.py`): Tạo ảnh scenes lẻ (1,3,5...)
 
+---
+
+## 3 FILE PYTHON CHÍNH
+
+### 1. `run_excel_api.py` - Excel Worker (PY Đạo Diễn)
+
+**Mục đích**: Chuyển đổi file SRT (phụ đề) thành Excel kịch bản hoàn chỉnh qua 7 bước API.
+
+**Input**: `PROJECTS/{code}/{code}.srt`
+**Output**: `PROJECTS/{code}/{code}_prompts.xlsx`
+
+**7 Bước xử lý**:
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STEP 1: Story Analysis                                                  │
+│   - Đọc toàn bộ SRT                                                     │
+│   - API phân tích: thể loại, mood, style, tổng quan câu chuyện          │
+│   - Output: story_analysis sheet trong Excel                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│ STEP 2: Segments (Phân đoạn)                                            │
+│   - Chia SRT thành các đoạn logic (mỗi đoạn ~5-15 SRT entries)          │
+│   - VALIDATION 1: Check ratio SRT/images, split nếu quá lớn             │
+│   - VALIDATION 2: Check coverage, call API bổ sung nếu thiếu            │
+│   - Output: segments sheet (segment_id, name, srt_range, image_count)   │
+├─────────────────────────────────────────────────────────────────────────┤
+│ STEP 3: Characters (Nhân vật)                                           │
+│   - API phân tích các nhân vật xuất hiện trong story                    │
+│   - Output: characters sheet (id, name, description, appearance)        │
+├─────────────────────────────────────────────────────────────────────────┤
+│ STEP 4: Locations (Địa điểm)                                            │
+│   - API phân tích các địa điểm/bối cảnh                                 │
+│   - Output: locations sheet (id, name, description, atmosphere)         │
+├─────────────────────────────────────────────────────────────────────────┤
+│ STEP 5: Director Plan (Kế hoạch đạo diễn)                               │
+│   - Tạo danh sách scenes cho từng segment                               │
+│   - Mỗi scene: visual_moment, srt_start, srt_end, duration              │
+│   - GAP-FILL: Đảm bảo 100% SRT coverage                                 │
+│   - Output: director_plan sheet                                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│ STEP 6: Scene Planning (Chi tiết hóa)                                   │
+│   - API chi tiết từng scene: camera_angle, lighting, composition        │
+│   - Parallel processing: 15 scenes/batch, max 10 concurrent             │
+│   - Output: Update director_plan với chi tiết                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│ STEP 7: Scene Prompts (Tạo prompts)                                     │
+│   - Tạo img_prompt cho từng scene (dùng để tạo ảnh)                     │
+│   - Parallel processing: 10 scenes/batch, max 10 concurrent             │
+│   - Duplicate detection + fallback                                      │
+│   - Output: scenes sheet (img_prompt, ref_files, characters_used, etc.) │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key modules sử dụng**:
+- `modules/progressive_prompts.py` - Logic 7 steps
+- `modules/ai_providers.py` - API calls (DeepSeek/Gemini)
+- `modules/excel_manager.py` - Excel I/O (PromptWorkbook class)
+
+---
+
+### 2. `_run_chrome1.py` - Chrome Worker 1
+
+**Mục đích**: Tạo ảnh cho scenes CHẴN (2, 4, 6, 8...) + Reference images
+
+**Chrome Portable**: `GoogleChromePortable/`
+
+**Nhiệm vụ**:
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 1. TẠO REFERENCE IMAGES (ưu tiên cao)                                   │
+│    - Characters: nv/{char_id}.png (ảnh nhân vật)                        │
+│    - Locations: loc/{loc_id}.png (ảnh địa điểm)                         │
+│    - Dùng làm style reference cho scenes                                │
+├─────────────────────────────────────────────────────────────────────────┤
+│ 2. TẠO SCENE IMAGES (scenes chẵn)                                       │
+│    - Scene 2, 4, 6, 8, 10...                                            │
+│    - Output: img/scene_002.png, img/scene_004.png...                    │
+│    - Upload reference images kèm theo                                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│ 3. TẠO VIDEO (nếu cần - video_mode)                                     │
+│    - Dùng ảnh scene để tạo video clips                                  │
+│    - Output: video/scene_XXX.mp4                                        │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key modules sử dụng**:
+- `modules/drission_flow_api.py` - DrissionPage browser control
+- `modules/smart_engine.py` - Main image/video generation engine
+- `modules/chrome_manager.py` - Chrome process management
+
+---
+
+### 3. `_run_chrome2.py` - Chrome Worker 2
+
+**Mục đích**: Tạo ảnh cho scenes LẺ (1, 3, 5, 7...)
+
+**Chrome Portable**: `GoogleChromePortable - Copy/` (riêng biệt để chạy song song)
+
+**Nhiệm vụ**:
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ TẠO SCENE IMAGES (scenes lẻ)                                            │
+│    - Scene 1, 3, 5, 7, 9...                                             │
+│    - Output: img/scene_001.png, img/scene_003.png...                    │
+│    - KHÔNG tạo reference (Chrome 1 đã làm)                              │
+│    - skip_references=True để tránh trùng lặp                            │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Lý do tách 2 Chrome Workers**:
+- Google Flow rate limit → chạy song song để tăng tốc 2x
+- Chrome 1 tạo references trước, Chrome 2 chỉ tạo scenes
+- Mỗi Chrome dùng folder Data riêng để tránh xung đột
+
+**Key modules sử dụng** (giống Chrome 1):
+- `modules/drission_flow_api.py`
+- `modules/smart_engine.py`
+- `modules/chrome_manager.py`
+
+---
+
 ### Modules quan trọng
 - `modules/smart_engine.py` - Engine chính tạo ảnh/video
 - `modules/drission_flow_api.py` - DrissionPage API cho Google Flow
