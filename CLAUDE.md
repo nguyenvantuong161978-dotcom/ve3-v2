@@ -134,6 +134,26 @@
 - `modules/ai_providers.py` - API calls (DeepSeek/Gemini)
 - `modules/excel_manager.py` - Excel I/O (PromptWorkbook class)
 
+**Chế độ chạy**:
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ CONTINUOUS MODE (--loop) - Chạy liên tục tự động                        │
+│                                                                         │
+│   Workflow vòng lặp:                                                    │
+│   1. Scan master (Z:\AUTO) cho projects mới có SRT                      │
+│   2. IMPORT: Copy project từ master → local PROJECTS                    │
+│   3. Xóa project trên master (tránh xử lý trùng)                        │
+│   4. Chạy 7 bước API tạo Excel                                          │
+│   5. Đợi SCAN_INTERVAL (60s) rồi lặp lại                                │
+│                                                                         │
+│   → Chrome workers sẽ tự động pick up project từ local                  │
+│   → Sau khi có ảnh, Chrome sẽ copy về VISUAL trên master                │
+└─────────────────────────────────────────────────────────────────────────┘
+
+Usage:
+    python run_excel_api.py --loop    # Chạy continuous mode
+```
+
 ---
 
 ### 2. `_run_chrome1.py` - Chrome Worker 1

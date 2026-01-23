@@ -146,6 +146,63 @@ def matches_channel(project_name: str, channel: Optional[str] = None) -> bool:
     return project_name.startswith(channel)
 
 
+def import_from_master(master_dir: Path, name: str, local_projects: Path) -> Optional[Path]:
+    """
+    Copy project từ master về local để xử lý.
+
+    Args:
+        master_dir: Thư mục project trên master
+        name: Tên project
+        local_projects: Thư mục PROJECTS local
+
+    Returns:
+        Path tới project local nếu thành công, None nếu lỗi
+    """
+    local_dir = local_projects / name
+
+    # Đã có trong local rồi
+    if local_dir.exists():
+        srt_path = local_dir / f"{name}.srt"
+        if srt_path.exists():
+            return local_dir
+
+    # Copy từ master
+    try:
+        log(f"[IMPORT] Copying {name} from master to local...")
+        local_projects.mkdir(parents=True, exist_ok=True)
+
+        if local_dir.exists():
+            shutil.rmtree(local_dir)
+
+        shutil.copytree(master_dir, local_dir)
+        log(f"[IMPORT] Copied: {name}")
+
+        # Delete from master after successful copy (tránh xử lý trùng)
+        try:
+            shutil.rmtree(master_dir)
+            log(f"[IMPORT] Deleted from master: {name}")
+        except Exception as e:
+            log(f"[IMPORT] Warning - cannot delete from master: {e}", "WARN")
+
+        return local_dir
+    except Exception as e:
+        log(f"[IMPORT] Error copying {name}: {e}", "ERROR")
+        return None
+
+
+def is_project_complete(project_dir: Path, name: str) -> bool:
+    """
+    Check if project has completed images (ready to be moved to VISUAL).
+    """
+    img_dir = project_dir / "img"
+    if not img_dir.exists():
+        return False
+
+    # Check for scene images
+    scene_imgs = list(img_dir.glob("scene_*.png"))
+    return len(scene_imgs) > 0
+
+
 # ================================================================================
 # EXCEL API FUNCTIONS
 # ================================================================================
@@ -418,7 +475,7 @@ class ExcelAPIWorker:
                 elif needs_api_completion(item, name):
                     results.append((item, name, "needs_fix"))
 
-        # Scan master projects (if accessible)
+        # Scan master projects (if accessible) - IMPORT to local before processing
         if self.master_projects and safe_path_exists(self.master_projects):
             try:
                 for item in self.master_projects.iterdir():
@@ -429,18 +486,29 @@ class ExcelAPIWorker:
                     if not matches_channel(name, self.channel):
                         continue
 
-                    # Skip if already in local
+                    # Skip if already in local results
                     if any(r[1] == name for r in results):
+                        continue
+
+                    # Skip if already in local folder
+                    local_check = self.local_projects / name
+                    if local_check.exists():
                         continue
 
                     srt_path = item / f"{name}.srt"
                     if not safe_path_exists(srt_path):
                         continue
 
-                    if not has_excel_with_prompts(item, name):
-                        results.append((item, name, "no_excel"))
-                    elif needs_api_completion(item, name):
-                        results.append((item, name, "needs_fix"))
+                    # IMPORT: Copy from master to local BEFORE adding to results
+                    local_dir = import_from_master(item, name, self.local_projects)
+                    if local_dir is None:
+                        continue  # Import failed, skip
+
+                    # Add LOCAL path (not master) to results
+                    if not has_excel_with_prompts(local_dir, name):
+                        results.append((local_dir, name, "no_excel"))
+                    elif needs_api_completion(local_dir, name):
+                        results.append((local_dir, name, "needs_fix"))
             except (OSError, PermissionError) as e:
                 log(f"Error scanning master: {e}", "WARN")
 
@@ -558,7 +626,11 @@ class ExcelAPIWorker:
         log(f"{'='*60}")
         log(f"  Channel: {self.channel or 'ALL'}")
         log(f"  Scan interval: {SCAN_INTERVAL}s")
+        log(f"  Local: {self.local_projects}")
+        log(f"  Master: {self.master_projects or 'Not connected'}")
         log(f"  Agent: {'Enabled' if _agent else 'Disabled'}")
+        log(f"")
+        log(f"  Mode: CONTINUOUS - Tự động import từ master")
         log(f"{'='*60}")
 
         cycle = 0
