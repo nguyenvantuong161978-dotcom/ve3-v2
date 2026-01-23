@@ -8,6 +8,56 @@
 - Các VM tạo: Excel (kịch bản) → Ảnh → Video → Visual
 - Sau đó chuyển kết quả về **MÁY CHỦ (Master)**
 
+### Workflow hoàn chỉnh
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         MÁY CHỦ (Master)                                │
+│  - Chứa file SRT gốc (phụ đề video)                                     │
+│  - Nhận kết quả cuối cùng (ảnh + video)                                 │
+└───────────────────────────────┬─────────────────────────────────────────┘
+                                │ (1) Lấy SRT
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    MÁY ẢO (VM) - Tool này                               │
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │              VM_MANAGER_GUI.PY (Entry Point)                     │   │
+│   │                   - GUI chính (Tkinter)                          │   │
+│   │                   - Điều phối tất cả workers                     │   │
+│   │                   - TẤT CẢ XOAY QUANH NÓ                         │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                │                                         │
+│         ┌──────────────────────┼──────────────────────┐                 │
+│         ▼                      ▼                      ▼                 │
+│   ┌──────────────┐    ┌──────────────┐    ┌──────────────┐              │
+│   │ Excel Worker │    │Chrome Worker1│    │Chrome Worker2│              │
+│   │  (Python)    │    │   (Python)   │    │   (Python)   │              │
+│   │              │    │              │    │              │              │
+│   │ SRT → Excel  │    │ Excel → Ảnh  │    │ Excel → Ảnh  │              │
+│   │ (API AI)     │    │ (Google Flow)│    │ (Google Flow)│              │
+│   └──────────────┘    └──────────────┘    └──────────────┘              │
+│                                                                         │
+│   (2) Bước 1: SRT → Excel (7 steps qua API DeepSeek/Gemini)            │
+│       - Phân tích story → Tạo segments → Characters → Locations         │
+│       - Director plan → Scene planning → Scene prompts                  │
+│                                                                         │
+│   (3) Bước 2: Excel → Ảnh + Video (Chrome automation với Google Flow)   │
+│       - Chrome 1: Tạo ảnh scenes chẵn (2,4,6...) + reference images     │
+│       - Chrome 2: Tạo ảnh scenes lẻ (1,3,5...)                          │
+│       - Song song để tối ưu tốc độ                                      │
+│                                                                         │
+└───────────────────────────────┬─────────────────────────────────────────┘
+                                │ (4) Trả kết quả
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         MÁY CHỦ (Master)                                │
+│  - Nhận ảnh (img/*.png)                                                 │
+│  - Nhận video (nếu có)                                                  │
+│  - Tiếp tục xử lý (compose video, upload YouTube...)                    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
 ### 2 Chức năng chính
 1. **PY Đạo Diễn (Excel Worker)**: Tạo Excel kịch bản từ SRT - phân tích story, tạo segments, characters, locations, director plan, scene prompts
 2. **Flow Image/Video (Chrome Workers)**: Tạo ảnh và video từ prompts bằng Google Veo3 Flow
