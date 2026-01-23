@@ -4556,6 +4556,11 @@ class SmartEngine:
         if image_id.startswith('nv') or image_id.startswith('loc'):
             return
 
+        # === BASIC MODE: Skip if video_prompt is empty or marked [BASIC] ===
+        if not video_prompt or video_prompt.strip().startswith('[BASIC]'):
+            self.log(f"[VIDEO] Skip {image_id} - no video_prompt or BASIC mode")
+            return
+
         with self._video_queue_lock:
             # Check count limit (bao gồm video đã có sẵn)
             count_num = self._video_settings.get('count_num', 0)
@@ -5078,6 +5083,12 @@ if (btn) {
                         if str(scene.scene_id) == str(scene_id):
                             video_prompt = scene.video_prompt or video_prompt
                             break
+
+                    # === BASIC MODE: Skip if video_prompt marked [BASIC] ===
+                    if video_prompt.strip().startswith('[BASIC]'):
+                        self.log(f"[PARALLEL-VIDEO] Skip {scene_id} - BASIC mode (no video)")
+                        processed_scenes.add(scene_id)
+                        continue
 
                     # Tạo video bằng T2V mode (Chrome ở "Từ văn bản sang video")
                     # Interceptor convert T2V request → I2V API với media_id
