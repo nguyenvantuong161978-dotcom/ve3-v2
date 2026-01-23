@@ -1877,9 +1877,8 @@ class SmartEngine:
             ref_media_ids_created = 0
 
             if ref_prompts and not self._skip_references:
+                # Chrome 1: TẠO references
                 self.log(f"[STEP 1/2] Tạo {len(ref_prompts)} ảnh tham chiếu (nv/loc) TRƯỚC...")
-            elif ref_prompts and self._skip_references:
-                self.log(f"[STEP 1/2] SKIP tạo {len(ref_prompts)} references (skip_references=True, Chrome 2 mode)")
                 ref_result = generator.generate_from_prompts_auto(
                     prompts=ref_prompts,
                     excel_path=excel_files[0],
@@ -1916,6 +1915,9 @@ class SmartEngine:
                     self.log(f"[STEP 1/2] Media IDs: {ref_media_ids_created}/{len(ref_prompts)} references có media_id")
                 except Exception as e:
                     self.log(f"[STEP 1/2] Không thể kiểm tra media_ids: {e}", "WARN")
+            elif ref_prompts and self._skip_references:
+                # Chrome 2: SKIP references (Chrome 1 đã tạo rồi)
+                self.log(f"[STEP 1/2] SKIP tạo {len(ref_prompts)} references (skip_references=True, Chrome 2 mode)")
 
             # === BƯỚC 2: TẠO SCENES SAU KHI REFERENCES XONG ===
             if scene_prompts:
