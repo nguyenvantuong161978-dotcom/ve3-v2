@@ -2458,7 +2458,8 @@ Return JSON only with EXACTLY {len(batch)} scenes:
                         reference_files=json.dumps(ref_files) if ref_files else "",
                         status_img="pending",
                         status_vid="pending",
-                        video_note=video_note  # GHI CHÚ VIDEO: "SKIP" hoặc ""
+                        video_note=video_note,  # GHI CHÚ VIDEO: "SKIP" hoặc ""
+                        segment_id=segment_id  # SEGMENT ID từ director_plan
                     )
                     workbook.add_scene(scene)
                     total_created += 1
