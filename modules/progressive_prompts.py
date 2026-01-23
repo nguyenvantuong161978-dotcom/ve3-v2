@@ -2003,10 +2003,10 @@ Create exactly {image_count} scenes!"""
                 scenes_text += f"""
 Scene {scene.get('scene_id')}:
 - Time: {scene.get('srt_start')} → {scene.get('srt_end')} ({scene.get('duration', 0):.1f}s)
-- Text: {scene.get('srt_text', '')[:200]}
-- Visual moment: {scene.get('visual_moment', '')}
-- Characters: {scene.get('characters_used', '')}
-- Location: {scene.get('location_used', '')}
+- Text: {(scene.get('srt_text') or '')[:200]}
+- Visual moment: {scene.get('visual_moment') or ''}
+- Characters: {scene.get('characters_used') or ''}
+- Location: {scene.get('location_used') or ''}
 """
 
             prompt = f"""You are a film director planning each scene's artistic vision.
@@ -2075,8 +2075,8 @@ Return JSON only:
                 for scene in batch:
                     fallback_plan = {
                         "scene_id": scene.get("scene_id"),
-                        "artistic_intent": f"Convey the moment: {scene.get('visual_moment', '')[:100]}",
-                        "shot_type": scene.get("camera", "Medium shot"),
+                        "artistic_intent": f"Convey the moment: {(scene.get('visual_moment') or '')[:100]}",
+                        "shot_type": scene.get("camera") or "Medium shot",
                         "character_action": "As described in visual moment",
                         "mood": "Matches the narration tone",
                         "lighting": scene.get("lighting", "Natural lighting"),
@@ -2240,7 +2240,7 @@ Return JSON only:
             # Build scenes text for prompt
             scenes_text = ""
             for scene in batch:
-                char_ids = [cid.strip() for cid in scene.get("characters_used", "").split(",") if cid.strip()]
+                char_ids = [cid.strip() for cid in (scene.get("characters_used") or "").split(",") if cid.strip()]
                 char_desc_parts = []
                 char_refs = []
                 for cid in char_ids:
@@ -2250,7 +2250,7 @@ Return JSON only:
                     char_refs.append(img)
                 char_desc = ", ".join(char_desc_parts)
 
-                loc_id = scene.get("location_used", "")
+                loc_id = scene.get("location_used") or ""
                 loc_desc = loc_lookup.get(loc_id, loc_id)
                 loc_img = loc_image_lookup.get(loc_id, f"{loc_id}.png") if loc_id else ""
                 if loc_desc and loc_img:
@@ -2262,23 +2262,23 @@ Return JSON only:
                 if plan:
                     plan_info = f"""
 - [ARTISTIC PLAN from Step 4.5]:
-  * Intent: {plan.get('artistic_intent', '')}
-  * Shot type: {plan.get('shot_type', '')}
-  * Action: {plan.get('character_action', '')}
-  * Mood: {plan.get('mood', '')}
-  * Lighting: {plan.get('lighting', '')}
-  * Colors: {plan.get('color_palette', '')}
-  * Focus: {plan.get('key_focus', '')}"""
+  * Intent: {plan.get('artistic_intent') or ''}
+  * Shot type: {plan.get('shot_type') or ''}
+  * Action: {plan.get('character_action') or ''}
+  * Mood: {plan.get('mood') or ''}
+  * Lighting: {plan.get('lighting') or ''}
+  * Colors: {plan.get('color_palette') or ''}
+  * Focus: {plan.get('key_focus') or ''}"""
 
                 scenes_text += f"""
 Scene {scene_id}:
 - Time: {scene.get('srt_start')} --> {scene.get('srt_end')}
-- Text: {scene.get('srt_text', '')}
-- Visual moment: {scene.get('visual_moment', '')}
+- Text: {scene.get('srt_text') or ''}
+- Visual moment: {scene.get('visual_moment') or ''}
 - Characters: {char_desc}
 - Location: {loc_desc}
-- Camera: {scene.get('camera', '')}
-- Lighting: {scene.get('lighting', '')}
+- Camera: {scene.get('camera') or ''}
+- Lighting: {scene.get('lighting') or ''}
 - Reference files: {', '.join(char_refs + ([loc_img] if loc_img else []))}
 {plan_info}
 """
@@ -2369,8 +2369,8 @@ Return JSON only with EXACTLY {len(batch)} scenes:
                     orig_id = int(original.get("scene_id", 0))
                     if orig_id not in api_scene_ids:
                         # Tạo fallback prompt
-                        srt_text = original.get("srt_text", "")
-                        visual_moment = original.get("visual_moment", "")
+                        srt_text = original.get("srt_text") or ""
+                        visual_moment = original.get("visual_moment") or ""
                         chars_used = original.get("characters_used") or ""
                         loc_used = original.get("location_used") or ""
 

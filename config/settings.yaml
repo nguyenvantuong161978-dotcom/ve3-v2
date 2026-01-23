@@ -8,6 +8,8 @@ chrome_portable: ./GoogleChromePortable/GoogleChromePortable.exe
 chrome_portable_2: ./GoogleChromePortable - Copy/GoogleChromePortable.exe
 chrome_profile: ''
 deepseek_api_key: sk-0d427db6c9754e669a4f6392914d5766
+deepseek_api_keys:
+- sk-0d427db6c9754e669a4f6392914d5766
 early_video_start: 10
 excel_mode: basic
 flow_aspect_ratio: landscape
@@ -37,7 +39,7 @@ ipv6_rotation:
   use_local_proxy: false
 ken_burns_intensity: normal
 log_level: INFO
-max_parallel_api: 6
+max_parallel_api: 10
 max_scene_duration: 8
 max_scenes_per_account: 50
 min_scene_duration: 5

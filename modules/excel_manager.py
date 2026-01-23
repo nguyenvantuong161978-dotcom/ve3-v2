@@ -55,6 +55,7 @@ CHARACTERS_COLUMNS = [
 # Dùng để detect gaps và resume, có backup prompts với character/location refs
 DIRECTOR_PLAN_COLUMNS = [
     "plan_id",          # ID theo thứ tự (1, 2, 3, ...)
+    "segment_id",       # Segment ID (1, 2, 3...) - để biết scene thuộc segment nào
     "srt_start",        # Thời gian bắt đầu (HH:MM:SS,mmm)
     "srt_end",          # Thời gian kết thúc (HH:MM:SS,mmm)
     "duration",         # Độ dài (giây)
@@ -88,6 +89,7 @@ SCENES_COLUMNS = [
     "reference_files",  # JSON list reference files cho image generation
     "media_id",         # Media ID từ Google Flow API (dùng cho I2V - Image to Video)
     "video_note",       # Ghi chú video: "SKIP" = bỏ qua, "" = tạo video
+    "segment_id",       # Segment ID (1, 2, 3...) - PHẢI Ở CUỐI để backward compatible!
 ]
 
 # Cột cho sheet Backup Characters (nhân vật narrator cố định cho fallback)
@@ -254,6 +256,7 @@ class Scene:
         reference_files: str = "",      # JSON list of reference files
         media_id: str = "",             # Media ID từ Google Flow API (dùng cho I2V)
         video_note: str = "",           # Ghi chú video: "SKIP" = bỏ qua, "" = tạo video
+        segment_id: int = 1,            # Segment ID (1, 2, 3...) - để biết scene thuộc segment nào
         # DEPRECATED - giữ để backward compatible, sẽ map sang srt_start/srt_end
         start_time: str = "",
         end_time: str = ""
@@ -278,6 +281,7 @@ class Scene:
         self.reference_files = reference_files
         self.media_id = media_id  # Media ID cho I2V
         self.video_note = video_note  # Ghi chú video: "SKIP" hoặc ""
+        self.segment_id = segment_id  # Segment ID (1, 2, 3...)
 
         # DEPRECATED aliases (để code cũ không bị lỗi)
         self.start_time = self.srt_start
@@ -304,6 +308,7 @@ class Scene:
             "reference_files": self.reference_files,
             "media_id": self.media_id,  # Media ID cho I2V
             "video_note": self.video_note,  # Ghi chú video
+            "segment_id": self.segment_id,  # Segment ID
         }
     
     @classmethod
@@ -358,6 +363,7 @@ class Scene:
             reference_files=str(data.get("reference_files", "") or ""),
             media_id=str(data.get("media_id", "") or ""),  # Media ID cho I2V
             video_note=str(data.get("video_note", "") or ""),  # Ghi chú video
+            segment_id=safe_int(data.get("segment_id", 1)),  # Segment ID (default=1)
         )
 
 
@@ -863,28 +869,32 @@ class PromptWorkbook:
             # Đảm bảo scene_id là integer, không phải float (1.0 -> 1)
             scene_id = scene.get("scene_id", 0)
             ws.cell(row=next_row, column=1, value=int(scene_id) if scene_id else 0)
-            ws.cell(row=next_row, column=2, value=scene.get("srt_start", ""))
-            ws.cell(row=next_row, column=3, value=scene.get("srt_end", ""))
+            # NEW: Column 2 = segment_id
+            segment_id = scene.get("segment_id", 1)  # Default = 1 nếu không có
+            ws.cell(row=next_row, column=2, value=int(segment_id) if segment_id else 1)
+            # Shift các columns khác xuống
+            ws.cell(row=next_row, column=3, value=scene.get("srt_start", ""))
+            ws.cell(row=next_row, column=4, value=scene.get("srt_end", ""))
             # Duration: handle cả "duration" và "duration_seconds" (3-8s từ SRT timing)
             duration = scene.get("duration") or scene.get("duration_seconds") or 0
-            ws.cell(row=next_row, column=4, value=round(duration, 2) if duration else 0)
-            ws.cell(row=next_row, column=5, value=scene.get("text", "")[:500])
+            ws.cell(row=next_row, column=5, value=round(duration, 2) if duration else 0)
+            ws.cell(row=next_row, column=6, value=scene.get("text", "")[:500])
             # New columns for backup
             # Handle characters_used - convert list to JSON string if needed
             chars_used = scene.get("characters_used", "[]")
             if isinstance(chars_used, list):
                 chars_used = json.dumps(chars_used)
-            ws.cell(row=next_row, column=6, value=chars_used)
+            ws.cell(row=next_row, column=7, value=chars_used)
 
-            ws.cell(row=next_row, column=7, value=scene.get("location_used", ""))
+            ws.cell(row=next_row, column=8, value=scene.get("location_used", ""))
 
             # Handle reference_files - convert list to JSON string if needed
             ref_files = scene.get("reference_files", "[]")
             if isinstance(ref_files, list):
                 ref_files = json.dumps(ref_files)
-            ws.cell(row=next_row, column=8, value=ref_files)
-            ws.cell(row=next_row, column=9, value=scene.get("img_prompt", "")[:1000])
-            ws.cell(row=next_row, column=10, value=scene.get("status", "backup"))
+            ws.cell(row=next_row, column=9, value=ref_files)
+            ws.cell(row=next_row, column=10, value=scene.get("img_prompt", "")[:1000])
+            ws.cell(row=next_row, column=11, value=scene.get("status", "backup"))
 
         self.save()
         self.logger.info(f"Saved {len(scenes_data)} scenes to director_plan")
@@ -905,19 +915,20 @@ class PromptWorkbook:
             if row[0] is None:
                 continue
 
-            # Handle both old format (6 cols) and new format (10 cols)
+            # Handle both old format and new format with segment_id
             plans.append({
                 "plan_id": row[0],
                 "scene_id": row[0],  # Alias cho plan_id (step 5 dùng scene_id)
-                "srt_start": row[1] or "",
-                "srt_end": row[2] or "",
-                "duration": row[3] or 0,
-                "srt_text": row[4] or "",
-                "characters_used": row[5] if len(row) > 5 else "[]",
-                "location_used": row[6] if len(row) > 6 else "",
-                "reference_files": row[7] if len(row) > 7 else "[]",
-                "img_prompt": row[8] if len(row) > 8 else "",
-                "status": row[9] if len(row) > 9 else "pending",
+                "segment_id": row[1] if len(row) > 1 else 1,  # NEW: segment_id column
+                "srt_start": row[2] if len(row) > 2 else "",
+                "srt_end": row[3] if len(row) > 3 else "",
+                "duration": row[4] if len(row) > 4 else 0,
+                "srt_text": row[5] if len(row) > 5 else "",
+                "characters_used": row[6] if len(row) > 6 else "[]",
+                "location_used": row[7] if len(row) > 7 else "",
+                "reference_files": row[8] if len(row) > 8 else "[]",
+                "img_prompt": row[9] if len(row) > 9 else "",
+                "status": row[10] if len(row) > 10 else "pending",
             })
 
         return plans
@@ -930,7 +941,7 @@ class PromptWorkbook:
 
         for row_idx in range(2, ws.max_row + 1):
             if ws.cell(row=row_idx, column=1).value == plan_id:
-                ws.cell(row=row_idx, column=6, value=status)
+                ws.cell(row=row_idx, column=11, value=status)
                 return True
 
         return False
