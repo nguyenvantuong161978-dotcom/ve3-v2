@@ -111,49 +111,100 @@ git push official main  # Push lên repo chính thức
 
 > **QUAN TRỌNG**: Claude Code phải cập nhật section này sau mỗi phiên làm việc để phiên sau sử dụng hiệu quả.
 
-### Phiên hiện tại: 2026-01-22 (Continued Session)
+### Phiên hiện tại: 2026-01-23 - Excel Worker Bug Hunt
 
-**RESOLUTION - Chrome 2 Portable Path Issue:**
-- ✅ Fixes are IMPLEMENTED and VERIFIED on codebase (commit 43d3158)
-- ✅ Both fixes confirmed present via check_version.py:
-  1. Auto-detect skip check - prevents override when chrome_portable is set
-  2. Relative-to-absolute path conversion - handles ./GoogleChromePortable paths
-- ⚠️ User (thutruc) needs to UPDATE their code to get fixes
-- 📄 Created FIX_CHROME2_INSTRUCTIONS.txt with step-by-step update guide
+**MISSION**: Chạy THẬT test AR8-0003 để tìm TẤT CẢ bugs trong BASIC/FULL video mode logic
 
-**Root Cause Identified:**
-- Auto-detect code in drission_flow_api.py was running even when chrome_portable was set
-- This caused Chrome 2 to use Chrome 1's portable path
-- Fix: Added `not self._chrome_portable` check to auto-detect condition (line 2104)
+**6 CRITICAL BUGS FOUND & FIXED** (commit 56f840a):
 
-**Fixes Applied (in modules/drission_flow_api.py):**
-1. Line 2104: `if not chrome_exe and not self._chrome_portable and platform.system()...`
-   - Auto-detect only runs if chrome_portable is NOT already set
-2. Lines 2086-2088: Convert relative paths to absolute
-   ```python
-   if not os.path.isabs(chrome_exe):
-       tool_dir = Path(__file__).parent.parent
-       chrome_exe = str(tool_dir / chrome_exe)
-   ```
+1. **Bug #1: director_plan missing segment_id column**
+   - Step 7 không biết scene thuộc segment nào → ALL scenes có video_note=""
+   - Fix: Added segment_id to DIRECTOR_PLAN_COLUMNS, updated save/get/update methods
 
-**Completed this session:**
-- [x] Created check_version.py script to verify fixes
-- [x] Fixed Unicode errors in check_version.py (use ASCII instead)
-- [x] Verified both fixes present in codebase
-- [x] Created FIX_CHROME2_INSTRUCTIONS.txt for user
-- [x] Committed and pushed to GitHub (commit 43d3158)
-- [x] Updated CLAUDE.md documentation
+2. **Bug #2: Step 6 crash - None[:slice] TypeError**
+   - ALL 18 batches failed với "'NoneType' object is not subscriptable"
+   - Root: `scene.get('srt_text', '')[:200]` returns None nếu value là None!
+   - Fix: Pattern `(scene.get('key') or default)[:x]` - applied 4 chỗ trong Step 6
 
-**Next Steps for User (thutruc):**
-1. Close tool completely
-2. Run UPDATE_MANUAL.bat OR click UPDATE in GUI OR git pull
-3. Run check_version.py to verify
-4. Start tool and verify Chrome 2 uses correct path with " - Copy"
+3. **Bug #3: Step 7 crash - None.split() AttributeError**
+   - 2/27 batches failed với "'NoneType' object has no attribute 'split'"
+   - Fix: Pattern `(scene.get('key') or "").split()` - applied 10+ chỗ trong Step 7
+
+4. **Bug #4: Scene class missing segment_id attribute**
+   - Added segment_id param to __init__, to_dict(), from_dict()
+
+5. **Bug #5: segment_id position causing DATA CORRUPTION** ⚠️ CRITICAL!
+   - Thêm segment_id vào position 2 → shift ALL columns → data swap!
+   - location_used chứa reference_files, characters_used chứa location_used
+   - Fix: Moved segment_id to END of SCENES_COLUMNS (backward compatible)
+
+6. **Enhancement: max_parallel_api 6 → 10** (25-30% speedup expected)
+
+**CRITICAL PYTHON GOTCHA IDENTIFIED:**
+```python
+# When dict value is None (not missing):
+data = {"key": None}
+
+# ❌ WRONG - .get() with default DOESN'T WORK for None:
+data.get("key", "default")  # Returns None, NOT "default"!
+
+# ✅ CORRECT - use `or`:
+data.get("key") or "default"  # Returns "default" when value is None
+```
+
+**API VALIDATION ISSUES DISCOVERED:**
+- Step 2: Segments API failed → fallback (low quality)
+- Step 5: Expected 60 scenes, got 52 → auto-fill 8 scenes
+- Step 5: 31 SRT entries uncovered (93.2% coverage)
+
+**FILES MODIFIED:**
+- modules/excel_manager.py (~100 lines)
+- modules/progressive_prompts.py (~30 lines)
+- config/settings.yaml (max_parallel_api)
+- Created 15+ test/debug scripts
+
+**VERIFIED:**
+- ✅ test_segment_id_fix.py: PASSED
+- ✅ Excel audit: Raw data CORRECT (không phải lỗi API)
+- ✅ Bug từ code đọc Excel, không phải API
+
+**NEXT STEPS:**
+1. ⏳ Regenerate AR8-0003 Excel với schema mới (segment_id ở column 19)
+2. ⏳ Add API validation framework (check after each step, retry if incomplete)
+3. ⏳ Implement pipeline Step 6+7 song song (30-40% speedup)
+4. ⏳ Test BASIC mode logic hoàn chỉnh
+
+**DOCUMENTATION:**
+- See BUGS_FOUND_2026_01_23.md for detailed analysis
+- See FINAL_FIX_SUMMARY.md for complete summary
 
 ### Backlog (việc cần làm)
+
+**High Priority:**
+- [ ] **API Validation Framework**: Add validation after each Excel worker step
+  - Check data completeness (no missing scenes, full coverage)
+  - Retry mechanism for incomplete API responses
+  - Quality metrics logging
+- [ ] **Pipeline Optimization**: Step 6+7 chạy song song (30-40% speedup)
+  - Step 7 bắt đầu khi Step 6 hoàn thành batch đầu
+  - Excel làm "message queue" giữa 2 steps
+- [ ] **Regenerate AR8-0003**: Test với schema mới (segment_id ở column 19)
+  - Verify BASIC mode: Seg 1 video_note="", Seg 2+ video_note="SKIP"
+  - Verify data integrity: no column shift, correct references
+
+**Medium Priority:**
 - [ ] Worker logs không hiển thị trong GUI (trade-off để Chrome automation hoạt động)
 - [ ] Kiểm tra và làm sạch IPv6 list
 - [ ] Test auto-recovery khi Chrome disconnect
 
+**Low Priority:**
+- [ ] Batch size optimization (Step 6: 15→20, Step 7: 10→15)
+- [ ] Cache character/location lookups trong parallel processing
+
 ### Lịch sử phiên trước
-_(Thêm tóm tắt phiên cũ vào đây)_
+
+**2026-01-22 - Chrome 2 Portable Path Fix:**
+- Fixed Chrome 2 using wrong portable path (2 fixes applied)
+- Created check_version.py to verify fixes
+- Fixed CMD hiding and Chrome window positioning
+- Commit: 43d3158
