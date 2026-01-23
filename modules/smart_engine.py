@@ -1876,8 +1876,10 @@ class SmartEngine:
             ref_failed = 0
             ref_media_ids_created = 0
 
-            if ref_prompts:
+            if ref_prompts and not self._skip_references:
                 self.log(f"[STEP 1/2] Tạo {len(ref_prompts)} ảnh tham chiếu (nv/loc) TRƯỚC...")
+            elif ref_prompts and self._skip_references:
+                self.log(f"[STEP 1/2] SKIP tạo {len(ref_prompts)} references (skip_references=True, Chrome 2 mode)")
                 ref_result = generator.generate_from_prompts_auto(
                     prompts=ref_prompts,
                     excel_path=excel_files[0],
