@@ -1683,21 +1683,27 @@ Create scenes (~8s each). Return JSON:
             except:
                 seg_duration = len(seg_entries) * 5  # Fallback: 5s per entry
 
-            # TẤT CẢ SEGMENTS: Tuân thủ max_scene_duration limit
-            # Tính số scenes cần thiết để mỗi scene không vượt quá max_scene_duration
+            # ÁP DỤNG 8s RULE dựa trên mode
             max_scene_duration = self.config.get("max_scene_duration", 8)
             min_scene_duration = self.config.get("min_scene_duration", 5)
+            excel_mode = self.config.get("excel_mode", "full").lower()
 
-            original_image_count = image_count
-            # Tính số scenes tối thiểu để mỗi scene <= max_scene_duration
-            min_scenes_needed = max(1, int(seg_duration / max_scene_duration))
-            if seg_duration / min_scenes_needed > max_scene_duration:
-                min_scenes_needed += 1  # Thêm 1 scene nếu vẫn vượt
+            # BASIC mode: Chỉ Segment 1 áp dụng 8s rule
+            # FULL mode: Tất cả segments áp dụng 8s rule
+            should_apply_8s_rule = (excel_mode == "full") or (excel_mode == "basic" and seg_id == 1)
 
-            # Sử dụng số lớn hơn giữa planned và min_scenes_needed
-            if min_scenes_needed > image_count:
-                image_count = min_scenes_needed
-                self._log(f"     -> Segment {seg_id}: {original_image_count} planned → {image_count} scenes (max {max_scene_duration}s/scene)")
+            if should_apply_8s_rule:
+                original_image_count = image_count
+                # Tính số scenes tối thiểu để mỗi scene <= max_scene_duration
+                min_scenes_needed = max(1, int(seg_duration / max_scene_duration))
+                if seg_duration / min_scenes_needed > max_scene_duration:
+                    min_scenes_needed += 1  # Thêm 1 scene nếu vẫn vượt
+
+                # Sử dụng số lớn hơn giữa planned và min_scenes_needed
+                if min_scenes_needed > image_count:
+                    image_count = min_scenes_needed
+                    mode_label = "BASIC Seg 1" if excel_mode == "basic" else "FULL"
+                    self._log(f"     -> [{mode_label}] Segment {seg_id}: {original_image_count} planned → {image_count} scenes (max {max_scene_duration}s/scene)")
 
             # Calculate duration per scene
             scene_duration = seg_duration / image_count if image_count > 0 else seg_duration
