@@ -1,3 +1,3 @@
-1.0.6
-2026-01-23 22:30
-Fix: Chrome 1 không tạo reference images - bug logic sai vị trí
+1.0.7
+2026-01-23 23:00
+Fix: Thêm dấu cách cuối prompt để Enter hoạt động trong Google Flow

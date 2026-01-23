@@ -3,8 +3,8 @@
     "0": {
       "ready_for_rotation": false,
       "cleared_data": false,
-      "403_count": 0,
-      "last_403": null
+      "403_count": 1,
+      "last_403": "2026-01-23T22:27:41.149871"
     }
   },
   "last_ipv6_rotation": null,

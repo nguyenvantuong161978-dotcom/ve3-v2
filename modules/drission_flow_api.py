@@ -2864,6 +2864,11 @@ class DrissionFlowAPI:
         try:
             import pyperclip
 
+            # QUAN TRỌNG: Thêm dấu cách ở cuối prompt để Enter hoạt động
+            # (Google Flow cần có dấu cách cuối để kích hoạt nút gửi)
+            if not prompt.endswith(' '):
+                prompt = prompt + ' '
+
             # 1. Copy prompt vào clipboard
             pyperclip.copy(prompt)
             self.log(f"→ Copied {len(prompt)} chars to clipboard")
@@ -2932,6 +2937,10 @@ class DrissionFlowAPI:
     def _paste_prompt_js(self, prompt: str) -> bool:
         """Fallback: Paste prompt bằng JavaScript."""
         try:
+            # QUAN TRỌNG: Thêm dấu cách ở cuối để Enter hoạt động
+            if not prompt.endswith(' '):
+                prompt = prompt + ' '
+
             time.sleep(1)
             result = self.driver.run_js(f"""
                 (function() {{
