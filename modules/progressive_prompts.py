@@ -2439,9 +2439,9 @@ Return JSON only with EXACTLY {len(batch)} scenes:
                         except (ValueError, TypeError):
                             scene_srt_start = 0
 
-                        # Nếu scene KHÔNG thuộc Segment 1 → không tạo video
+                        # Nếu scene KHÔNG thuộc Segment 1 → ghi chú không tạo video
                         if not (seg1_start <= scene_srt_start <= seg1_end):
-                            video_prompt_value = ""  # Not Segment 1, skip video
+                            video_prompt_value = f"[BASIC] No video - only Segment 1 (SRT {seg1_start}-{seg1_end})"
 
                     scene = Scene(
                         scene_id=scene_id,
