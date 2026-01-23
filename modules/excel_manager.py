@@ -87,6 +87,7 @@ SCENES_COLUMNS = [
     "location_used",    # Location ID
     "reference_files",  # JSON list reference files cho image generation
     "media_id",         # Media ID từ Google Flow API (dùng cho I2V - Image to Video)
+    "video_note",       # Ghi chú video: "SKIP" = bỏ qua, "" = tạo video
 ]
 
 # Cột cho sheet Backup Characters (nhân vật narrator cố định cho fallback)
