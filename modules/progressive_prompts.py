@@ -1422,8 +1422,10 @@ Return JSON only:
         scene_id_counter = 1
         for seg_idx in range(len(story_segments)):
             seg_scenes = segment_results.get(seg_idx, [])
+            segment_id = seg_idx + 1  # Segment 1, 2, 3...
             for scene in seg_scenes:
                 scene["scene_id"] = scene_id_counter
+                scene["segment_id"] = segment_id  # LƯU segment_id
                 all_scenes.append(scene)
                 scene_id_counter += 1
 
@@ -1681,11 +1683,21 @@ Create scenes (~8s each). Return JSON:
             except:
                 seg_duration = len(seg_entries) * 5  # Fallback: 5s per entry
 
-            # SEGMENT 1 SPECIAL: Tuân thủ 8s limit
-            if seg_id == 1:
-                original_image_count = image_count
-                image_count = max(1, int(seg_duration / 8) + 1)
-                self._log(f"     -> Segment 1 special: {original_image_count} planned -> {image_count} scenes (8s limit)")
+            # TẤT CẢ SEGMENTS: Tuân thủ max_scene_duration limit
+            # Tính số scenes cần thiết để mỗi scene không vượt quá max_scene_duration
+            max_scene_duration = self.config.get("max_scene_duration", 8)
+            min_scene_duration = self.config.get("min_scene_duration", 5)
+
+            original_image_count = image_count
+            # Tính số scenes tối thiểu để mỗi scene <= max_scene_duration
+            min_scenes_needed = max(1, int(seg_duration / max_scene_duration))
+            if seg_duration / min_scenes_needed > max_scene_duration:
+                min_scenes_needed += 1  # Thêm 1 scene nếu vẫn vượt
+
+            # Sử dụng số lớn hơn giữa planned và min_scenes_needed
+            if min_scenes_needed > image_count:
+                image_count = min_scenes_needed
+                self._log(f"     -> Segment {seg_id}: {original_image_count} planned → {image_count} scenes (max {max_scene_duration}s/scene)")
 
             # Calculate duration per scene
             scene_duration = seg_duration / image_count if image_count > 0 else seg_duration
@@ -1704,7 +1716,8 @@ SEGMENT INFO:
 - Name: "{seg_name}"
 - Message: "{message}"
 - Duration: {seg_duration:.1f} seconds total
-- Required: EXACTLY {image_count} scenes (each ~{scene_duration:.1f}s)
+- Required: EXACTLY {image_count} scenes
+- IMPORTANT: Each scene must be {min_scene_duration}-{max_scene_duration} seconds (average ~{scene_duration:.1f}s)
 
 STORY CONTEXT:
 {context_lock}
@@ -1720,7 +1733,7 @@ SRT CONTENT FOR THIS SEGMENT:
 
 INSTRUCTIONS:
 1. Create EXACTLY {image_count} scenes - no more, no less
-2. Each scene should be ~{scene_duration:.1f} seconds
+2. Each scene duration: {min_scene_duration}s ≤ duration ≤ {max_scene_duration}s
 3. Distribute the SRT content evenly across all {image_count} scenes
 4. Each scene = one cinematic shot that supports the narration
 5. Use EXACT character/location IDs from the lists above
@@ -1844,8 +1857,10 @@ Create exactly {image_count} scenes!"""
         scene_id_counter = 1
         for seg_idx in range(len(story_segments)):
             seg_scenes = segment_results.get(seg_idx, [])
+            segment_id = seg_idx + 1  # Segment 1, 2, 3...
             for scene in seg_scenes:
                 scene["scene_id"] = scene_id_counter
+                scene["segment_id"] = segment_id  # LƯU segment_id để biết scene thuộc segment nào
                 # Normalize IDs
                 raw_chars = scene.get("characters_used", "")
                 raw_loc = scene.get("location_used", "")
@@ -2410,6 +2425,13 @@ Return JSON only with EXACTLY {len(batch)} scenes:
                     if loc_id:
                         ref_files.append(loc_image_lookup.get(loc_id, f"{loc_id}.png"))
 
+                    # Xác định video_note dựa trên mode và segment
+                    video_note = ""
+                    excel_mode = self.config.get("excel_mode", "full").lower()
+                    segment_id = original.get("segment_id", 1)  # Default segment 1 nếu không có
+                    if excel_mode == "basic" and segment_id > 1:
+                        video_note = "SKIP"  # BASIC mode: chỉ làm video cho Segment 1
+
                     scene = Scene(
                         scene_id=scene_id,
                         srt_start=original.get("srt_start", ""),
@@ -2422,7 +2444,8 @@ Return JSON only with EXACTLY {len(batch)} scenes:
                         location_used=original.get("location_used", ""),
                         reference_files=json.dumps(ref_files) if ref_files else "",
                         status_img="pending",
-                        status_vid="pending"
+                        status_vid="pending",
+                        video_note=video_note  # GHI CHÚ VIDEO: "SKIP" hoặc ""
                     )
                     workbook.add_scene(scene)
                     total_created += 1
