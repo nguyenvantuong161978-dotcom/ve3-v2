@@ -4465,7 +4465,7 @@ class BrowserFlowGenerator:
 
                     # Kiểm tra status_img
                     status_img = getattr(scene, 'status_img', '') or ''
-                    prompt = getattr(scene, 'prompt', '') or ''
+                    prompt = getattr(scene, 'img_prompt', '') or ''
 
                     # Nếu có prompt và chưa done (bỏ qua skip/error) → chưa xong
                     # Skip/error không cần chờ vì không thể tạo được
@@ -4480,6 +4480,7 @@ class BrowserFlowGenerator:
                             pending_scenes.append(scene_id)
             except Exception as e:
                 self._log(f"[I2V] Warning: Cannot check pending scenes: {e}", "warn")
+                all_images_done = False  # Nếu lỗi, coi như chưa xong → KHÔNG tạo video
 
         if not all_images_done:
             self._log(f"[I2V] [WAIT] SKIP - Còn {len(pending_scenes)} scene chưa có ảnh: {pending_scenes[:10]}...")
