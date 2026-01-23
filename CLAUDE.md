@@ -221,12 +221,146 @@ PROJECTS/
 
 ## Quy tắc xử lý lỗi
 
-### 403 Errors (Google Flow bị block)
-- 3 lỗi liên tiếp → Xóa Chrome data + Restart worker
-- 5 lỗi (bất kỳ worker) → Rotate IPv6 + Restart tất cả
+### 1. LỖI 403 (Google Flow bị block IP)
 
-### Chrome Data Clearing
-- Xóa tất cả trong `Data/` folder
+**Nguyên nhân**: Google Flow rate limit hoặc block IP khi request quá nhiều.
+
+**Cơ chế xử lý tự động**:
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ LEVEL 1: Worker-level recovery (3 lỗi 403 liên tiếp)                    │
+│                                                                         │
+│   Chrome Worker gặp 403 x3 → Tự động:                                   │
+│   1. Xóa Chrome Data folder (giữ lại First Run)                         │
+│   2. Restart worker                                                     │
+│   3. Tiếp tục từ scene đang làm dở                                      │
+├─────────────────────────────────────────────────────────────────────────┤
+│ LEVEL 2: System-level recovery (5 lỗi 403 tổng cộng)                    │
+│                                                                         │
+│   Nếu tổng 403 từ cả 2 workers >= 5 → VM Manager tự động:               │
+│   1. Stop tất cả Chrome workers                                         │
+│   2. Rotate IPv6 (đổi sang IP mới từ config/ipv6.txt)                   │
+│   3. Xóa Chrome Data của cả 2 workers                                   │
+│   4. Restart tất cả workers                                             │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**File tracking**: `config/.403_tracker.json` - lưu số lỗi 403 của mỗi worker
+
+**Modules liên quan**:
+- `modules/shared_403_tracker.py` - Đếm và track 403 errors
+- `modules/ipv6_manager.py` - Rotate IPv6 address
+- `modules/chrome_manager.py` - Clear Chrome data
+
+---
+
+### 2. LỖI TIMEOUT (Google Flow không phản hồi)
+
+**Nguyên nhân**: Network chậm, Google Flow quá tải, hoặc prompt phức tạp.
+
+**Cơ chế xử lý**:
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Image generation timeout (120s mặc định)                                │
+│   → Retry 3 lần với cùng prompt                                         │
+│   → Nếu vẫn fail → Skip scene, log warning, tiếp tục scene khác         │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Video generation timeout (180s mặc định)                                │
+│   → Retry 2 lần                                                         │
+│   → Nếu vẫn fail → Đánh dấu scene cần regenerate sau                    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Config**: `config/settings.yaml`
+- `browser_generate_timeout: 120` - Timeout tạo ảnh (giây)
+- `retry_count: 3` - Số lần retry
+
+---
+
+### 3. LỖI CHROME DISCONNECT
+
+**Nguyên nhân**: Chrome crash, memory leak, hoặc network disconnect.
+
+**Cơ chế xử lý**:
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Chrome bị disconnect:                                                   │
+│   1. Worker detect qua DrissionPage connection check                    │
+│   2. Kill Chrome process cũ (chỉ worker đó, không kill hết)             │
+│   3. Clear Chrome Data                                                  │
+│   4. Restart Chrome với profile mới                                     │
+│   5. Resume từ scene đang làm dở                                        │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Module**: `modules/chrome_manager.py` - `kill_chrome_by_port()`
+
+---
+
+### 4. LỖI API (Excel Worker)
+
+**Các loại lỗi thường gặp**:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ API rate limit (429):                                                   │
+│   → Exponential backoff: 1s → 2s → 4s → 8s                              │
+│   → Max retry: 5 lần                                                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│ API response không đủ data:                                             │
+│   → VALIDATION 1: Chia nhỏ segment, gọi API lại                         │
+│   → VALIDATION 2: Detect missing range, call API bổ sung                │
+│   → GAP-FILL: Tạo fill scenes cho SRT còn thiếu                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Duplicate prompts (>80%):                                               │
+│   → Tạo unique fallback prompts thay vì skip batch                      │
+│   → Đảm bảo không mất scenes                                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│ JSON parse error:                                                       │
+│   → Retry với temperature cao hơn                                       │
+│   → Max retry: 3 lần                                                    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Module**: `modules/progressive_prompts.py` - `_call_api_with_retry()`
+
+---
+
+### 5. LỖI CONTENT POLICY (Google Flow từ chối prompt)
+
+**Nguyên nhân**: Prompt chứa nội dung vi phạm policy của Google.
+
+**Cơ chế xử lý**:
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Content policy violation detected:                                      │
+│   1. Log prompt bị reject                                               │
+│   2. Tạo fallback prompt (generic, safe)                                │
+│   3. Retry với fallback prompt                                          │
+│   4. Nếu vẫn fail → Skip scene, đánh dấu manual review                  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Chrome Data Clearing (Chi tiết)
+
+**Khi nào clear**:
+- 403 error x3
+- Chrome disconnect
+- Manual restart từ GUI
+
+**Cách clear**:
+```
+ChromePortable/Data/
+├── profile/
+│   ├── First Run          ← GIỮ LẠI (tránh first-run prompts)
+│   ├── Default/           ← XÓA
+│   ├── Cache/             ← XÓA
+│   └── ...                ← XÓA
+```
+
+**Code**: `modules/chrome_manager.py` - `clear_chrome_data()`
 - GIỮ LẠI `Data/profile/First Run` để tránh first-run prompts
 
 ## Commands thường dùng
