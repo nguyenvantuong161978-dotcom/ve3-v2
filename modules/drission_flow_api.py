@@ -2874,91 +2874,56 @@ class DrissionFlowAPI:
                 self.log("[WARN] Không tìm thấy textarea", "WARN")
                 return False
 
-            # 3. Click vào textarea để focus (2 lần + verify) - RETRY nếu fail
-            focus_ok = False
-            max_retry = 3
-
-            for attempt in range(max_retry):
-                try:
-                    if attempt > 0:
-                        self.log(f"    → Retry click {attempt + 1}/{max_retry}...")
-
-                    # Click lần 1
-                    textarea.click()
-                    time.sleep(0.3)
-
-                    # Click lần 2 để đảm bảo focus
-                    textarea.click()
-                    time.sleep(0.2)
-
-                    # VERIFY: Kiểm tra focus bằng cách điền text test
-                    try:
-                        verify_result = self.driver.run_js("""
-                            (function() {
-                                try {
-                                    var textarea = document.querySelector('textarea');
-                                    if (!textarea) return 'not_found';
-
-                                    // Lưu value cũ
-                                    var oldValue = textarea.value;
-
-                                    // Test: Điền text thử
-                                    textarea.value = '__FOCUS_TEST__';
-
-                                    // Check có điền được không
-                                    var success = (textarea.value === '__FOCUS_TEST__');
-
-                                    // Restore value cũ
-                                    textarea.value = oldValue;
-
-                                    return success ? 'focus_ok' : 'focus_failed';
-                                } catch(e) {
-                                    return 'js_error: ' + e.message;
-                                }
-                            })();
-                        """)
-
-                        if verify_result == 'focus_ok':
-                            self.log("    → Focus verified OK")
-                            focus_ok = True
-                            break  # Thành công, thoát loop
-                        elif verify_result is None:
-                            self.log("    → [WARN] Focus verify: None (clicked wrong place?)")
-                        else:
-                            self.log(f"    → [WARN] Focus verify: {verify_result}")
-
-                    except Exception as verify_err:
-                        self.log(f"    → [WARN] Verify error: {verify_err}")
-
-                    # Nếu đến đây mà chưa break → verify fail → retry
-                    if attempt < max_retry - 1:
-                        time.sleep(0.5)
-
-                except Exception as e:
-                    self.log(f"    → [WARN] Click error: {e}")
-                    if attempt < max_retry - 1:
-                        time.sleep(0.5)
-
-            # Nếu sau 3 lần vẫn không verify OK → cảnh báo nhưng vẫn thử paste
-            if not focus_ok:
-                self.log("    → [WARN] Focus NOT verified after retries, continue anyway...")
-
-
-            # 4. Clear nội dung cũ bằng Ctrl+A
-            from DrissionPage.common import Keys
+            # 3. JavaScript: Click 2 lần + Select all + Paste prompt
             try:
-                textarea.input(Keys.CTRL_A)
-                time.sleep(0.1)
-            except:
-                pass
+                result = self.driver.run_js(f"""
+                    (function() {{
+                        try {{
+                            var prompt = {repr(prompt)};
+                            var textarea = document.querySelector('textarea');
+                            if (!textarea) return 'not_found';
 
-            # 5. Paste bằng Ctrl+V
-            self.log("→ Pasting with Ctrl+V...")
-            textarea.input(Keys.CTRL_V)
-            time.sleep(0.5)
+                            // Scroll vào view
+                            textarea.scrollIntoView({{block: 'center', behavior: 'instant'}});
 
-            self.log(f"→ Paste done [v]")
-            return True
+                            // Click lần 1
+                            textarea.click();
+                            textarea.focus();
+
+                            // Đợi 300ms bằng setTimeout
+                            setTimeout(function() {{
+                                // Click lần 2
+                                textarea.click();
+                                textarea.focus();
+
+                                // Đợi 200ms rồi paste
+                                setTimeout(function() {{
+                                    // Select all (Ctrl+A)
+                                    textarea.select();
+
+                                    // Insert text (paste)
+                                    document.execCommand('insertText', false, prompt);
+
+                                }}, 200);
+                            }}, 300);
+
+                            return 'pasting';
+
+                        }} catch(e) {{
+                            return 'error: ' + e.message;
+                        }}
+                    }})();
+                """)
+
+                # Đợi JavaScript hoàn thành (300 + 200 = 500ms + buffer)
+                time.sleep(0.8)
+
+                self.log(f"→ Pasted with JavaScript [v]")
+                return True
+
+            except Exception as e:
+                self.log(f"[WARN] JS paste error: {e}", "WARN")
+                return False
 
         except Exception as e:
             self.log(f"[WARN] Paste prompt failed: {e}", "WARN")
