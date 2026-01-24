@@ -2478,18 +2478,31 @@ class DrissionFlowAPI:
             return False
 
         # 3. Vào Google Flow (hoặc project cố định nếu có) - VỚI RETRY
-        target_url = project_url if project_url else self.FLOW_URL
-        self.log(f"Vào: {target_url[:60]}...")
-
         max_nav_retries = 3
         nav_success = False
 
         for nav_attempt in range(max_nav_retries):
             try:
+                # Nếu KHÔNG có project_url → setup mới → thao tác "mồi" trước
+                if not project_url:
+                    # Bước 1: Vào /project/test (thao tác mồi)
+                    self.log(f"[MỒI] Vào project/test trước (warm up)...")
+                    self.driver.run_js(f"window.location.href = '{self.FLOW_URL}';", timeout=2)
+
+                    # Đợi 3-6s
+                    wait_time = 6 if getattr(self, '_ipv6_activated', False) else 3
+                    time.sleep(wait_time)
+                    self.log(f"[v] Warm up done")
+
+                    # Bước 2: SAU ĐÓ vào trang chủ Flow để click "Dự án mới"
+                    self.log(f"Vào trang chủ Flow...")
+                    target_url = self.FLOW_URL_FALLBACK
+                else:
+                    # Có project_url → vào thẳng dự án thật
+                    target_url = project_url
+                    self.log(f"Vào project: {target_url[:60]}...")
+
                 # DÙNG JAVASCRIPT NAVIGATE - KHÔNG BLOCK!
-                # driver.get() vẫn đợi page load bất chấp timeout
-                # JavaScript window.location.href = instant, không đợi
-                self.log(f"[NAV] Navigate via JavaScript (non-blocking)...")
                 self.driver.run_js(f"window.location.href = '{target_url}';", timeout=2)
 
                 # Đợi 3-6s để page bắt đầu load
@@ -2500,9 +2513,9 @@ class DrissionFlowAPI:
                 # Logic textarea (_wait_for_textarea_visible) sẽ tự F5 nếu page chưa load xong
                 self.log(f"[v] Navigated to {target_url[:60]}...")
 
-                # Lưu project_url để dùng khi retry (nếu target_url là project)
-                if "/project/" in target_url:
-                    self._current_project_url = target_url
+                # CHỈ lưu project_url NẾU là dự án thật (KHÔNG phải /test)
+                if project_url and "/project/" in project_url and "/project/test" not in project_url:
+                    self._current_project_url = project_url
 
                 nav_success = True
                 break
@@ -2613,8 +2626,8 @@ class DrissionFlowAPI:
             # Kiểm tra đã ở trong project chưa
             current_url = self._get_current_url()
             if "/project/" not in current_url:
-                # Nếu có project_url nhưng bị redirect về trang chủ → retry vào project cũ
-                if project_url and "/project/" in project_url:
+                # Nếu có project_url THẬT (không phải /test) nhưng bị redirect → retry vào project cũ
+                if project_url and "/project/" in project_url and "/project/test" not in project_url:
                     self.log(f"[WARN] Bị redirect, retry vào project cũ...")
                     # Retry vào project URL (max 3 lần) - JavaScript non-blocking
                     for retry in range(3):
@@ -2622,7 +2635,7 @@ class DrissionFlowAPI:
                         self.driver.run_js(f"window.location.href = '{project_url}';", timeout=2)
                         time.sleep(3)
                         retry_url = self._get_current_url()
-                        if "/project/" in retry_url:
+                        if "/project/" in retry_url and "/project/test" not in retry_url:
                             self._current_project_url = retry_url
                             self.log(f"[v] Vào lại project thành công!")
                             break
@@ -2631,15 +2644,15 @@ class DrissionFlowAPI:
                         self.log("[x] Không vào được project cũ, session có thể hết hạn", "ERROR")
                         return False
                 else:
-                    # Không có project URL → tạo mới
+                    # Không có project URL THẬT → tạo mới
                     self.log("Auto setup project...")
                     if not self._auto_setup_project(timeout):
                         return False
-                    # Lưu project URL sau khi tạo mới
+                    # Lưu project URL sau khi tạo mới (KHÔNG lưu /project/test)
                     new_url = self._get_current_url()
-                    if "/project/" in new_url:
+                    if "/project/" in new_url and "/project/test" not in new_url:
                         self._current_project_url = new_url
-                        self.log(f"  → New project URL saved")
+                        self.log(f"  → New project URL saved: {new_url[:60]}...")
             else:
                 self.log("[v] Đã ở trong project!")
                 # KHÔNG F5 - để _wait_for_textarea_visible() tự F5 nếu textarea không sẵn sàng
@@ -2662,45 +2675,18 @@ class DrissionFlowAPI:
 
         # Đợi textarea - tự động F5 nếu không thấy (IPv6 friendly)
         if not self._wait_for_textarea_visible():
-            # Nếu đang ở /project/test mà không thấy textarea → fallback về trang chủ Flow
-            current_url = self._get_current_url()
-            if "/project/test" in current_url:
-                self.log("[FALLBACK] project/test không có textarea, chuyển về trang chủ Flow...")
-                try:
-                    # Navigate về trang chủ Flow
-                    self.driver.run_js(f"window.location.href = '{self.FLOW_URL_FALLBACK}';", timeout=2)
-                    time.sleep(3)
-
-                    # Tạo project mới
-                    self.log("Auto setup project từ trang chủ...")
-                    if not self._auto_setup_project(timeout):
-                        self.log("[x] Không thể tạo project từ trang chủ", "ERROR")
-                        return False
-
-                    # Đợi textarea lại
-                    time.sleep(2)
-                    if not self._wait_for_textarea_visible():
-                        self.log("[x] Không thể tìm textarea sau fallback", "ERROR")
-                        return False
-
-                    self.log("[v] Fallback thành công!")
-
-                except Exception as fallback_err:
-                    self.log(f"[x] Fallback error: {fallback_err}", "ERROR")
+            # Thử navigate lại project 1 lần nữa
+            self.log("[PROJECT] [WARN] Không thấy textarea, thử load lại project...")
+            try:
+                project_url = f"https://labs.google/fx/tools/video-fx/projects/{self.project_id}"
+                self.driver.run_js(f"window.location.href = '{project_url}';", timeout=2)
+                time.sleep(6 if getattr(self, '_ipv6_activated', False) else 3)
+                if not self._wait_for_textarea_visible():
+                    self.log("[x] Không thể tìm textarea sau nhiều lần thử", "ERROR")
                     return False
-            else:
-                # Không phải project/test → thử navigate lại project 1 lần nữa
-                self.log("[PROJECT] [WARN] Không thấy textarea, thử load lại project...")
-                try:
-                    project_url = f"https://labs.google/fx/tools/video-fx/projects/{self.project_id}"
-                    self.driver.run_js(f"window.location.href = '{project_url}';", timeout=2)
-                    time.sleep(6 if getattr(self, '_ipv6_activated', False) else 3)
-                    if not self._wait_for_textarea_visible():
-                        self.log("[x] Không thể tìm textarea sau nhiều lần thử", "ERROR")
-                        return False
-                except Exception as e:
-                    self.log(f"[PROJECT] Navigate error: {e}", "ERROR")
-                    return False
+            except Exception as e:
+                self.log(f"[PROJECT] Navigate error: {e}", "ERROR")
+                return False
 
         self.log("[v] Project đã sẵn sàng (textarea visible)!")
 
