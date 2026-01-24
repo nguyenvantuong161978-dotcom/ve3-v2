@@ -1,3 +1,3 @@
-1.0.7
-2026-01-24 10:31
-Fix: Enter timing - verify textarea ready before send
+1.0.8
+2026-01-24 10:45
+Optimize: Remove 2 unnecessary F5 refreshes, let textarea check handle F5 if needed

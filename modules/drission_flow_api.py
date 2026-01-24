@@ -2427,11 +2427,7 @@ class DrissionFlowAPI:
                 wait_time = 6 if getattr(self, '_ipv6_activated', False) else 3
                 time.sleep(wait_time)
 
-                # === F5 REFRESH ngay sau khi vào link ===
-                # Trang hay bị lag khi mới vào, refresh để load lại cho ổn định
-                self.log("[SYNC] Refresh trang (tránh lag)...")
-                self.driver.refresh()
-                time.sleep(wait_time)
+                # KHÔNG F5 ngay - để _wait_for_textarea_visible() tự F5 nếu cần
 
                 # Kiểm tra xem trang có load được không
                 current_url = self.driver.url
@@ -2600,10 +2596,7 @@ class DrissionFlowAPI:
                         self.log(f"  → New project URL saved")
             else:
                 self.log("[v] Đã ở trong project!")
-                # F5 để load lại trang
-                self.log("   → F5 refresh...")
-                self.driver.refresh()
-                time.sleep(3)
+                # KHÔNG F5 - để _wait_for_textarea_visible() tự F5 nếu textarea không sẵn sàng
 
         # 5. Đợi textarea sẵn sàng - TEXTAREA = page đã load xong
         # IPv6 cần thời gian lâu hơn, tự động F5 nếu không thấy
