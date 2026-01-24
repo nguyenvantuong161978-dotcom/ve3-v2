@@ -2489,10 +2489,16 @@ class DrissionFlowAPI:
                     self.log(f"[MỒI] Vào project/test trước (warm up)...")
                     self.driver.run_js(f"window.location.href = '{self.FLOW_URL}';", timeout=2)
 
-                    # Đợi 3-6s
+                    # Đợi trang load xong (QUAN TRỌNG - không chỉ sleep!)
                     wait_time = 6 if getattr(self, '_ipv6_activated', False) else 3
                     time.sleep(wait_time)
-                    self.log(f"[v] Warm up done")
+
+                    # Đợi page ready
+                    self.log(f"[MỒI] Đợi page load xong...")
+                    if self._wait_for_page_ready(timeout=30):
+                        self.log(f"[v] Warm up done - page ready!")
+                    else:
+                        self.log(f"[WARN] Warm up page chưa ready, tiếp tục...", "WARN")
 
                     # Bước 2: SAU ĐÓ vào trang chủ Flow để click "Dự án mới"
                     self.log(f"Vào trang chủ Flow...")
