@@ -2087,6 +2087,113 @@ class PromptWorkbook:
         }
 
     # ========================================================================
+    # CONFIG SHEET METHODS
+    # ========================================================================
+
+    def get_config_value(self, key: str) -> str:
+        """
+        Đọc giá trị từ sheet 'config'.
+
+        Args:
+            key: Key cần đọc (vd: 'flow_project_url')
+
+        Returns:
+            Value string, hoặc "" nếu không tìm thấy
+        """
+        try:
+            if 'config' not in self.workbook.sheetnames:
+                return ""
+
+            ws = self.workbook['config']
+            for row in range(2, ws.max_row + 1):
+                cell_key = ws.cell(row=row, column=1).value
+                if cell_key and str(cell_key).strip().lower() == key.lower():
+                    value = ws.cell(row=row, column=2).value
+                    return str(value) if value else ""
+
+            return ""
+        except:
+            return ""
+
+    def set_config_value(self, key: str, value: str) -> None:
+        """
+        Ghi giá trị vào sheet 'config'.
+
+        Args:
+            key: Key cần ghi (vd: 'flow_project_url')
+            value: Value cần ghi
+        """
+        # Tạo sheet config nếu chưa có
+        if 'config' not in self.workbook.sheetnames:
+            ws = self.workbook.create_sheet('config')
+            ws['A1'] = 'key'
+            ws['B1'] = 'value'
+        else:
+            ws = self.workbook['config']
+
+        # Tìm row có key này để update
+        found = False
+        for row in range(2, ws.max_row + 1):
+            cell_key = ws.cell(row=row, column=1).value
+            if cell_key and str(cell_key).strip().lower() == key.lower():
+                ws.cell(row=row, column=2, value=value)
+                found = True
+                break
+
+        # Nếu chưa có, thêm row mới
+        if not found:
+            next_row = ws.max_row + 1
+            ws.cell(row=next_row, column=1, value=key)
+            ws.cell(row=next_row, column=2, value=value)
+
+    def get_total_progress(self) -> float:
+        """
+        Tính % hoàn thành tổng thể dựa trên processing_status.
+
+        Returns:
+            Float từ 0.0 đến 100.0
+        """
+        try:
+            statuses = self.get_all_step_status()
+            if not statuses:
+                return 0.0
+
+            completed = sum(1 for s in statuses if s["status"] == "COMPLETED")
+            return round((completed / len(statuses)) * 100, 1)
+        except:
+            return 0.0
+
+    def get_resume_info(self) -> dict:
+        """
+        Lấy thông tin để resume Excel processing.
+
+        Returns:
+            {
+                'total_progress': 57.1,
+                'current_step': 'step_4',
+                'incomplete_steps': ['step_4', 'step_5', 'step_6', 'step_7'],
+                'flow_project_url': 'https://...',
+                'can_resume': True,
+                'is_complete': False
+            }
+        """
+        total_progress = self.get_total_progress()
+        incomplete = self.get_incomplete_steps()
+        flow_project_url = self.get_config_value('flow_project_url')
+
+        current_step = incomplete[0]['step_id'] if incomplete else None
+
+        return {
+            'total_progress': total_progress,
+            'current_step': current_step,
+            'incomplete_steps': [s['step_id'] for s in incomplete],
+            'incomplete_details': incomplete,
+            'flow_project_url': flow_project_url,
+            'can_resume': 0 < total_progress < 100,
+            'is_complete': total_progress >= 100
+        }
+
+    # ========================================================================
     # UTILITY METHODS
     # ========================================================================
 

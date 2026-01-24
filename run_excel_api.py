@@ -413,6 +413,51 @@ def needs_api_completion(project_dir: Path, name: str) -> bool:
         return False
 
 
+def get_excel_progress(project_dir: Path, name: str) -> dict:
+    """
+    Đọc tiến độ Excel từ processing_status sheet.
+
+    Returns:
+        {
+            'total_progress': 57.1,
+            'current_step': 'step_4',
+            'incomplete_steps': ['step_4', 'step_5', ...],
+            'incomplete_details': [...],
+            'flow_project_url': 'https://...',
+            'can_resume': True,
+            'is_complete': False
+        }
+    """
+    excel_path = project_dir / f"{name}_prompts.xlsx"
+    if not excel_path.exists():
+        return {
+            'total_progress': 0.0,
+            'current_step': None,
+            'incomplete_steps': [],
+            'incomplete_details': [],
+            'flow_project_url': '',
+            'can_resume': False,
+            'is_complete': False
+        }
+
+    try:
+        from modules.excel_manager import PromptWorkbook
+        wb = PromptWorkbook(str(excel_path))
+        wb.load_or_create()
+        return wb.get_resume_info()
+    except Exception as e:
+        log(f"Error getting Excel progress for {name}: {e}", "WARN")
+        return {
+            'total_progress': 0.0,
+            'current_step': None,
+            'incomplete_steps': [],
+            'incomplete_details': [],
+            'flow_project_url': '',
+            'can_resume': False,
+            'is_complete': False
+        }
+
+
 # ================================================================================
 # SCANNER
 # ================================================================================
@@ -448,11 +493,12 @@ class ExcelAPIWorker:
 
     def scan_projects_needing_excel(self) -> List[tuple]:
         """
-        Scan for projects that need Excel creation.
+        Scan for projects that need Excel creation or completion.
 
         Returns:
-            List of (project_dir, name, status) tuples
-            status: "no_excel" or "needs_fix"
+            List of (project_dir, name, status, progress) tuples
+            status: "create_new", "resume", or "fix_fallback"
+            progress: dict from get_excel_progress()
         """
         results = []
 
@@ -470,10 +516,27 @@ class ExcelAPIWorker:
                 if not srt_path.exists():
                     continue
 
-                if not has_excel_with_prompts(item, name):
-                    results.append((item, name, "no_excel"))
-                elif needs_api_completion(item, name):
-                    results.append((item, name, "needs_fix"))
+                excel_path = item / f"{name}_prompts.xlsx"
+
+                if not excel_path.exists():
+                    # Case 1: CHƯA CÓ EXCEL - Tạo mới
+                    results.append((item, name, "create_new", None))
+                else:
+                    # Case 2: ĐÃ CÓ EXCEL - Check progress
+                    progress = get_excel_progress(item, name)
+
+                    if progress['is_complete']:
+                        # Hoàn thành 100% - Skip
+                        pass
+                    elif progress['can_resume']:
+                        # Đang làm dở - Resume
+                        results.append((item, name, "resume", progress))
+                    elif needs_api_completion(item, name):
+                        # Có [FALLBACK] - Fix
+                        results.append((item, name, "fix_fallback", progress))
+                    elif not has_excel_with_prompts(item, name):
+                        # Excel rỗng hoặc lỗi - Tạo lại
+                        results.append((item, name, "create_new", None))
 
         # Scan master projects (if accessible) - IMPORT to local before processing
         if self.master_projects and safe_path_exists(self.master_projects):
@@ -504,23 +567,54 @@ class ExcelAPIWorker:
                     if local_dir is None:
                         continue  # Import failed, skip
 
-                    # Add LOCAL path (not master) to results
-                    if not has_excel_with_prompts(local_dir, name):
-                        results.append((local_dir, name, "no_excel"))
-                    elif needs_api_completion(local_dir, name):
-                        results.append((local_dir, name, "needs_fix"))
+                    # Add LOCAL path (not master) to results - Check progress
+                    excel_path = local_dir / f"{name}_prompts.xlsx"
+
+                    if not excel_path.exists():
+                        # Case 1: CHƯA CÓ EXCEL - Tạo mới
+                        results.append((local_dir, name, "create_new", None))
+                    else:
+                        # Case 2: ĐÃ CÓ EXCEL - Check progress
+                        progress = get_excel_progress(local_dir, name)
+
+                        if progress['is_complete']:
+                            # Hoàn thành 100% - Skip
+                            pass
+                        elif progress['can_resume']:
+                            # Đang làm dở - Resume
+                            results.append((local_dir, name, "resume", progress))
+                        elif needs_api_completion(local_dir, name):
+                            # Có [FALLBACK] - Fix
+                            results.append((local_dir, name, "fix_fallback", progress))
+                        elif not has_excel_with_prompts(local_dir, name):
+                            # Excel rỗng hoặc lỗi - Tạo lại
+                            results.append((local_dir, name, "create_new", None))
             except (OSError, PermissionError) as e:
                 log(f"Error scanning master: {e}", "WARN")
 
         return results
 
-    def process_project(self, project_dir: Path, name: str, status: str) -> bool:
-        """Process a single project với Agent Protocol."""
+    def process_project(self, project_dir: Path, name: str, status: str, progress: dict = None) -> bool:
+        """
+        Process a single project với Agent Protocol.
+
+        Args:
+            project_dir: Thư mục project
+            name: Tên project
+            status: "create_new", "resume", hoặc "fix_fallback"
+            progress: Dict từ get_excel_progress() nếu status là "resume"
+
+        Returns:
+            True nếu thành công
+        """
         global _agent
 
         log(f"")
         log(f"{'='*60}")
-        log(f"Processing: {name} ({status})")
+        if status == "resume" and progress:
+            log(f"Processing: {name} (RESUME - {progress['total_progress']}% done)")
+        else:
+            log(f"Processing: {name} ({status})")
         log(f"{'='*60}")
 
         # Update agent status
@@ -528,20 +622,30 @@ class ExcelAPIWorker:
         start_time = time.time()
 
         if _agent:
+            initial_progress = progress.get('total_progress', 0) if progress else 0
             _agent.update_status(
                 state="working",
                 current_project=name,
                 current_task=task_id,
-                progress=0
+                progress=initial_progress
             )
 
         # Process
         success = False
         error_msg = ""
         try:
-            if status == "no_excel":
+            if status == "create_new":
+                # Tạo Excel mới từ đầu
                 success = create_excel_with_api(project_dir, name, log)
-            elif status == "needs_fix":
+            elif status == "resume":
+                # Resume từ bước chưa hoàn thành
+                log(f"Resuming from step: {progress.get('current_step', 'unknown')}")
+                log(f"Incomplete steps: {', '.join(progress.get('incomplete_steps', []))}")
+                if progress.get('flow_project_url'):
+                    log(f"Reusing Flow project: {progress['flow_project_url']}")
+                success = create_excel_with_api(project_dir, name, log)
+            elif status == "fix_fallback":
+                # Fix Excel có [FALLBACK] prompts
                 success = fix_excel_with_api(project_dir, name, log)
         except Exception as e:
             error_msg = str(e)
@@ -559,7 +663,10 @@ class ExcelAPIWorker:
                     project_code=name,
                     task_type="excel",
                     duration=duration,
-                    details={"status": status}
+                    details={
+                        "status": status,
+                        "initial_progress": progress.get('total_progress', 0) if progress else 0
+                    }
                 )
             else:
                 self.failed_count += 1
@@ -569,7 +676,10 @@ class ExcelAPIWorker:
                     task_type="excel",
                     error=error_msg or f"Failed to process {status}",
                     duration=duration,
-                    details={"status": status}
+                    details={
+                        "status": status,
+                        "initial_progress": progress.get('total_progress', 0) if progress else 0
+                    }
                 )
 
             # Update status back to idle
@@ -598,13 +708,16 @@ class ExcelAPIWorker:
             return 0
 
         log(f"Found {len(projects)} projects:")
-        for project_dir, name, status in projects:
-            log(f"  - {name}: {status}")
+        for project_dir, name, status, progress in projects:
+            if status == "resume" and progress:
+                log(f"  - {name}: {status} ({progress['total_progress']}% done)")
+            else:
+                log(f"  - {name}: {status}")
 
         processed = 0
-        for project_dir, name, status in projects:
+        for project_dir, name, status, progress in projects:
             try:
-                if self.process_project(project_dir, name, status):
+                if self.process_project(project_dir, name, status, progress):
                     processed += 1
             except KeyboardInterrupt:
                 log("Interrupted by user")
@@ -729,8 +842,11 @@ def main():
             log("No projects need Excel")
         else:
             log(f"Found {len(projects)} projects:")
-            for project_dir, name, status in projects:
-                log(f"  - {name}: {status}")
+            for project_dir, name, status, progress in projects:
+                if status == "resume" and progress:
+                    log(f"  - {name}: {status} ({progress['total_progress']}% done)")
+                else:
+                    log(f"  - {name}: {status}")
         sys.exit(0)
 
     # Loop mode
