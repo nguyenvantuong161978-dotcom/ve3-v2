@@ -1,3 +1,3 @@
-1.0.15
-2026-01-24 11:45
-Fix: driver.get() waited 52s for page load - set page_load timeout to 15s
+1.0.16
+2026-01-24 11:55
+Fix: Enter not working after paste - increase wait (2s→4s), re-focus textarea before Enter

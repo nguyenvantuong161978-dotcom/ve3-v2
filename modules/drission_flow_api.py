@@ -3576,10 +3576,20 @@ class DrissionFlowAPI:
             self.log("[ERROR] Paste prompt failed completely, aborting request", "ERROR")
             return [], "Paste prompt failed - textarea empty"
 
-        # Đợi 2 giây để reCAPTCHA chuẩn bị token
-        time.sleep(2)
+        # Đợi 4 giây để reCAPTCHA chuẩn bị token (với references, cần lâu hơn)
+        time.sleep(4)
 
-        # Nhấn Enter bằng DrissionPage .input() (đơn giản nhất)
+        # Focus lại textarea trước khi Enter (đảm bảo textarea ready)
+        try:
+            textarea = self.driver.ele('tag:textarea', timeout=5)
+            if textarea:
+                textarea.click()
+                time.sleep(0.3)
+                self.log("→ Re-focused textarea before Enter")
+        except Exception as e:
+            self.log(f"[WARN] Re-focus failed: {e}", "WARN")
+
+        # Nhấn Enter bằng DrissionPage .input()
         try:
             textarea.input('\n')
             self.log("→ Pressed Enter to send")
