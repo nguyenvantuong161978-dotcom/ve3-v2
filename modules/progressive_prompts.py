@@ -155,8 +155,8 @@ class ProgressivePromptsGenerator:
             self._log("  ERROR: No API keys available!", "ERROR")
             return None
 
-        max_retries = 5
-        base_delay = 2  # seconds
+        max_retries = 15  # Increased for multiple machines sharing API
+        base_delay = 3  # seconds
 
         for attempt in range(max_retries):
             key = self.deepseek_keys[self.deepseek_index % len(self.deepseek_keys)]

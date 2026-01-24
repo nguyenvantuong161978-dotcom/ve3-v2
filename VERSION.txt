@@ -1,3 +1,3 @@
-1.0.32
-2026-01-24 20:25
-Add API retry logic with exponential backoff to prevent mid-process failures
+1.0.33
+2026-01-24 20:40
+Increase API retry: 15 attempts with 3s base delay for multi-machine environments
