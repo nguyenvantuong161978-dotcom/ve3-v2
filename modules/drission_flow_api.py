@@ -2478,32 +2478,30 @@ class DrissionFlowAPI:
             return False
 
         # 3. Vào Google Flow (hoặc project cố định nếu có) - VỚI RETRY
-        # Bước 0: WARM UP (1 lần duy nhất, NGOÀI retry loop)
-        if not project_url:
-            # Thao tác "mồi" - vào /project/test trước
-            self.log(f"[MỒI] Vào project/test trước (warm up)...")
-            try:
-                self.driver.run_js(f"window.location.href = '{self.FLOW_URL}';", timeout=2)
-                wait_time = 6 if getattr(self, '_ipv6_activated', False) else 3
-                time.sleep(wait_time)
-                self.log(f"[v] Warm up done")
-            except Exception as warmup_err:
-                self.log(f"[WARN] Warm up error (tiếp tục): {warmup_err}", "WARN")
-
-        # Xác định target URL
-        if not project_url:
-            target_url = self.FLOW_URL_FALLBACK  # Trang chủ Flow
-            self.log(f"Vào trang chủ Flow...")
-        else:
-            target_url = project_url  # Dự án thật
-            self.log(f"Vào project: {target_url[:60]}...")
-
-        # Retry loop (CHỈ retry navigation, KHÔNG mồi lại)
         max_nav_retries = 3
         nav_success = False
 
         for nav_attempt in range(max_nav_retries):
             try:
+                # Nếu KHÔNG có project_url → setup mới → thao tác "mồi" trước
+                if not project_url:
+                    # Bước 1: Vào /project/test (thao tác mồi)
+                    self.log(f"[MỒI] Vào project/test trước (warm up)...")
+                    self.driver.run_js(f"window.location.href = '{self.FLOW_URL}';", timeout=2)
+
+                    # Đợi 3-6s
+                    wait_time = 6 if getattr(self, '_ipv6_activated', False) else 3
+                    time.sleep(wait_time)
+                    self.log(f"[v] Warm up done")
+
+                    # Bước 2: SAU ĐÓ vào trang chủ Flow để click "Dự án mới"
+                    self.log(f"Vào trang chủ Flow...")
+                    target_url = self.FLOW_URL_FALLBACK
+                else:
+                    # Có project_url → vào thẳng dự án thật
+                    target_url = project_url
+                    self.log(f"Vào project: {target_url[:60]}...")
+
                 # DÙNG JAVASCRIPT NAVIGATE - KHÔNG BLOCK!
                 self.driver.run_js(f"window.location.href = '{target_url}';", timeout=2)
 
