@@ -2942,6 +2942,25 @@ Return JSON only with EXACTLY {len(batch)} scenes:
                         if loc_img and f"({loc_img})" not in img_prompt:
                             img_prompt = img_prompt.rstrip(". ") + f" (reference: {loc_img})."
 
+                    # CRITICAL FIX: Parse prompt to extract ACTUAL character/location IDs used
+                    # This ensures metadata matches prompt content exactly
+                    import re
+
+                    # Extract all character IDs from prompt (pattern: nvX.png or nv_X.png)
+                    char_pattern = r'\(([nN][vV]_?\d+)\.png\)'
+                    prompt_char_matches = re.findall(char_pattern, img_prompt)
+                    if prompt_char_matches:
+                        # Use IDs found in prompt instead of original metadata
+                        char_ids = list(set(prompt_char_matches))  # unique IDs
+
+                    # Extract location ID from prompt (pattern: locX.png or loc_X.png)
+                    loc_pattern = r'\(([lL][oO][cC]_?\d+)\.png\)'
+                    prompt_loc_matches = re.findall(loc_pattern, img_prompt)
+                    if prompt_loc_matches:
+                        # Use first location found in prompt
+                        loc_id = prompt_loc_matches[0]
+
+                    # Rebuild reference files from parsed IDs
                     ref_files = [char_image_lookup.get(cid, f"{cid}.png") for cid in char_ids]
                     if loc_id:
                         ref_files.append(loc_image_lookup.get(loc_id, f"{loc_id}.png"))
@@ -2953,6 +2972,10 @@ Return JSON only with EXACTLY {len(batch)} scenes:
                     if excel_mode == "basic" and segment_id > 1:
                         video_note = "SKIP"  # BASIC mode: chỉ làm video cho Segment 1
 
+                    # Use parsed IDs (from prompt) for metadata accuracy
+                    chars_used_str = ",".join(char_ids) if char_ids else ""
+                    loc_used_str = loc_id if loc_id else ""
+
                     scene = Scene(
                         scene_id=scene_id,
                         srt_start=original.get("srt_start", ""),
@@ -2961,8 +2984,8 @@ Return JSON only with EXACTLY {len(batch)} scenes:
                         srt_text=original.get("srt_text", ""),
                         img_prompt=img_prompt,
                         video_prompt=scene_data.get("video_prompt", ""),
-                        characters_used=original.get("characters_used", ""),
-                        location_used=original.get("location_used", ""),
+                        characters_used=chars_used_str,  # Use parsed IDs from prompt
+                        location_used=loc_used_str,  # Use parsed ID from prompt
                         reference_files=json.dumps(ref_files) if ref_files else "",
                         status_img="pending",
                         status_vid="pending",
