@@ -1257,7 +1257,7 @@ class DrissionFlowAPI:
             for i in range(10):
                 # Check URL trước - có thể đã vào project rồi
                 try:
-                    current_url = self.driver.url
+                    current_url = self._get_current_url()
                     if "/project/" in current_url:
                         self.log("[v] Đã vào project (URL check)")
                         return True
@@ -1272,7 +1272,8 @@ class DrissionFlowAPI:
                         time.sleep(2)
                         # Check URL ngay sau click
                         try:
-                            if "/project/" in self.driver.url:
+                            check_url = self._get_current_url()
+                            if "/project/" in check_url:
                                 self.log("[v] Đã vào project!")
                                 return True
                         except:
@@ -1284,7 +1285,8 @@ class DrissionFlowAPI:
                         time.sleep(2)
                         # Page refresh có thể là do đang navigate vào project
                         try:
-                            if "/project/" in self.driver.url:
+                            check_url = self._get_current_url()
+                            if "/project/" in check_url:
                                 self.log("[v] Đã vào project (sau refresh)!")
                                 return True
                         except:
@@ -1297,7 +1299,8 @@ class DrissionFlowAPI:
             else:
                 # Không tìm thấy button → check URL trước khi F5
                 try:
-                    if "/project/" in self.driver.url:
+                    check_url = self._get_current_url()
+                    if "/project/" in check_url:
                         self.log("[v] Đã vào project!")
                         return True
                 except:
@@ -1319,7 +1322,8 @@ class DrissionFlowAPI:
         else:
             # Check URL lần cuối
             try:
-                if "/project/" in self.driver.url:
+                final_url = self._get_current_url()
+                if "/project/" in final_url:
                     self.log("[v] Đã vào project!")
                     return True
             except:
@@ -1343,7 +1347,7 @@ class DrissionFlowAPI:
         # 3. Đợi vào project
         self.log("→ Đợi vào project...")
         for i in range(timeout):
-            current_url = self.driver.url
+            current_url = self._get_current_url()
             if "/project/" in current_url:
                 self.log(f"[v] Đã vào dự án!")
                 return True
@@ -1421,6 +1425,24 @@ class DrissionFlowAPI:
         self.log("[WARN] Không phát hiện được ảnh, tiếp tục...", "WARN")
         return True  # Vẫn return True để tiếp tục
 
+    def _get_current_url(self, timeout: float = 1) -> str:
+        """
+        Lấy URL hiện tại KHÔNG BLOCK (dùng JavaScript).
+        Fallback về driver.url nếu JS fail.
+        """
+        if not self.driver:
+            return ""
+
+        try:
+            url = self.driver.run_js("return window.location.href;", timeout=timeout)
+            return url or ""
+        except:
+            # Fallback - CÓ THỂ block nếu page chưa load xong
+            try:
+                return self.driver.url or ""
+            except:
+                return ""
+
     def _is_logged_out(self) -> bool:
         """
         Kiểm tra xem Chrome có bị logout khỏi Google không.
@@ -1430,12 +1452,8 @@ class DrissionFlowAPI:
             if not self.driver:
                 return False
 
-            # Đọc URL bằng JavaScript (nhanh hơn, không block)
-            try:
-                current_url = self.driver.run_js("return window.location.href;", timeout=1) or ""
-            except:
-                # Fallback nếu JS fail
-                current_url = self.driver.url or ""
+            # Lấy URL không block
+            current_url = self._get_current_url()
 
             # Check URL redirect về trang login Google
             logout_url_indicators = [
@@ -2473,49 +2491,17 @@ class DrissionFlowAPI:
 
                 self.driver.get(target_url)
 
-                # Đợi thêm 3-6s để page load tiếp
+                # Đợi thêm 3-6s để page bắt đầu load
                 wait_time = 6 if getattr(self, '_ipv6_activated', False) else 3
                 time.sleep(wait_time)
 
-                # KHÔNG F5 ngay - để _wait_for_textarea_visible() tự F5 nếu cần
+                # XONG! Không kiểm tra gì thêm
+                # Logic textarea (_wait_for_textarea_visible) sẽ tự F5 nếu page chưa load xong
+                self.log(f"[v] Navigated to {target_url[:60]}...")
 
-                # Kiểm tra URL bằng JavaScript (không block)
-                try:
-                    current_url = self.driver.run_js("return window.location.href;", timeout=2)
-                except:
-                    # Fallback nếu JS timeout
-                    current_url = self.driver.url
-
-                if not current_url or current_url == "about:blank" or "error" in current_url.lower():
-                    raise Exception(f"Page không load được: {current_url}")
-
-                self.log(f"[v] URL: {current_url}")
-
-                # === KIỂM TRA BỊ LOGOUT ===
-                if self._is_logged_out():
-                    self.log("[WARN] Phát hiện bị LOGOUT khỏi Google!", "WARN")
-
-                    # Thử auto-login
-                    if self._auto_login_google():
-                        self.log("[v] Auto-login thành công!")
-                        self.log("[SYNC] Restart setup từ đầu...")
-                        time.sleep(3)
-
-                        # Gọi lại setup() từ đầu (đệ quy)
-                        return self.setup(
-                            wait_for_project=wait_for_project,
-                            timeout=timeout,
-                            warm_up=warm_up,
-                            project_url=project_url
-                        )
-                    else:
-                        self.log("[x] Auto-login thất bại", "ERROR")
-                        return False
-
-                # Lưu project_url để dùng khi retry
-                if "/project/" in current_url:
-                    self._current_project_url = current_url
-                    self.log(f"  → Saved project URL for retry")
+                # Lưu project_url để dùng khi retry (nếu target_url là project)
+                if "/project/" in target_url:
+                    self._current_project_url = target_url
 
                 nav_success = True
                 break
@@ -2602,8 +2588,9 @@ class DrissionFlowAPI:
                                 try:
                                     self.driver.get(target_url)
                                     time.sleep(3)
-                                    if self.driver.url and self.driver.url != "about:blank":
-                                        self.log(f"[v] {fallback_mode} OK! URL: {self.driver.url}")
+                                    current_url = self._get_current_url()
+                                    if current_url and current_url != "about:blank":
+                                        self.log(f"[v] {fallback_mode} OK! URL: {current_url[:60]}...")
                                         nav_success = True
                                         fallback_tried = True
                                 except Exception as e:
@@ -2623,7 +2610,8 @@ class DrissionFlowAPI:
         # 4. Auto setup project (click "Dự án mới" + chọn "Tạo hình ảnh")
         if wait_for_project:
             # Kiểm tra đã ở trong project chưa
-            if "/project/" not in self.driver.url:
+            current_url = self._get_current_url()
+            if "/project/" not in current_url:
                 # Nếu có project_url nhưng bị redirect về trang chủ → retry vào project cũ
                 if project_url and "/project/" in project_url:
                     self.log(f"[WARN] Bị redirect, retry vào project cũ...")
@@ -2632,8 +2620,9 @@ class DrissionFlowAPI:
                         time.sleep(2)
                         self.driver.get(project_url)
                         time.sleep(3)
-                        if "/project/" in self.driver.url:
-                            self._current_project_url = self.driver.url
+                        retry_url = self._get_current_url()
+                        if "/project/" in retry_url:
+                            self._current_project_url = retry_url
                             self.log(f"[v] Vào lại project thành công!")
                             break
                         self.log(f"  → Retry {retry+1}/3...")
@@ -2646,8 +2635,9 @@ class DrissionFlowAPI:
                     if not self._auto_setup_project(timeout):
                         return False
                     # Lưu project URL sau khi tạo mới
-                    if "/project/" in self.driver.url:
-                        self._current_project_url = self.driver.url
+                    new_url = self._get_current_url()
+                    if "/project/" in new_url:
+                        self._current_project_url = new_url
                         self.log(f"  → New project URL saved")
             else:
                 self.log("[v] Đã ở trong project!")
