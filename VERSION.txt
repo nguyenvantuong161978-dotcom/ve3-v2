@@ -1,3 +1,3 @@
-1.0.17
-2026-01-24 12:00
-Add: Early detection + auto-retry if Enter missed (detect after 10s, retry Enter instead of waiting 120s timeout)
+1.0.18
+2026-01-24 12:05
+Critical: driver.url blocked 81s waiting for page load - use JavaScript window.location.href instead

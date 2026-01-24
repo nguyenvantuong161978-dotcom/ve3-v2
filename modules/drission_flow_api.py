@@ -1430,7 +1430,12 @@ class DrissionFlowAPI:
             if not self.driver:
                 return False
 
-            current_url = self.driver.url or ""
+            # Đọc URL bằng JavaScript (nhanh hơn, không block)
+            try:
+                current_url = self.driver.run_js("return window.location.href;", timeout=1) or ""
+            except:
+                # Fallback nếu JS fail
+                current_url = self.driver.url or ""
 
             # Check URL redirect về trang login Google
             logout_url_indicators = [
@@ -2474,8 +2479,13 @@ class DrissionFlowAPI:
 
                 # KHÔNG F5 ngay - để _wait_for_textarea_visible() tự F5 nếu cần
 
-                # Kiểm tra xem trang có load được không
-                current_url = self.driver.url
+                # Kiểm tra URL bằng JavaScript (không block)
+                try:
+                    current_url = self.driver.run_js("return window.location.href;", timeout=2)
+                except:
+                    # Fallback nếu JS timeout
+                    current_url = self.driver.url
+
                 if not current_url or current_url == "about:blank" or "error" in current_url.lower():
                     raise Exception(f"Page không load được: {current_url}")
 
