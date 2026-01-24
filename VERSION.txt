@@ -1,3 +1,3 @@
-1.0.27
-2026-01-24 13:15
-Warm-up: Wait page ready + 15s extra for JS/AJAX to fully load
+1.0.28
+2026-01-24 13:20
+FIX: ALWAYS wait 15s after /test navigate (was skipped if page not ready)
