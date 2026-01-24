@@ -1825,13 +1825,11 @@ class DrissionFlowAPI:
 
     def _force_kill_all_chrome(self):
         """
-        Kill TẤT CẢ Chrome processes một cách mạnh mẽ.
+        Kill CHỈ Chrome của worker này (dựa vào chrome_portable path).
         Dùng khi cần xóa sạch data.
         """
         import subprocess
         import platform
-
-        self.log("  [KILL] Force killing ALL Chrome processes...")
 
         try:
             # 1. Đóng driver trước
@@ -1853,21 +1851,63 @@ class DrissionFlowAPI:
 
             time.sleep(1)
 
-            # 3. Force kill tất cả Chrome processes bằng system command
+            # 3. Force kill CHỈ Chrome của worker này
             if platform.system() == 'Windows':
-                # Windows: taskkill /F /IM chrome.exe
-                for _ in range(3):  # Retry 3 lần
-                    subprocess.run(
-                        ['taskkill', '/F', '/IM', 'chrome.exe'],
-                        capture_output=True, timeout=10
+                # Windows: Kill by command line path
+                if hasattr(self, '_chrome_portable') and self._chrome_portable:
+                    # Xác định marker dựa vào chrome_portable path
+                    is_chrome2 = "- Copy" in str(self._chrome_portable)
+                    if is_chrome2:
+                        chrome_marker = "GoogleChromePortable - Copy\\App"
+                        exclude_marker = None
+                        worker_name = "Chrome 2"
+                    else:
+                        chrome_marker = "GoogleChromePortable\\App"
+                        exclude_marker = "GoogleChromePortable - Copy"
+                        worker_name = "Chrome 1"
+
+                    self.log(f"  [KILL] Killing {worker_name} processes only...")
+
+                    # List all chrome.exe processes with command line
+                    result = subprocess.run(
+                        ["wmic", "process", "where", "name='chrome.exe'", "get", "processid,commandline"],
+                        capture_output=True, text=True, timeout=5
                     )
-                    time.sleep(1)
+
+                    killed_count = 0
+                    for line in result.stdout.split('\n'):
+                        if chrome_marker in line:
+                            # Nếu là Chrome 1, phải đảm bảo KHÔNG chứa "- Copy"
+                            if exclude_marker and exclude_marker in line:
+                                continue  # Skip Chrome 2
+
+                            # Extract PID
+                            parts = line.strip().split()
+                            if parts:
+                                pid = parts[-1]
+                                if pid.isdigit():
+                                    subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
+                                    killed_count += 1
+
+                    self.log(f"  [v] Killed {killed_count} Chrome processes")
+                else:
+                    # Fallback: kill all Chrome (không có chrome_portable)
+                    self.log("  [KILL] Force killing ALL Chrome processes (no chrome_portable)...")
+                    for _ in range(3):
+                        subprocess.run(
+                            ['taskkill', '/F', '/IM', 'chrome.exe'],
+                            capture_output=True, timeout=10
+                        )
+                        time.sleep(1)
+                    self.log("  [v] Killed all Chrome processes")
             else:
-                # Linux/Mac: killall hoặc pkill
+                # Linux/Mac: killall (không hỗ trợ kill by path)
+                self.log("  [KILL] Force killing ALL Chrome processes (Linux/Mac)...")
                 for _ in range(3):
                     subprocess.run(['pkill', '-9', '-f', 'chrome'], capture_output=True, timeout=10)
                     subprocess.run(['pkill', '-9', '-f', 'chromium'], capture_output=True, timeout=10)
                     time.sleep(1)
+                self.log("  [v] Killed all Chrome processes")
 
             self.log("  [v] Killed all Chrome processes")
             time.sleep(2)  # Đợi processes thực sự tắt
@@ -3576,7 +3616,10 @@ class DrissionFlowAPI:
 
         # Paste prompt bằng Ctrl+V (như thủ công)
         # Hàm này có built-in fallback nếu JS paste fail
-        self._paste_prompt_ctrlv(textarea, prompt)
+        paste_ok = self._paste_prompt_ctrlv(textarea, prompt)
+        if not paste_ok:
+            self.log("[ERROR] Paste prompt failed completely, aborting request", "ERROR")
+            return [], "Paste prompt failed - textarea empty"
 
         # Đợi 2 giây để reCAPTCHA chuẩn bị token
         time.sleep(2)
@@ -3600,8 +3643,8 @@ class DrissionFlowAPI:
         """)
 
         if verify_result != 'ready':
-            self.log(f"[WARN] Textarea chưa sẵn sàng: {verify_result}", "WARN")
-            time.sleep(1)  # Đợi thêm 1s
+            self.log(f"[ERROR] Textarea chưa sẵn sàng: {verify_result}, aborting request", "ERROR")
+            return [], f"Textarea not ready: {verify_result}"
 
         # Đợi thêm 0.5s để chắc chắn
         time.sleep(0.5)
