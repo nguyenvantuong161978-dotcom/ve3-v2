@@ -590,30 +590,35 @@ def _call_api(self, prompt: str, temperature: float = 0.7, max_tokens: int = 819
 ```
 
 **FEATURES**:
-- ✅ **5 max retries** with exponential backoff (2^n seconds)
+- ✅ **15 max retries** with exponential backoff (3 × 2^n seconds) - increased for multi-machine environments
 - ✅ **Rate limit handling** (429 errors) → automatic retry with backoff
 - ✅ **Server error handling** (5xx errors) → automatic retry
 - ✅ **Timeout handling** → automatic retry
 - ✅ **Smart retry** - Skip retry for client errors (4xx except 429)
 - ✅ **Detailed logging** - Track retry attempts and success
 
-**RETRY DELAYS**:
-- Attempt 1: 2 seconds
-- Attempt 2: 4 seconds
-- Attempt 3: 8 seconds
-- Attempt 4: 16 seconds
-- Attempt 5: 32 seconds
-- Total max wait: 62 seconds per API call
+**RETRY DELAYS** (v1.0.33):
+- Base delay: 3 seconds
+- Attempt 1: 3s, Attempt 2: 6s, Attempt 3: 12s
+- Attempt 4: 24s, Attempt 5: 48s, Attempt 6: 96s
+- Total max wait: ~6 minutes per API call (handles heavy rate limiting)
+
+**RESUME LOGIC** (Already Built-in):
+- ✅ **Step 5**: Skips if director_plan already exists
+- ✅ **Step 6**: Skips if scene_planning already exists
+- ✅ **Step 7**: Only creates missing scenes (pending_scenes)
+- ✅ **If interrupted**: Just rerun → continues from last checkpoint, no lost work!
 
 **RESULT**:
 - ✅ Prevents mid-process failures from API rate limiting
 - ✅ Automatic recovery without manual intervention
 - ✅ No lost work due to temporary API issues
 - ✅ Handles high-volume API calls gracefully
+- ✅ Multi-machine safe - 15 retries handle quota contention
 
-**COMMIT**: 71a0512
-**VERSION**: 1.0.32
-**STATUS**: ✅ TESTING - Running full Excel generation to verify
+**COMMITS**: 71a0512 (v1.0.32), eacbf3d (v1.0.33)
+**VERSION**: 1.0.33
+**STATUS**: ✅ PRODUCTION READY - Pushed to GitHub
 
 ### Backlog (việc cần làm)
 
