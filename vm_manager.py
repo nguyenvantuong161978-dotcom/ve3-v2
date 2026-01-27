@@ -1538,6 +1538,84 @@ class VMManager:
                     projects.append(code)
         return sorted(projects)
 
+    def create_thumbnail(self, project_code: str):
+        """Create thumbnail from main character (not child) for master."""
+        src_dir = TOOL_DIR / "PROJECTS" / project_code
+        excel_path = src_dir / f"{project_code}_prompts.xlsx"
+
+        if not excel_path.exists():
+            return
+
+        try:
+            from modules.excel_manager import PromptWorkbook
+            wb = PromptWorkbook(str(excel_path))
+            characters = wb.get_characters()
+
+            if not characters:
+                return
+
+            # Find main character (not child, not location)
+            main_char = None
+
+            # Filter out locations (id starts with "loc" or role="location")
+            actual_characters = [
+                c for c in characters
+                if not c.id.lower().startswith("loc") and c.role != "location"
+            ]
+
+            if not actual_characters:
+                return
+
+            # Strategy 1: Find role="main" or "protagonist" and not child
+            for char in actual_characters:
+                if ("main" in char.role.lower() or "protagonist" in char.role.lower()) and not char.is_child:
+                    main_char = char
+                    break
+
+            # Strategy 2: If no main, find first non-child character
+            if not main_char:
+                for char in actual_characters:
+                    if not char.is_child:
+                        main_char = char
+                        break
+
+            # Strategy 3: If all are children, use first character
+            if not main_char and actual_characters:
+                main_char = actual_characters[0]
+
+            if not main_char or not main_char.image_file:
+                return
+
+            # Find the image file
+            nv_dir = src_dir / "nv"
+            if not nv_dir.exists():
+                return
+
+            src_image = nv_dir / main_char.image_file
+            if not src_image.exists():
+                # Try without extension
+                for ext in [".png", ".jpg", ".jpeg"]:
+                    alt = nv_dir / f"{main_char.id}{ext}"
+                    if alt.exists():
+                        src_image = alt
+                        break
+
+            if not src_image.exists():
+                return
+
+            # Create thumb folder and copy
+            thumb_dir = src_dir / "thumb"
+            thumb_dir.mkdir(exist_ok=True)
+
+            import shutil
+            dest_image = thumb_dir / src_image.name
+            shutil.copy2(str(src_image), str(dest_image))
+
+            self.log(f"Created thumbnail: {main_char.id} ({main_char.role}, child={main_char.is_child})", "SYSTEM", "SUCCESS")
+
+        except Exception as e:
+            self.log(f"Failed to create thumbnail: {e}", "SYSTEM", "ERROR")
+
     def copy_project_to_master(self, project_code: str):
         """Copy project folder to master (AUTO path)."""
         if not self.auto_path:
@@ -1548,6 +1626,9 @@ class VMManager:
         if not src_dir.exists():
             self.log(f"Project {project_code} not found in PROJECTS/", "SYSTEM", "ERROR")
             return
+
+        # Create thumbnail before copying
+        self.create_thumbnail(project_code)
 
         # Đích: AUTO/{project_code}/
         dest_dir = self.auto_path / project_code
@@ -1577,6 +1658,33 @@ class VMManager:
             self.current_project_code = project_code
             self.project_start_time = time.time()
             self.log(f"Started tracking project {project_code} (6h timeout)", "MANAGER")
+
+        # Check if project is completed
+        if status.current_step == "done":
+            # Copy to master if AUTO path exists
+            if self.auto_path and project_code not in getattr(self, '_completed_projects', set()):
+                self.log("=" * 60, "SYSTEM")
+                self.log(f"PROJECT COMPLETED: {project_code}", "SYSTEM", "SUCCESS")
+                self.log("=" * 60, "SYSTEM")
+
+                try:
+                    self.log(f"Copying {project_code} to master...", "SYSTEM")
+                    self.copy_project_to_master(project_code)
+                    self.log(f"Copied {project_code} successfully", "SYSTEM", "SUCCESS")
+                except Exception as e:
+                    self.log(f"Failed to copy {project_code}: {e}", "SYSTEM", "ERROR")
+
+                # Mark as completed to avoid re-copying
+                if not hasattr(self, '_completed_projects'):
+                    self._completed_projects = set()
+                self._completed_projects.add(project_code)
+
+                # Reset project timer for next project
+                self.project_start_time = None
+                self.current_project_code = None
+
+                self.log("Ready for next project", "SYSTEM", "SUCCESS")
+            return
 
         if status.current_step == "excel":
             self.create_task(TaskType.EXCEL, project_code)
