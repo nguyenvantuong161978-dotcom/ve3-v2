@@ -620,6 +620,91 @@ def _call_api(self, prompt: str, temperature: float = 0.7, max_tokens: int = 819
 **VERSION**: 1.0.33
 **STATUS**: ✅ PRODUCTION READY - Pushed to GitHub
 
+---
+
+### Phiên tiếp theo: 2026-01-24 - Auto-Copy on Completion + Thumbnail Generation ✅
+
+**MISSION**: Auto-copy results to master when project completes + Generate thumbnail for master
+
+**REQUIREMENTS**:
+1. Copy to master when project completes (not just on timeout)
+2. Select main character (not child) image for thumbnail
+3. Copy thumbnail to thumb/ folder for master to use
+
+**IMPLEMENTATION**:
+
+**1. Auto-Copy on Completion** (`vm_manager.py` lines 1644-1675):
+```python
+def create_tasks_for_project(self, project_code: str):
+    status = self.quality_checker.get_project_status(project_code)
+
+    # Check if project is completed
+    if status.current_step == "done":
+        if self.auto_path and project_code not in self._completed_projects:
+            self.log(f"PROJECT COMPLETED: {project_code}", "SYSTEM", "SUCCESS")
+            self.copy_project_to_master(project_code)
+            self._completed_projects.add(project_code)
+            # Reset timer for next project
+            self.project_start_time = None
+            self.current_project_code = None
+        return
+```
+
+**2. Thumbnail Generation** (`vm_manager.py` lines 1541-1599):
+```python
+def create_thumbnail(self, project_code: str):
+    # Read characters from Excel
+    wb = PromptWorkbook(excel_path)
+    characters = wb.get_characters()
+
+    # Filter out locations (id starts with "loc" or role="location")
+    actual_characters = [
+        c for c in characters
+        if not c.id.lower().startswith("loc") and c.role != "location"
+    ]
+
+    # Selection strategy:
+    # 1. Find protagonist/main role + not child
+    # 2. Find first non-child character
+    # 3. Use first character if all are children
+
+    # Copy selected character image to thumb/ folder
+    thumb_dir = src_dir / "thumb"
+    thumb_dir.mkdir(exist_ok=True)
+    shutil.copy2(src_image, dest_image)
+```
+
+**COPY TRIGGERS**:
+- ✅ **Project completion** (`current_step = "done"`) - NEW!
+- ✅ **6-hour timeout** (existing)
+
+**COPY STRUCTURE**:
+```
+AUTO/{project_code}/
+  ├── {code}.srt
+  ├── {code}_prompts.xlsx
+  ├── nv/ (character references)
+  ├── img/ (scene images/videos)
+  └── thumb/ (main character for thumbnail) ⭐ NEW
+```
+
+**THUMBNAIL SELECTION LOGIC**:
+1. Filter out locations (`loc*` IDs or `role="location"`)
+2. Prefer `protagonist` or `main` role
+3. Exclude children (`is_child=False`)
+4. Fallback to first non-child character
+5. Last resort: first character
+
+**RESULT**:
+- ✅ Projects auto-copied when completed (no manual intervention)
+- ✅ Thumbnail ready for master video generation
+- ✅ Master gets complete package: Excel + Images + Videos + Thumbnail
+- ✅ No duplicate copies (tracking via `_completed_projects` set)
+
+**COMMIT**: 55526ec
+**VERSION**: 1.0.34
+**STATUS**: ✅ PRODUCTION READY - Pushed to GitHub
+
 ### Backlog (việc cần làm)
 
 **High Priority:**
