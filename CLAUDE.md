@@ -680,7 +680,7 @@ def create_thumbnail(self, project_code: str):
 
 **COPY STRUCTURE**:
 ```
-AUTO/{project_code}/
+AUTO/visual/{project_code}/
   ├── {code}.srt
   ├── {code}_prompts.xlsx
   ├── nv/ (character references)
@@ -701,8 +701,8 @@ AUTO/{project_code}/
 - ✅ Master gets complete package: Excel + Images + Videos + Thumbnail
 - ✅ No duplicate copies (tracking via `_completed_projects` set)
 
-**COMMIT**: 55526ec
-**VERSION**: 1.0.34
+**COMMIT**: 55526ec (v1.0.34), 2801a4c (v1.0.35 - path fix)
+**VERSION**: 1.0.35
 **STATUS**: ✅ PRODUCTION READY - Pushed to GitHub
 
 ### Backlog (việc cần làm)
