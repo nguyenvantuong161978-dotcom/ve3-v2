@@ -1207,7 +1207,7 @@ class SimpleGUI(tk.Tk):
         self._update_worker_logs(worker_id)
 
     def _update_worker_logs(self, worker_id: str = None):
-        """Update log display for current worker tab."""
+        """v1.0.47: Show structured worker status instead of raw logs."""
         if worker_id is None:
             worker_id = self.log_tab_var.get()
 
@@ -1216,35 +1216,99 @@ class SimpleGUI(tk.Tk):
             self.log_text.insert('1.0', f"[{worker_id}] Manager not started\n")
             return
 
-        # Read from central log file and filter by worker_id
-        log_file = TOOL_DIR / "logs" / "central.log"
-        if not log_file.exists():
-            self.log_text.delete('1.0', tk.END)
-            self.log_text.insert('1.0', f"[{worker_id}] No log file yet\n")
+        # Get worker status from agent protocol
+        status = self.manager.get_worker_status(worker_id)
+
+        self.log_text.delete('1.0', tk.END)
+
+        if not status:
+            self.log_text.insert('1.0', f"[{worker_id}] Waiting for status...\n")
             return
 
-        try:
-            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
-                # Read all lines and filter by worker_id
-                all_lines = f.readlines()
+        # Build structured status display
+        lines = []
+        lines.append(f"{'='*50}")
+        lines.append(f"  WORKER: {worker_id.upper()}")
+        lines.append(f"{'='*50}")
+        lines.append("")
 
-                # Filter lines containing this worker_id
-                worker_lines = [line for line in all_lines if f"[{worker_id:10}]" in line or f"[{worker_id}]" in line]
+        state = status.get('state', 'idle')
+        project = status.get('current_project', '')
 
-                # Get last 500 lines for this worker
-                recent_lines = worker_lines[-500:] if len(worker_lines) > 500 else worker_lines
-                log_content = ''.join(recent_lines)
+        # State indicator
+        if state == 'working':
+            lines.append(f"  Status:  WORKING")
+        elif state == 'error':
+            lines.append(f"  Status:  ERROR")
+        else:
+            lines.append(f"  Status:  IDLE")
 
-            self.log_text.delete('1.0', tk.END)
-            if log_content:
-                self.log_text.insert('1.0', log_content)
-            else:
-                self.log_text.insert('1.0', f"[{worker_id}] No logs yet\n")
-            self.log_text.see(tk.END)  # Auto-scroll to bottom
+        # Project
+        if project:
+            lines.append(f"  Project: {project}")
+        else:
+            lines.append(f"  Project: (none)")
 
-        except Exception as e:
-            self.log_text.delete('1.0', tk.END)
-            self.log_text.insert('1.0', f"[{worker_id}] Error reading log: {e}\n")
+        lines.append("")
+
+        # Progress details based on worker type
+        if worker_id == "excel":
+            step = status.get('current_step', 0)
+            step_name = status.get('step_name', '')
+            if step > 0:
+                lines.append(f"  Step:    {step}/7 - {step_name}")
+                progress_bar = self._make_progress_bar(step, 7)
+                lines.append(f"  Progress: {progress_bar}")
+        else:
+            # Chrome worker
+            current_scene = status.get('current_scene', 0)
+            total_scenes = status.get('total_scenes', 0)
+            completed = status.get('completed_count', 0)
+            failed = status.get('failed_count', 0)
+
+            if current_scene > 0:
+                lines.append(f"  Scene:   {current_scene}/{total_scenes}")
+            if completed > 0 or total_scenes > 0:
+                lines.append(f"  Done:    {completed}")
+                if total_scenes > 0:
+                    progress_bar = self._make_progress_bar(completed, total_scenes)
+                    lines.append(f"  Progress: {progress_bar}")
+            if failed > 0:
+                lines.append(f"  Failed:  {failed}")
+
+        # Last action
+        last_action = status.get('last_action', '')
+        if last_action:
+            lines.append("")
+            lines.append(f"  Action:  {last_action[:50]}")
+
+        # Last error
+        last_error = status.get('last_error', '')
+        if last_error:
+            lines.append("")
+            lines.append(f"  ERROR:   {last_error[:60]}")
+
+        # Uptime
+        uptime = status.get('uptime_seconds', 0)
+        if uptime > 0:
+            mins = uptime // 60
+            secs = uptime % 60
+            lines.append("")
+            lines.append(f"  Uptime:  {mins}m {secs}s")
+
+        lines.append("")
+        lines.append(f"{'='*50}")
+
+        self.log_text.insert('1.0', '\n'.join(lines))
+
+    def _make_progress_bar(self, current: int, total: int, width: int = 20) -> str:
+        """Create a simple ASCII progress bar."""
+        if total <= 0:
+            return "[" + "-" * width + "] 0%"
+        pct = min(100, int(current * 100 / total))
+        filled = int(width * current / total)
+        bar = "=" * filled + "-" * (width - filled)
+        return f"[{bar}] {pct}%"
 
     def _show_excel_detail(self, code: str):
         """Show popup with detailed Excel status."""
@@ -1640,22 +1704,64 @@ class SimpleGUI(tk.Tk):
             img_dir = project_dir / "img"
             vid_dir = project_dir / "vid"
 
-            # Tinh toan width cho row: ID(4) + Thumb(6) + SRT(18) + Prompt(45) + Img(5) + Vid(5) = 83 chars
-            # Font Consolas 9 ~ 7px/char => 83*7 + padding = ~650px
-            ROW_WIDTH = 750
+            # Tinh toan width cho row: Status(6) + ID(4) + Thumb(6) + SRT(18) + Prompt(45) + Img(5) + Vid(5)
+            ROW_WIDTH = 800
+
+            # v1.0.47: Get current running scene from worker status
+            current_running_scene = 0
+            if self.manager:
+                for wid in ["chrome_1", "chrome_2"]:
+                    try:
+                        status = self.manager.get_worker_status(wid)
+                        if status and status.get('current_project') == project_code:
+                            current_running_scene = status.get('current_scene', 0)
+                            if current_running_scene > 0:
+                                break
+                    except:
+                        pass
+
+            # Store row references for later updates
+            self.scene_rows = {}
 
             for i, scene in enumerate(scenes[:150]):  # Max 150 scenes
-                bg = '#1a1a2e' if i % 2 == 0 else '#16213e'
+                scene_id = scene.scene_id
+
+                # v1.0.47: Determine scene status and colors
+                has_image = find_scene_image(img_dir, scene_id) is not None
+                is_running = (scene_id == current_running_scene)
+
+                if has_image:
+                    status_text = "DONE"
+                    status_fg = '#00ff88'  # Green
+                    bg = '#0a2e0a' if i % 2 == 0 else '#0d380d'  # Dark green bg
+                elif is_running:
+                    status_text = "RUN"
+                    status_fg = '#ffd93d'  # Yellow
+                    bg = '#2e2e0a' if i % 2 == 0 else '#38380d'  # Dark yellow bg
+                else:
+                    status_text = "--"
+                    status_fg = '#666'
+                    bg = '#1a1a2e' if i % 2 == 0 else '#16213e'
+
                 row = tk.Frame(self.scenes_list_frame, bg=bg, height=50, width=ROW_WIDTH)
                 row.pack(fill="x", pady=1)
-                row.pack_propagate(False)  # Fixed height and width
+                row.pack_propagate(False)
 
-                # Scene ID - font to hon
-                tk.Label(row, text=str(scene.scene_id), width=4, bg=bg, fg='#00d9ff',
+                # Store reference for updates
+                self.scene_rows[scene_id] = {'frame': row, 'bg_even': i % 2 == 0}
+
+                # Status column (NEW)
+                status_label = tk.Label(row, text=status_text, width=5, bg=bg, fg=status_fg,
+                         font=("Consolas", 9, "bold"))
+                status_label.pack(side="left", padx=2)
+                self.scene_rows[scene_id]['status_label'] = status_label
+
+                # Scene ID
+                tk.Label(row, text=str(scene_id), width=4, bg=bg, fg='#00d9ff',
                          font=("Consolas", 11, "bold")).pack(side="left", padx=3)
 
                 # Thumbnail (45x45)
-                img_path = find_scene_image(img_dir, scene.scene_id)
+                img_path = find_scene_image(img_dir, scene_id)
                 thumb_frame = tk.Frame(row, bg=bg, width=50, height=45)
                 thumb_frame.pack(side="left", padx=3)
                 thumb_frame.pack_propagate(False)
@@ -1721,20 +1827,20 @@ class SimpleGUI(tk.Tk):
                          font=("Consolas", 9), anchor="w", cursor="hand2" if prompt_text else "")
                 prompt_label.pack(side="left", padx=3)
                 if prompt_text:
-                    prompt_label.bind("<Button-1>", lambda e, p=prompt_text, sid=scene.scene_id: self._show_prompt_popup(sid, p))
+                    prompt_label.bind("<Button-1>", lambda e, p=prompt_text, sid=scene_id: self._show_prompt_popup(sid, p))
 
-                # Image status
+                # Image status (simplified - status column already shows this)
                 if img_path:
-                    img_status = tk.Label(row, text="OK", width=5, bg=bg, fg='#1dd1a1',
-                             font=("Consolas", 10, "bold"), cursor="hand2")
+                    img_status = tk.Label(row, text="IMG", width=4, bg=bg, fg='#1dd1a1',
+                             font=("Consolas", 9), cursor="hand2")
                     img_status.pack(side="left", padx=2)
                     img_status.bind("<Button-1>", lambda e, p=img_path: os.startfile(str(p)))
                 else:
-                    tk.Label(row, text="--", width=5, bg=bg, fg='#666',
-                             font=("Consolas", 10)).pack(side="left", padx=2)
+                    tk.Label(row, text="--", width=4, bg=bg, fg='#666',
+                             font=("Consolas", 9)).pack(side="left", padx=2)
 
                 # Video status
-                vid_path = find_scene_video(vid_dir, scene.scene_id)
+                vid_path = find_scene_video(vid_dir, scene_id)
                 if vid_path:
                     vid_status = tk.Label(row, text="OK", width=5, bg=bg, fg='#1dd1a1',
                              font=("Consolas", 10, "bold"), cursor="hand2")
@@ -1749,11 +1855,72 @@ class SimpleGUI(tk.Tk):
             tk.Label(self.scenes_list_frame, text=f"Loi: {e}", bg='#1a1a2e', fg='#ff6b6b',
                      font=("Consolas", 10)).pack(pady=20)
 
+    def _update_scene_status(self):
+        """v1.0.47: Update scene status colors without reloading entire list."""
+        if not self.selected_project or not hasattr(self, 'scene_rows') or not self.scene_rows:
+            return
+
+        project_code = self.selected_project
+        project_dir = TOOL_DIR / "PROJECTS" / project_code
+        img_dir = project_dir / "img"
+
+        # Get current running scene from workers
+        current_running_scene = 0
+        if self.manager:
+            for wid in ["chrome_1", "chrome_2"]:
+                try:
+                    status = self.manager.get_worker_status(wid)
+                    if status and status.get('current_project') == project_code:
+                        current_running_scene = status.get('current_scene', 0)
+                        if current_running_scene > 0:
+                            break
+                except:
+                    pass
+
+        # Update each row's status
+        for scene_id, row_data in self.scene_rows.items():
+            try:
+                has_image = find_scene_image(img_dir, scene_id) is not None
+                is_running = (scene_id == current_running_scene)
+                is_even = row_data.get('bg_even', True)
+
+                if has_image:
+                    status_text = "DONE"
+                    status_fg = '#00ff88'
+                    bg = '#0a2e0a' if is_even else '#0d380d'
+                elif is_running:
+                    status_text = "RUN"
+                    status_fg = '#ffd93d'
+                    bg = '#2e2e0a' if is_even else '#38380d'
+                else:
+                    status_text = "--"
+                    status_fg = '#666'
+                    bg = '#1a1a2e' if is_even else '#16213e'
+
+                # Update status label
+                status_label = row_data.get('status_label')
+                if status_label:
+                    status_label.config(text=status_text, fg=status_fg, bg=bg)
+
+                # Update row background
+                frame = row_data.get('frame')
+                if frame:
+                    frame.config(bg=bg)
+                    for child in frame.winfo_children():
+                        try:
+                            child.config(bg=bg)
+                        except:
+                            pass
+            except:
+                pass
+
     def _update_detail_panel(self):
         """Update detail panel neu co project duoc chon."""
         if self.selected_project:
             # Update Excel steps status
             self._update_excel_steps(self.selected_project)
+            # v1.0.47: Update scene status colors
+            self._update_scene_status()
 
     def _update_excel_steps(self, project_code: str):
         """Update mau cua Excel step labels dua tren trang thai."""

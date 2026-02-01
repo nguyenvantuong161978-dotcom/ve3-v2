@@ -113,12 +113,29 @@ class WorkerStatus:
     last_error_type: str = ""
     last_update: str = ""
     uptime_seconds: int = 0
+    # v1.0.47: Track specific scenes
+    scenes_completed: List[int] = None  # List of completed scene IDs
+    scenes_failed: List[int] = None     # List of failed scene IDs
+    last_action: str = ""               # Last action description for GUI
+
+    def __post_init__(self):
+        if self.scenes_completed is None:
+            self.scenes_completed = []
+        if self.scenes_failed is None:
+            self.scenes_failed = []
 
     def to_dict(self) -> Dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: Dict) -> 'WorkerStatus':
+        # Handle missing fields for backwards compatibility
+        if 'scenes_completed' not in d:
+            d['scenes_completed'] = []
+        if 'scenes_failed' not in d:
+            d['scenes_failed'] = []
+        if 'last_action' not in d:
+            d['last_action'] = ''
         return cls(**d)
 
 
@@ -269,6 +286,10 @@ class AgentWorker:
         total_scenes: int = None,
         current_step: int = None,
         step_name: str = None,
+        scene_completed: int = None,  # v1.0.47: Mark single scene as completed
+        scene_failed: int = None,     # v1.0.47: Mark single scene as failed
+        last_action: str = None,      # v1.0.47: Last action description
+        clear_scenes: bool = False,   # v1.0.47: Clear scene lists (for new project)
     ):
         """Cập nhật trạng thái."""
         if state:
@@ -287,6 +308,19 @@ class AgentWorker:
             self._status.current_step = current_step
         if step_name is not None:
             self._status.step_name = step_name
+        if last_action is not None:
+            self._status.last_action = last_action
+
+        # v1.0.47: Track completed/failed scenes
+        if clear_scenes:
+            self._status.scenes_completed = []
+            self._status.scenes_failed = []
+        if scene_completed is not None and scene_completed not in self._status.scenes_completed:
+            self._status.scenes_completed.append(scene_completed)
+            self._status.completed_count = len(self._status.scenes_completed)
+        if scene_failed is not None and scene_failed not in self._status.scenes_failed:
+            self._status.scenes_failed.append(scene_failed)
+            self._status.failed_count = len(self._status.scenes_failed)
 
         self._save_status()
 
