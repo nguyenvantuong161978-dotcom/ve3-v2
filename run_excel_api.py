@@ -157,21 +157,49 @@ def import_from_master(master_dir: Path, name: str, local_projects: Path) -> Opt
 
     Returns:
         Path tới project local nếu thành công, None nếu lỗi
+
+    FIX v1.0.46: KHÔNG XÓA local folder nếu đã có Excel hoặc images!
+    Bug cũ: Nếu local có Excel nhưng thiếu SRT → xóa hết rồi import lại.
     """
     local_dir = local_projects / name
 
-    # Đã có trong local rồi
+    # Đã có trong local rồi - kiểm tra CẢ SRT, Excel VÀ images
     if local_dir.exists():
         srt_path = local_dir / f"{name}.srt"
+        excel_path = local_dir / f"{name}_prompts.xlsx"
+        img_dir = local_dir / "img"
+
+        # Nếu có SRT → OK, dùng local
         if srt_path.exists():
             return local_dir
 
-    # Copy từ master
+        # Nếu có Excel → KHÔNG XÓA! Đã có công việc rồi
+        if excel_path.exists():
+            log(f"[IMPORT] {name}: Local has Excel, keeping existing work")
+            return local_dir
+
+        # Nếu có images → KHÔNG XÓA! Đã tạo ảnh rồi
+        if img_dir.exists():
+            img_files = list(img_dir.glob("*.png")) + list(img_dir.glob("*.jpg"))
+            if len(img_files) > 0:
+                log(f"[IMPORT] {name}: Local has {len(img_files)} images, keeping existing work")
+                return local_dir
+
+    # Copy từ master (chỉ khi local KHÔNG có Excel hoặc images)
     try:
         log(f"[IMPORT] Copying {name} from master to local...")
         local_projects.mkdir(parents=True, exist_ok=True)
 
         if local_dir.exists():
+            # Double-check: KHÔNG XÓA nếu có Excel hoặc images
+            excel_path = local_dir / f"{name}_prompts.xlsx"
+            img_dir = local_dir / "img"
+            if excel_path.exists():
+                log(f"[IMPORT] {name}: ABORT - Local has Excel, not deleting!")
+                return local_dir
+            if img_dir.exists() and len(list(img_dir.glob("*.png"))) > 0:
+                log(f"[IMPORT] {name}: ABORT - Local has images, not deleting!")
+                return local_dir
             shutil.rmtree(local_dir)
 
         shutil.copytree(master_dir, local_dir)
