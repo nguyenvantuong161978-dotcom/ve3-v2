@@ -1,3 +1,3 @@
-1.0.42
-2026-02-01 16:45
-GUI: Hiển thị chi tiết worker - Excel (Step X/7), Chrome (Scene X)
+1.0.43
+2026-02-01 18:50
+Fix: Chrome workers chỉ xử lý 1 project tại 1 thời điểm (không nhảy sang project khác)

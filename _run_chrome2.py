@@ -686,6 +686,7 @@ def run_scan_loop():
     time.sleep(10)
 
     cycle = 0
+    current_project = None  # Track project đang làm
 
     while True:
         cycle += 1
@@ -697,6 +698,7 @@ def run_scan_loop():
 
         if not pending:
             print(f"  No pending projects")
+            current_project = None  # Reset khi không còn project
             print(f"\n  Waiting {SCAN_INTERVAL}s... (Ctrl+C to stop)")
             try:
                 time.sleep(SCAN_INTERVAL)
@@ -706,21 +708,29 @@ def run_scan_loop():
         else:
             print(f"  Found: {len(pending)} pending projects")
 
-            for code in pending:
-                try:
-                    success = process_project_pic_basic_chrome2(code)
-                    if not success:
-                        print(f"  [Chrome2] Skipping {code}, moving to next...")
-                        continue
-                except KeyboardInterrupt:
-                    print("\n\nStopped by user.")
-                    return
-                except Exception as e:
-                    print(f"  [Chrome2] Error processing {code}: {e}")
-                    continue
+            # CHỈ XỬ LÝ 1 PROJECT - ưu tiên project đang làm dở
+            if current_project and current_project in pending:
+                target = current_project
+                print(f"  [Chrome2] Continuing: {target}")
+            else:
+                target = pending[0]
+                current_project = target
+                print(f"  [Chrome2] Starting: {target}")
 
-            print(f"\n  [Chrome2] Processed all pending projects!")
-            print(f"  Waiting {SCAN_INTERVAL}s... (Ctrl+C to stop)")
+            try:
+                success = process_project_pic_basic_chrome2(target)
+                if not success:
+                    print(f"  [Chrome2] Project {target} incomplete, will retry...")
+                else:
+                    print(f"  [Chrome2] Project {target} completed!")
+                    current_project = None  # Move to next project
+            except KeyboardInterrupt:
+                print("\n\nStopped by user.")
+                return
+            except Exception as e:
+                print(f"  [Chrome2] Error processing {target}: {e}")
+
+            print(f"\n  Waiting {SCAN_INTERVAL}s... (Ctrl+C to stop)")
             try:
                 time.sleep(SCAN_INTERVAL)
             except KeyboardInterrupt:
@@ -990,6 +1000,8 @@ def run_scan_loop_with_agent():
     print(f"{'='*60}\n")
 
     cycle = 0
+    current_project = None  # Track project đang làm
+
     try:
         while True:
             cycle += 1
@@ -1001,13 +1013,28 @@ def run_scan_loop_with_agent():
                 projects = scan_master_projects()
 
             if projects:
-                for code in projects:
-                    try:
-                        process_project_with_agent(code)
-                    except KeyboardInterrupt:
-                        raise
-                    except Exception as e:
-                        agent_log(f"Error processing {code}: {e}", "ERROR")
+                # CHỈ XỬ LÝ 1 PROJECT - ưu tiên project đang làm dở
+                if current_project and current_project in projects:
+                    target = current_project
+                    print(f"  [Chrome2] Continuing: {target}")
+                else:
+                    target = projects[0]
+                    current_project = target
+                    print(f"  [Chrome2] Starting: {target}")
+
+                try:
+                    success = process_project_with_agent(target)
+                    if success:
+                        print(f"  [Chrome2] Project {target} completed!")
+                        current_project = None  # Move to next project
+                    else:
+                        print(f"  [Chrome2] Project {target} incomplete, will retry...")
+                except KeyboardInterrupt:
+                    raise
+                except Exception as e:
+                    agent_log(f"Error processing {target}: {e}", "ERROR")
+            else:
+                current_project = None  # Reset khi không còn project
 
             print(f"\nWaiting {SCAN_INTERVAL}s... (Ctrl+C to stop)")
             time.sleep(SCAN_INTERVAL)
