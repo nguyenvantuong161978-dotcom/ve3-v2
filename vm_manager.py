@@ -2550,10 +2550,19 @@ class VMManager:
                         if retry:
                             task.status = TaskStatus.FAILED
 
-                # 5. Scan projects mới và tạo tasks
-                for project in self.scan_projects():
-                    if project not in self.project_tasks:
-                        self.create_tasks_for_project(project)
+                # 5. Scan projects - CHỈ LÀM 1 PROJECT TẠI 1 THỜI ĐIỂM
+                # Ưu tiên project đang làm dở, không nhảy sang project khác
+                projects = self.scan_projects()
+                if projects:
+                    # Ưu tiên project đang làm dở (current_project_code)
+                    if self.current_project_code and self.current_project_code in projects:
+                        target_project = self.current_project_code
+                    else:
+                        # Không có project đang làm → lấy project đầu tiên
+                        target_project = projects[0]
+
+                    # Chỉ tạo task cho 1 project này
+                    self.create_tasks_for_project(target_project)
 
                 # 6. Assign pending tasks cho workers
                 for task in self.get_pending_tasks(TaskType.EXCEL):

@@ -1,3 +1,3 @@
-1.0.36
-2026-01-27 09:55
-Fix: UPDATE_MANUAL.bat now copies VERSION.txt for correct version display
+1.0.37
+2026-01-27 10:05
+Fix: Only work on 1 project at a time - no more project switching mid-work
