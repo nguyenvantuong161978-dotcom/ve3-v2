@@ -2004,38 +2004,33 @@ class SimpleGUI(tk.Tk):
                 print(f"[GUI] Error hiding windows: {e}")
 
     def _get_git_version(self) -> str:
-        """Lay thong tin version tu git hoac VERSION.txt."""
-        # Try git first (neu co git)
-        try:
-            import subprocess
-            result = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
-                                  capture_output=True, text=True, cwd=str(TOOL_DIR), timeout=2)
-            if result.returncode == 0:
-                commit_hash = result.stdout.strip()
-                result2 = subprocess.run(['git', 'log', '-1', '--format=%cd', '--date=format:%Y-%m-%d_%H:%M'],
-                                       capture_output=True, text=True, cwd=str(TOOL_DIR), timeout=2)
-                if result2.returncode == 0:
-                    commit_date = result2.stdout.strip()
-                    return f"v{commit_hash} | {commit_date}"
-                return f"v{commit_hash}"
-        except:
-            pass  # Git khong co, thu VERSION.txt
-
-        # Fallback: Doc tu VERSION.txt (cho VMs khong co git)
+        """Lay thong tin version tu VERSION.txt (uu tien) hoac git."""
+        # Uu tien VERSION.txt (chua thoi gian chinh xac)
         try:
             version_file = TOOL_DIR / "VERSION.txt"
             if version_file.exists():
                 with open(version_file, 'r', encoding='utf-8') as f:
                     lines = f.read().strip().split('\n')
                     if len(lines) >= 2:
-                        version = lines[0].strip()  # VD: 1.0.0
-                        date_time = lines[1].strip()  # VD: 2026-01-23 14:55
-                        return f"v{version} | {date_time} GMT+7"
+                        version = lines[0].strip()  # VD: 1.0.37
+                        date_time = lines[1].strip()  # VD: 2026-01-27 10:05
+                        return f"v{version} | {date_time}"
                     elif len(lines) >= 1:
                         version = lines[0].strip()
                         return f"v{version}"
         except Exception as e:
             print(f"[GUI] Version file error: {e}")
+
+        # Fallback: Thu git neu VERSION.txt khong co
+        try:
+            import subprocess
+            result = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
+                                  capture_output=True, text=True, cwd=str(TOOL_DIR), timeout=2)
+            if result.returncode == 0:
+                commit_hash = result.stdout.strip()
+                return f"v{commit_hash}"
+        except:
+            pass
 
         return "unknown"
 

@@ -1,3 +1,3 @@
-1.0.37
-2026-01-27 10:05
-Fix: Only work on 1 project at a time - no more project switching mid-work
+1.0.38
+2026-01-27 10:15
+Fix: GUI now shows correct version date from VERSION.txt instead of git commit date
